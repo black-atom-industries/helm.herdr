@@ -4,9 +4,14 @@ All notable changes to this project are documented here.
 
 ## [Unreleased]
 
+## [0.3.4] - 2026-07-29
+
 ### Added
 - Apply one reusable Herdr Plus tabs/panes template to any zoxide/root directory with a configurable shortcut (`Alt-Enter` by default), creating the workspace or appending fresh template tabs when already open; `Enter` keeps normal behavior.
 - Press `F5` on the update badge to confirm and install the available release through Herdr.
+
+### Fixed
+- Focus agent rows by Herdr pane ID, which `herdr agent focus` accepts, instead of unsupported terminal IDs ([#13](https://github.com/thanhdat77/herdr-navigator/issues/13), [#18](https://github.com/thanhdat77/herdr-navigator/issues/18)).
 
 ## [0.3.3] - 2026-07-18
 
