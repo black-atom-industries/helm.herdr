@@ -9,6 +9,7 @@ All notable changes to this project are documented here.
 
 ### Fixed
 - Unbound `Ctrl`/`Alt` chords no longer insert their letter into the query; `Ctrl-Backspace` typed an `h` because terminals send it as `Ctrl-H`.
+- Equal-score results now keep their source order (zoxide frecency, agent pane order) instead of sorting alphabetically.
 
 ## [0.3.4] - 2026-07-29
 
