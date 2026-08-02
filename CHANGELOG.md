@@ -4,10 +4,14 @@ All notable changes to this project are documented here.
 
 ## [Unreleased]
 
+## [0.3.5] - 2026-08-02
+
 ### Added
+- Mouse wheel navigation, click-to-select, and click-again-to-open support in the TUI.
 - `Ctrl-Backspace` deletes the last word of the query.
 
 ### Fixed
+- Mouse hitboxes now start at the list's inner content row, accounting for the `Results` title instead of selecting the result below the cursor.
 - Unbound `Ctrl`/`Alt` chords no longer insert their letter into the query; `Ctrl-Backspace` typed an `h` because terminals send it as `Ctrl-H`.
 - Equal-score results now keep their source order (zoxide frecency, agent pane order) instead of sorting alphabetically.
 
