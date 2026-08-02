@@ -173,6 +173,14 @@ fn run_ui(persist: bool) -> ! {
     process::exit(0);
 }
 
+fn debug_list() {
+    let mut app = App::new(Config::load(), Theme::load(true));
+    app.refresh();
+    for e in app.entries {
+        println!("{}\t{}\t{}", e.source_name(), e.title, e.path.display());
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -249,13 +257,5 @@ mod tests {
             side_pane_decision(&serde_json::Value::Null),
             SideDecision::Open
         ));
-    }
-}
-
-fn debug_list() {
-    let mut app = App::new(Config::load(), Theme::load(true));
-    app.refresh();
-    for e in app.entries {
-        println!("{}\t{}\t{}", e.source_name(), e.title, e.path.display());
     }
 }
