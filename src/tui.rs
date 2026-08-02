@@ -817,8 +817,10 @@ fn draw_list(f: &mut Frame, app: &App, area: Rect) -> ListHits {
     let item_heights: Vec<u16> = items.iter().map(|item| item.height() as u16).collect();
     let mut state = ListState::default();
     state.select(selected_row);
+    let block = Block::default().title(" Results ").borders(Borders::RIGHT);
+    let list_area = block.inner(area);
     let list = List::new(items)
-        .block(Block::default().title(" Results ").borders(Borders::RIGHT))
+        .block(block)
         .highlight_style(
             Style::default()
                 .bg(app.theme.surface0)
@@ -828,13 +830,13 @@ fn draw_list(f: &mut Frame, app: &App, area: Rect) -> ListHits {
     f.render_stateful_widget(list, area, &mut state);
 
     let mut rows = Vec::new();
-    let mut y = area.y;
+    let mut y = list_area.y;
     for (entry, height) in item_entries
         .into_iter()
         .zip(item_heights)
         .skip(state.offset())
     {
-        if y.saturating_add(height) > area.bottom() {
+        if y.saturating_add(height) > list_area.bottom() {
             break;
         }
         if let Some(entry) = entry {
@@ -842,7 +844,10 @@ fn draw_list(f: &mut Frame, app: &App, area: Rect) -> ListHits {
         }
         y += height;
     }
-    ListHits { area, rows }
+    ListHits {
+        area: list_area,
+        rows,
+    }
 }
 
 fn draw_preview(f: &mut Frame, app: &App, area: Rect) {
@@ -1414,6 +1419,42 @@ mod tests {
         assert!(text.contains("a agent"));
         assert!(text.contains("z zoxide"));
         assert!(!text.contains("k move up"));
+    }
+
+    #[test]
+    fn rendered_mouse_hit_matches_the_visible_compact_row() {
+        let mut app = App::new(Config::default(), Theme::load(false));
+        app.config.picker.detailed_rows = false;
+        app.entries = vec![
+            entry(Source::Workspace, "one"),
+            entry(Source::Workspace, "two"),
+        ];
+        app.filtered = vec![0, 1];
+        app.selected = 1;
+
+        let backend = TestBackend::new(50, 12);
+        let mut terminal = Terminal::new(backend).unwrap();
+        let mut hits = ListHits::default();
+        terminal.draw(|f| hits = draw(f, &app)).unwrap();
+        let visible_row = buffer_text(&terminal)
+            .lines()
+            .position(|line| line.contains("one"))
+            .expect("first result should be visible") as u16;
+
+        assert!(matches!(
+            handle_mouse(
+                &mut app,
+                MouseEvent {
+                    kind: MouseEventKind::Down(MouseButton::Left),
+                    column: hits.area.x,
+                    row: visible_row,
+                    modifiers: KeyModifiers::NONE,
+                },
+                &hits,
+            ),
+            Action::Continue
+        ));
+        assert_eq!(app.selected, 0);
     }
 
     #[test]
