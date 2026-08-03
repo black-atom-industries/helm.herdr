@@ -4,6 +4,9 @@ All notable changes to this project are documented here.
 
 ## [Unreleased]
 
+### Fixed
+- Agent terminal IDs remain searchable while focus actions continue to target pane IDs.
+
 ## [0.3.5] - 2026-08-02
 
 ### Added

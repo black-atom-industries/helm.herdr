@@ -139,6 +139,7 @@ fn agents_from_json(
             };
             let pane = p.get("pane_id").and_then(|v| v.as_str()).unwrap_or("");
             let tab = p.get("tab_id").and_then(|v| v.as_str()).unwrap_or("");
+            let term = p.get("terminal_id").and_then(|v| v.as_str()).unwrap_or("");
             // Herdr's `agent focus` accepts pane IDs, not terminal IDs.
             let target = pane;
             let cwd = p.get("cwd").and_then(|v| v.as_str()).unwrap_or("/");
@@ -169,7 +170,7 @@ fn agents_from_json(
                 status.into(),
                 pane.into(),
                 tab.into(),
-                target.into(),
+                term.into(),
                 workspace_id.into(),
                 workspace_label.into(),
                 dir,
@@ -332,6 +333,11 @@ mod tests {
         let agents = agents_from_json(&agent_json, &entries, &[]);
         assert_eq!(agents.len(), 1);
         assert_eq!(agents[0].agent_target.as_deref(), Some("w43:p1"));
+        assert!(matches!(
+            &agents[0].action,
+            EntryAction::FocusAgent { target } if target == "w43:p1"
+        ));
+        assert!(agents[0].search_terms.contains(&"term_1".to_string()));
         assert!(agents[0].search_terms.contains(&"58f4-session".to_string()));
         assert!(agents[0].subtitle.starts_with("working"));
     }
