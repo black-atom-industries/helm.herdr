@@ -210,7 +210,7 @@ pub(crate) fn keybindings(app: &App) -> Vec<Keybind> {
         ),
     ];
 
-    for source in Source::all() {
+    for source in app.config.enabled_sources_in_order() {
         let Some(filter_key) = app.config.picker.filter_key(&source) else {
             continue;
         };

@@ -103,6 +103,22 @@ pub(crate) struct SourcesConfig {
     pub(crate) herdr_plus_quick_actions: bool,
 }
 
+impl SourcesConfig {
+    pub(crate) fn enabled(&self, source: &Source) -> bool {
+        match source {
+            Source::Workspace => self.open_workspaces,
+            Source::Project => self.herdr_plus_projects,
+            Source::Zoxide => self.zoxide,
+            Source::Root => self.roots,
+            Source::Agent => self.agents,
+            Source::Server => self.servers,
+            Source::Session => self.sessions,
+            Source::QuickAction => self.herdr_plus_quick_actions,
+            Source::Integration => true,
+        }
+    }
+}
+
 #[derive(Clone, Deserialize)]
 pub(crate) struct SessionsConfig {
     #[serde(default = "yes")]
@@ -383,6 +399,15 @@ impl Default for Config {
 }
 
 impl Config {
+    pub(crate) fn enabled_sources_in_order(&self) -> Vec<Source> {
+        let mut sources: Vec<_> = Source::all()
+            .into_iter()
+            .filter(|source| self.sources.enabled(source))
+            .collect();
+        sources.sort_by_key(|source| self.picker.source_rank(source));
+        sources
+    }
+
     pub(crate) fn load() -> Self {
         migrate_legacy_plugin_config();
         let dir = plugin_config_dir();
@@ -412,6 +437,27 @@ mod tests {
         assert_eq!(picker.source_rank(&Source::Root), 5);
         assert_eq!(picker.source_rank(&Source::Server), 6);
         assert!(picker.source_bonus(&Source::Root) > picker.source_bonus(&Source::Server));
+    }
+
+    #[test]
+    fn enabled_sources_follow_configured_order() {
+        let config: Config = toml::from_str(
+            r#"
+            [picker]
+            source_order = ["agent", "workspace"]
+
+            [sources]
+            servers = false
+            sessions = false
+            "#,
+        )
+        .unwrap();
+
+        let sources = config.enabled_sources_in_order();
+        assert_eq!(sources[0], Source::Agent);
+        assert_eq!(sources[1], Source::Workspace);
+        assert!(!sources.contains(&Source::Server));
+        assert!(!sources.contains(&Source::Session));
     }
 
     #[test]

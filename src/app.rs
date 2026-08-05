@@ -196,6 +196,12 @@ impl App {
     }
 
     pub(crate) fn set_filter(&mut self, source: Option<Source>) {
+        if source
+            .as_ref()
+            .is_some_and(|source| !self.config.sources.enabled(source))
+        {
+            return;
+        }
         self.source_filter = if self.source_filter == source {
             None
         } else {
@@ -205,13 +211,13 @@ impl App {
     }
 
     pub(crate) fn cycle_filter(&mut self) {
-        self.source_filter = match &self.source_filter {
-            None => Some(Source::Workspace),
-            Some(cur) => {
-                let all = Source::all();
-                let pos = all.iter().position(|s| s == cur).unwrap_or(0);
-                all.get(pos + 1).cloned()
-            }
+        let sources = self.config.enabled_sources_in_order();
+        self.source_filter = match self.source_filter.as_ref() {
+            None => sources.first().cloned(),
+            Some(cur) => match sources.iter().position(|source| source == cur) {
+                Some(pos) => sources.get(pos + 1).cloned(),
+                None => sources.first().cloned(),
+            },
         };
         self.selected = 0;
         self.apply_filter();
@@ -907,6 +913,31 @@ mod tests {
 
         let first = &app.entries[app.filtered[0]];
         assert!(first.subtitle.starts_with("done"));
+    }
+
+    #[test]
+    fn cycle_filter_follows_enabled_source_order() {
+        let mut app = App::new(
+            toml::from_str(
+                r#"
+                [picker]
+                source_order = ["agent", "workspace", "project"]
+
+                [sources]
+                servers = false
+                sessions = false
+                "#,
+            )
+            .unwrap(),
+            Theme::load(false),
+        );
+
+        app.cycle_filter();
+        assert_eq!(app.source_filter, Some(Source::Agent));
+        app.cycle_filter();
+        assert_eq!(app.source_filter, Some(Source::Workspace));
+        app.cycle_filter();
+        assert_eq!(app.source_filter, Some(Source::Project));
     }
 
     #[test]

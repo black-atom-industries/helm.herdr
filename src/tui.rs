@@ -1403,6 +1403,32 @@ mod tests {
     }
 
     #[test]
+    fn disabled_sources_are_absent_from_filter_bindings_and_footer() {
+        let mut app = App::new(Config::default(), Theme::load(false));
+        app.config.sources.servers = false;
+        app.config.sources.sessions = false;
+
+        let bindings = keybindings(&app);
+        assert!(!bindings.iter().any(|binding| {
+            matches!(
+                binding.command,
+                Command::Filter(Source::Server) | Command::Filter(Source::Session)
+            )
+        }));
+
+        let backend = TestBackend::new(110, 20);
+        let mut terminal = Terminal::new(backend).unwrap();
+        terminal
+            .draw(|f| {
+                draw(f, &app);
+            })
+            .unwrap();
+        let text = buffer_text(&terminal);
+        assert!(!text.contains("server"));
+        assert!(!text.contains("session"));
+    }
+
+    #[test]
     fn compact_footer_groups_movement_and_lists_filters() {
         let mut app = App::new(Config::default(), Theme::load(false));
         app.config.picker.vim_mode = true;
