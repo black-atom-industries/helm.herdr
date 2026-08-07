@@ -4,6 +4,11 @@ All notable changes to this project are documented here.
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-08-07
+
+### Changed
+- **Breaking:** Local Herdr sessions are not listed because Navigator cannot switch the terminal tab that owns them.
+
 ### Fixed
 - Agent terminal IDs remain searchable while focus actions continue to target pane IDs.
 

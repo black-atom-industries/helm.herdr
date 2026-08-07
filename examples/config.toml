@@ -4,7 +4,7 @@
 reuse_existing = true
 create_missing = true
 engine = "nucleo" # nucleo | skim | simple
-source_order = ["workspace", "agent", "project", "session", "zoxide", "root", "server", "quick", "plugin"]
+source_order = ["workspace", "agent", "project", "zoxide", "root", "server", "quick", "plugin"]
 source_priority_boost = 5
 agent_sort = "herdr" # herdr | priority | spaces
 preview = true
@@ -32,7 +32,7 @@ zoxide = true
 roots = true
 agents = true
 servers = true
-sessions = true
+sessions = false
 herdr_plus_quick_actions = true
 
 [theme]
@@ -51,9 +51,6 @@ max_depth = 3
 # agent = "claude"
 # workspace = "Dotfiles"
 # path = "dotfiles"
-
-[sessions]
-local = true
 
 # Remote Herdr target. Selecting runs: herdr --remote prod-api --handoff.
 # [[sessions.entries]]

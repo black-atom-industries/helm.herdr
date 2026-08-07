@@ -40,7 +40,7 @@ This project should stay a compact plugin. Avoid speculative abstractions, plugi
 
 ## Server access uses remote handoff
 
-Treat a remote server as a Herdr remote target, not a remote session. `Ctrl-S` filters servers; remote rows run `herdr --remote TARGET --handoff` to avoid nested Herdr. Local session rows stay local and run `herdr session attach NAME`. Picker should not own SSH config parsing, `.herdr-server.toml`, autossh tabs, or remote terminal attach listing unless terminal-level search becomes an explicit UX goal.
+Treat a remote server as a Herdr remote target, not a remote session. `Ctrl-S` filters servers; remote rows run `herdr --remote TARGET --handoff` to avoid nested Herdr. Picker should not own SSH config parsing, `.herdr-server.toml`, autossh tabs, local session attach, or remote terminal attach listing unless terminal-level search becomes an explicit UX goal.
 
 ## Integration contract v1
 

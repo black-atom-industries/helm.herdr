@@ -102,7 +102,6 @@ Herdr's built-in navigation remains the simpler choice for a single entity type.
 | `workspace` | `herdr workspace list` + pane cwd | Focus the exact workspace |
 | `agent` | `herdr agent list` | Focus the agent pane |
 | `project` | Herdr Plus project TOML | Reuse or create a project workspace and apply tabs and split panes |
-| `session` | Herdr sessions + configured local entries | Attach the local session |
 | `server` | Configured remote targets | Hand off to the remote Herdr server |
 | `zoxide` | `zoxide query -l` | Enter opens normally; `Alt-Enter` applies the shared template |
 | `root` | Configured filesystem roots | Enter opens normally; `Alt-Enter` applies the shared template |
@@ -257,7 +256,7 @@ Useful config surfaces:
 - `[notifications]` can disable notifications entirely or use Herdr's default sounds, no sound, or a custom audio file.
 - `[picker.filter_keys]` remaps source shortcuts.
 - `[[agent_aliases]]` adds memorable search terms without renaming Herdr panes.
-- `[sessions]` controls local sessions and manual remote targets.
+- `[[sessions.entries]]` configures remote targets.
 - `[theme]` inherits supported Herdr themes and custom tokens.
 - `[[integrations]]` adds external command/JSON sources.
 
@@ -340,3 +339,5 @@ find ~/.config/herdr/plugins/config/cloudmanic.herdr-plus/projects -name '*.toml
 - [`CONTRIBUTING.md`](CONTRIBUTING.md) — development workflow
 
 Herdr Navigator is intentionally small: reuse Herdr primitives, keep optional integrations optional, and make the common path `prefix+t → type → Enter`.
+
+Originally forked from [thanhdat77/herdr-navigator](https://github.com/thanhdat77/herdr-navigator). Thanks to Thanh Dat for the foundation.

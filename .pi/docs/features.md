@@ -48,11 +48,11 @@ Source priority is intentional: existing/open things first, creation sources lat
 
 Keep keybindings mnemonic and few.
 
-## Remote handoff + local sessions
+## Remote handoff
 
 Navigator owns remote handoff, not SSH terminal wrapping. `Ctrl-S` filters Herdr remote targets. Manual remote rows come from `[sessions.entries]` and run `herdr --remote TARGET --handoff`.
 
-Local rows come from `herdr session list --json` and run `herdr session attach NAME`. Do not bring back `.herdr-server.toml`, SSH config parsing, or terminal attach listing unless the user explicitly asks for terminal-level search again.
+Do not add `.herdr-server.toml`, SSH config parsing, local session attach, or terminal attach listing unless terminal-level search becomes an explicit UX goal.
 
 ## Herdr Plus
 

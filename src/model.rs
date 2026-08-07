@@ -76,10 +76,6 @@ pub(crate) enum EntryAction {
     OpenRemote {
         target: String,
     },
-    AttachSession {
-        name: String,
-        remote: Option<String>,
-    },
     InvokePluginAction {
         action: String,
     },

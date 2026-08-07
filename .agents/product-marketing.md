@@ -7,7 +7,7 @@
 **Display name:** Herdr Navigator
 **Technical plugin ID:** `herdr-navigator` (aligned with the display name, binary, actions, config path, and repository since v0.3.2)
 **One-liner:** One fuzzy navigator for every place and action in Herdr.
-**What it does:** Herdr Navigator searches workspaces, agents, projects, sessions, remotes, directories, Quick Actions, and external command integrations from one Herdr-managed picker. Selecting a result performs the correct Herdr action: focus, create, attach, hand off, invoke, or run.
+**What it does:** Herdr Navigator searches workspaces, agents, projects, remotes, directories, Quick Actions, and external command integrations from one Herdr-managed picker. Selecting a result performs the correct Herdr action: focus, create, hand off, invoke, or run.
 **Product category:** Herdr plugin; terminal fuzzy navigator; workflow switcher.
 **Product type:** Free, MIT-licensed open-source developer tool.
 
@@ -18,20 +18,20 @@
 **Jobs to be done:**
 - Find an open workspace or agent from one shortcut.
 - Open a project or directory without creating duplicate workspaces.
-- Attach a local session or hand off to a remote Herdr server.
+- Hand off to a remote Herdr server.
 - Bring another CLI tool into the same picker without changing Rust code.
 
 **Anti-persona:** Users who do not run Herdr, only need a basic path picker, or want process/session restoration.
 
 ## Problems & Pain Points
 
-**Core problem:** Navigation is split across workspace lists, agent panes, session commands, remotes, zoxide, project templates, and custom scripts. Users often remember the destination but not the surface needed to reach it.
+**Core problem:** Navigation is split across workspace lists, agent panes, remotes, zoxide, project templates, and custom scripts. Users often remember the destination but not the surface needed to reach it.
 **Why alternatives fall short:** Herdr's focused pickers are narrower; generic fuzzy finders return paths but do not know whether to focus, create, attach, or hand off; custom scripts become fragmented and hard to share.
 **Emotional tension:** Context switching breaks flow, especially while coordinating several agents or repositories.
 
 ## Competitive Landscape
 
-**Direct:** Herdr's built-in workspace/session navigation — simpler for one entity type, but not a cross-source action surface.
+**Direct:** Herdr's built-in workspace navigation is simpler for one entity type, but not a cross-source action surface.
 **Secondary:** `fzf`, `tv`, zoxide, and custom shell scripts — flexible discovery, but no built-in Herdr action semantics or source-aware workspace reuse.
 **Analogues:** tmux-sessionx and tmux-fzf — validate the unified switch-or-create workflow, but target tmux rather than Herdr.
 
@@ -72,8 +72,8 @@
 ## Proof Points
 
 - MIT-licensed Rust project with Linux and macOS declared support.
-- Herdr 0.7.3+ actions for workspace focus/create, agent focus, session attach, remote handoff, and managed plugin panes.
-- Configurable source order, filters, preview, themes, fuzzy engines, roots, aliases, sessions, Jump Back, and command integrations.
+- Herdr 0.7.3+ actions for workspace focus/create, agent focus, remote handoff, and managed plugin panes.
+- Configurable source order, filters, preview, themes, fuzzy engines, roots, aliases, remote targets, Jump Back, and command integrations.
 - Automated Rust tests and CI/release workflows.
 - Real TUI screenshot in the repository.
 

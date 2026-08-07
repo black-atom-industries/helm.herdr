@@ -87,13 +87,6 @@ impl App {
                 sessions::collect_remotes(&self.config),
             );
         }
-        if self.config.sources.sessions {
-            push_unique(
-                &mut entries,
-                &mut seen,
-                sessions::collect_sessions(&self.config),
-            );
-        }
         if self.config.sources.agents {
             entries.extend(collect_agents(
                 &workspace_entries,
@@ -298,9 +291,6 @@ impl App {
             }
             EntryAction::OpenProject => (self.open_project(e), true, true),
             EntryAction::OpenRemote { target } => (sessions::open_remote(target), false, true),
-            EntryAction::AttachSession { name, .. } => {
-                (sessions::attach_session(name), false, true)
-            }
             EntryAction::InvokePluginAction { action } => (
                 run_herdr(["plugin", "action", "invoke", action]),
                 true,
@@ -775,9 +765,6 @@ fn pin_key(entry: &Entry) -> String {
         EntryAction::FocusAgent { target } => format!("agent:{target}"),
         EntryAction::OpenProject => format!("project:{}", entry.key()),
         EntryAction::OpenRemote { target } => format!("remote:{target}"),
-        EntryAction::AttachSession { name, remote } => {
-            format!("session:{}:{name}", remote.as_deref().unwrap_or("local"))
-        }
         EntryAction::InvokePluginAction { action } => {
             format!("plugin:{}:{action}", entry.source_name())
         }
@@ -793,9 +780,6 @@ fn push_unique(entries: &mut Vec<Entry>, seen: &mut HashSet<String>, incoming: V
         let key = match &e.action {
             EntryAction::FocusWorkspace { id } => format!("open:{id}"),
             EntryAction::OpenRemote { target } => format!("remote:{target}"),
-            EntryAction::AttachSession { name, remote } => {
-                format!("session:{}:{name}", remote.as_deref().unwrap_or("local"))
-            }
             EntryAction::RunCommand { command, .. } => format!("{}:{command}", e.source_name()),
             _ => format!("{}:{}", e.source_name(), e.key()),
         };

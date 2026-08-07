@@ -99,8 +99,8 @@ agents = true
 
 # Remote Herdr targets from remote entries in [sessions] below.
 servers = true
-# Local Herdr sessions from `herdr session list --json` and local [sessions] entries below.
-sessions = true
+# Reserved for command integrations that return entries with kind = "session".
+sessions = false
 
 # Herdr Plus Quick Actions. Selecting opens the Quick Actions picker.
 herdr_plus_quick_actions = true
@@ -127,10 +127,6 @@ max_depth = 3
 # agent = "claude"
 # workspace = "Dotfiles"
 # path = "dotfiles"
-
-[sessions]
-# Include local named sessions from `herdr session list --json`.
-local = true
 
 # Manual remote targets. Selecting runs: herdr --remote <remote> --handoff.
 # [[sessions.entries]]

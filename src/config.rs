@@ -119,10 +119,8 @@ impl SourcesConfig {
     }
 }
 
-#[derive(Clone, Deserialize)]
+#[derive(Clone, Default, Deserialize)]
 pub(crate) struct SessionsConfig {
-    #[serde(default = "yes")]
-    pub(crate) local: bool,
     #[serde(default)]
     pub(crate) entries: Vec<SessionEntryConfig>,
 }
@@ -131,7 +129,6 @@ pub(crate) struct SessionsConfig {
 pub(crate) struct SessionEntryConfig {
     pub(crate) name: String,
     pub(crate) remote: Option<String>,
-    pub(crate) session: Option<String>,
     #[serde(default)]
     pub(crate) tags: Vec<String>,
 }
@@ -341,14 +338,6 @@ impl Default for SourcesConfig {
             servers: true,
             sessions: true,
             herdr_plus_quick_actions: true,
-        }
-    }
-}
-impl Default for SessionsConfig {
-    fn default() -> Self {
-        Self {
-            local: true,
-            entries: vec![],
         }
     }
 }
@@ -631,28 +620,19 @@ mod tests {
     fn parses_builtin_session_config() {
         let config: Config = toml::from_str(
             r#"
-            [sessions]
-            local = false
-
             [[sessions.entries]]
             name = "prod"
             remote = "prod-host"
-            session = "default"
             tags = ["api"]
             "#,
         )
         .unwrap();
 
         assert!(config.sources.sessions);
-        assert!(!config.sessions.local);
         assert_eq!(config.sessions.entries[0].name, "prod");
         assert_eq!(
             config.sessions.entries[0].remote.as_deref(),
             Some("prod-host")
-        );
-        assert_eq!(
-            config.sessions.entries[0].session.as_deref(),
-            Some("default")
         );
     }
 }
