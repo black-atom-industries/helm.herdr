@@ -377,8 +377,8 @@ impl App {
         }
         let project = e.project.as_ref();
         let label = project
-            .map(|p| format!("project: {}", p.name))
-            .unwrap_or_else(|| format!("project: {}", e.title));
+            .map(|p| p.name.clone())
+            .unwrap_or_else(|| e.title.clone());
         let json = herdr_json([
             "workspace",
             "create",
@@ -422,7 +422,7 @@ impl App {
                 "--cwd",
                 &path.display().to_string(),
                 "--label",
-                &format!("dir: {label}"),
+                label,
                 "--focus",
             ])?;
             return herdr_plus::bootstrap_project_tabs(&template, &json, path);
@@ -442,7 +442,7 @@ impl App {
             "--cwd",
             &path.display().to_string(),
             "--label",
-            &format!("dir: {label}"),
+            label,
             "--focus",
         ])
     }
@@ -455,9 +455,15 @@ impl App {
     }
 
     pub(crate) fn matching_project_workspace(&self, e: &Entry) -> Option<&WorkspaceRef> {
-        self.workspaces_for_entry(e)
+        let workspaces = self.workspaces_for_entry(e);
+        workspaces
             .iter()
             .find(|ws| ws.kind == WorkspaceKind::Project)
+            .or_else(|| {
+                workspaces
+                    .iter()
+                    .find(|ws| ws.kind == WorkspaceKind::Unknown)
+            })
     }
 
     pub(crate) fn matching_dir_workspace(&self, e: &Entry) -> Option<&WorkspaceRef> {
@@ -465,10 +471,15 @@ impl App {
     }
 
     fn matching_dir_workspace_by_key(&self, key: &str) -> Option<&WorkspaceRef> {
-        self.path_to_workspaces
-            .get(key)?
+        let workspaces = self.path_to_workspaces.get(key)?;
+        workspaces
             .iter()
             .find(|ws| ws.kind == WorkspaceKind::Dir)
+            .or_else(|| {
+                workspaces
+                    .iter()
+                    .find(|ws| ws.kind == WorkspaceKind::Unknown)
+            })
     }
 
     fn matching_template_workspace_by_key(&self, key: &str) -> Option<&WorkspaceRef> {
@@ -476,7 +487,11 @@ impl App {
         workspaces
             .iter()
             .find(|workspace| workspace.kind == WorkspaceKind::Dir)
-            .or_else(|| workspaces.first())
+            .or_else(|| {
+                workspaces
+                    .iter()
+                    .find(|workspace| workspace.kind == WorkspaceKind::Unknown)
+            })
     }
 }
 
@@ -1037,6 +1052,28 @@ mod tests {
     }
 
     #[test]
+    fn plain_workspace_is_shared_by_project_and_directory_entries() {
+        let mut app = App::new(Config::default(), Theme::load(false));
+        let mut project = entry(Source::Project, "/tmp", "tmp");
+        project.project = Some(Project {
+            name: "tmp".into(),
+            description: String::new(),
+            working_dir: "/tmp".into(),
+            tabs: vec![],
+        });
+        let dir = entry(Source::Zoxide, "/tmp", "tmp");
+        app.path_to_workspaces.insert(
+            project.key(),
+            vec![workspace("w1", "tmp", WorkspaceKind::Unknown, "/tmp")],
+        );
+
+        assert_eq!(app.matching_project_workspace(&project).unwrap().id, "w1");
+        assert_eq!(app.matching_dir_workspace(&dir).unwrap().id, "w1");
+        assert_eq!(app.workspace_to_close(&project), Some("w1".into()));
+        assert_eq!(app.workspace_to_close(&dir), Some("w1".into()));
+    }
+
+    #[test]
     fn offers_directory_template_for_new_and_existing_directory_workspaces() {
         let mut config = Config::default();
         config.picker.directory_template = Some("default.toml".into());
@@ -1064,10 +1101,7 @@ mod tests {
                 "/tmp",
             )],
         );
-        assert_eq!(
-            app.matching_template_workspace_by_key("/tmp").unwrap().id,
-            "w1"
-        );
+        assert!(app.matching_template_workspace_by_key("/tmp").is_none());
     }
 
     #[test]

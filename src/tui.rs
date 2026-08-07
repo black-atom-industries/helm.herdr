@@ -311,24 +311,7 @@ fn execute_command(app: &mut App, command: Command, key: KeyEvent) -> Action {
 fn draw(f: &mut Frame, app: &App) -> ListHits {
     let area = f.area();
     f.render_widget(Clear, area);
-    let mut outer = Block::default()
-        .style(Style::default().bg(app.theme.panel_bg))
-        .title(" Herdr Navigator ")
-        .borders(Borders::ALL)
-        .border_style(Style::default().fg(app.theme.accent));
-    if let Some(version) = &app.update_available {
-        outer = outer.title_top(
-            Line::from(Span::styled(
-                format!(" ↑ v{version} available · F5 update "),
-                Style::default()
-                    .fg(app.theme.yellow)
-                    .add_modifier(Modifier::BOLD),
-            ))
-            .right_aligned(),
-        );
-    }
-    let inner = outer.inner(area);
-    f.render_widget(outer, area);
+    let inner = area;
 
     let rows = Layout::default()
         .direction(Direction::Vertical)
@@ -344,7 +327,7 @@ fn draw(f: &mut Frame, app: &App) -> ListHits {
         .as_ref()
         .map(|s| s.label())
         .unwrap_or("all");
-    let search = Paragraph::new(Line::from(vec![
+    let mut search_spans = vec![
         Span::styled("query ", Style::default().fg(app.theme.overlay0)),
         Span::styled(
             &app.query,
@@ -357,8 +340,16 @@ fn draw(f: &mut Frame, app: &App) -> ListHits {
             format!("filter:{filter}"),
             Style::default().fg(app.theme.accent),
         ),
-    ]))
-    .block(
+    ];
+    if let Some(version) = &app.update_available {
+        search_spans.push(Span::styled(
+            format!("   ↑ v{version} available · F5 update"),
+            Style::default()
+                .fg(app.theme.yellow)
+                .add_modifier(Modifier::BOLD),
+        ));
+    }
+    let search = Paragraph::new(Line::from(search_spans)).block(
         Block::default()
             .style(Style::default().bg(app.theme.panel_bg))
             .borders(Borders::BOTTOM),
@@ -679,7 +670,7 @@ fn draw_list(f: &mut Frame, app: &App, area: Rect) -> ListHits {
             let status = entry_status(e);
             let icon = status
                 .map(|status| format!("{} ", status_icon_at(&e.source, status, app.spinner_tick)))
-                .unwrap_or_default();
+                .unwrap_or_else(|| "  ".into());
             let status_label = status.filter(|status| *status != "unknown");
             let raw_path = e.path.display().to_string();
             let raw_metadata = entry_metadata(e);
@@ -708,37 +699,35 @@ fn draw_list(f: &mut Frame, app: &App, area: Rect) -> ListHits {
                     .map(str::chars)
                     .map(Iterator::count)
                     .unwrap_or(0);
-            let fixed_width = branch.chars().count() + icon.chars().count();
             let right_column_width = if right_width > 0 {
                 meta_width.max(right_width)
             } else {
                 0
             };
-            let title_budget = row_width
-                .saturating_sub(fixed_width)
+            let fixed_width = branch.chars().count() + icon.chars().count();
+            let content_width = row_width.saturating_sub(fixed_width);
+            let title_width = content_width.min(48) / 2;
+            let path_width = content_width
+                .saturating_sub(title_width)
+                .saturating_sub(1)
                 .saturating_sub(right_column_width)
                 .saturating_sub(usize::from(right_width > 0));
-            let title = truncate_end(display_title(e), title_budget);
-            let spacer = if right_width == 0 {
-                String::new()
-            } else {
-                " ".repeat(
-                    row_width
-                        .saturating_sub(fixed_width)
-                        .saturating_sub(title.chars().count())
-                        .saturating_sub(right_column_width),
-                )
-            };
+            let title = truncate_end(display_title(e), title_width);
+            let path = truncate_end(&display_path(e), path_width);
             let status_color = status
                 .map(|status| agent_status_color(&app.theme, status))
                 .unwrap_or(color);
             let mut title_spans = vec![
                 Span::styled(branch, Style::default().fg(branch_color)),
                 Span::styled(icon, Style::default().fg(status_color)),
-                Span::styled(title, Style::default().fg(app.theme.text)),
+                Span::styled(title.clone(), Style::default().fg(app.theme.text)),
+                Span::raw(" ".repeat(title_width.saturating_sub(title.chars().count()))),
+                Span::raw(" "),
+                Span::styled(path.clone(), Style::default().fg(app.theme.subtext0)),
+                Span::raw(" ".repeat(path_width.saturating_sub(path.chars().count()))),
             ];
             if right_width > 0 {
-                title_spans.push(Span::raw(spacer));
+                title_spans.push(Span::raw(" "));
                 if let Some(status_label) = status_label {
                     title_spans.push(Span::styled(
                         status_label.to_string(),
@@ -756,21 +745,7 @@ fn draw_list(f: &mut Frame, app: &App, area: Rect) -> ListHits {
                     ));
                 }
             }
-
-            if matches!(e.source, Source::Zoxide | Source::Root) {
-                let detail_branch = if group_end { "     " } else { "  │  " };
-                let path_budget = row_width.saturating_sub(detail_branch.chars().count());
-                let path = truncate_end(&display_path(e), path_budget);
-                items.push(ListItem::new(vec![
-                    Line::from(title_spans),
-                    Line::from(vec![
-                        Span::styled(detail_branch, Style::default().fg(app.theme.overlay0)),
-                        Span::styled(path, Style::default().fg(app.theme.subtext0)),
-                    ]),
-                ]));
-            } else {
-                items.push(ListItem::new(Line::from(title_spans)));
-            }
+            items.push(ListItem::new(Line::from(title_spans)));
         } else {
             let status_text = entry_status(e);
             let status = status_text
@@ -1100,8 +1075,8 @@ mod tests {
         let text = buffer_text(&terminal);
         let buffer = terminal.backend().buffer();
 
-        assert!(text.contains("  ◆  Current"));
-        assert!(text.contains("  ◆  Previous"));
+        assert!(text.contains("  ◆    Current"));
+        assert!(text.contains("  ◆    Previous"));
         assert!(!text.contains("├─ ◆"));
         assert!(buffer
             .content()
@@ -1170,12 +1145,27 @@ mod tests {
     }
 
     #[test]
-    fn detailed_rows_only_expand_directory_sources() {
+    fn draw_uses_the_host_pane_chrome() {
+        let app = App::new(Config::default(), Theme::load(false));
+        let backend = TestBackend::new(60, 10);
+        let mut terminal = Terminal::new(backend).unwrap();
+        terminal
+            .draw(|f| {
+                draw(f, &app);
+            })
+            .unwrap();
+
+        assert!(!buffer_text(&terminal).contains("Herdr Navigator"));
+    }
+
+    #[test]
+    fn detailed_rows_align_paths_on_one_line() {
         let mut app = App::new(Config::default(), Theme::load(false));
         let mut workspace = entry(Source::Workspace, "dir: demo");
         workspace.path = PathBuf::from("/work/demo");
         workspace.subtitle = "agent:blocked · w1 tabs:2 panes:3".into();
         let mut agent = entry(Source::Agent, "claude · demo");
+        agent.path = PathBuf::from("/work/agent-demo");
         agent.subtitle = "working · w1:p2 · w1:t1".into();
         let mut root = entry(Source::Root, "root-demo");
         root.path = PathBuf::from("/projects/root-demo");
@@ -1183,6 +1173,7 @@ mod tests {
         app.entries = vec![workspace, agent, root];
         app.filtered = vec![0, 1, 2];
         app.filtered_scores = vec![0, 0, 0];
+        app.selected = usize::MAX;
 
         let backend = TestBackend::new(90, 10);
         let mut terminal = Terminal::new(backend).unwrap();
@@ -1197,12 +1188,42 @@ mod tests {
             .lines()
             .find(|line| line.contains("⠋ claude · demo"))
             .unwrap();
+        let root_line = text
+            .lines()
+            .find(|line| line.contains("root-demo"))
+            .unwrap();
 
-        assert!(!text.contains("/work/demo"));
-        assert!(!workspace_line.contains("demo  blocked"));
-        assert!(workspace_line.find("blocked · 2 tabs · 3 panes").unwrap() > 50);
-        assert!(agent_line.find("working · w1:t1 · w1:p2").unwrap() > 50);
-        assert!(text.contains("/projects/root-demo"));
+        let column = |line: &str, path: &str| line[..line.find(path).unwrap()].chars().count();
+        let workspace_path = column(workspace_line, &display_path(&app.entries[0]));
+        let agent_path = column(agent_line, &display_path(&app.entries[1]));
+        let root_path = column(root_line, &display_path(&app.entries[2]));
+        assert_eq!(workspace_path, agent_path);
+        assert_eq!(workspace_path, root_path);
+        assert!(workspace_line.find("blocked · 2 tabs · 3 panes").unwrap() > workspace_path);
+        assert!(agent_line.find("working · w1:t1 · w1:p2").unwrap() > agent_path);
+    }
+
+    #[test]
+    fn detailed_rows_truncate_long_names_and_paths_without_wrapping() {
+        let mut app = App::new(Config::default(), Theme::load(false));
+        let mut root = entry(Source::Root, "very-long-directory-name");
+        root.path = PathBuf::from("/projects/with/a/very/long/path");
+        app.entries = vec![root];
+        app.filtered = vec![0];
+        app.filtered_scores = vec![0];
+        app.selected = usize::MAX;
+
+        let backend = TestBackend::new(40, 6);
+        let mut terminal = Terminal::new(backend).unwrap();
+        terminal
+            .draw(|f| {
+                draw_list(f, &app, f.area());
+            })
+            .unwrap();
+        let text = buffer_text(&terminal);
+
+        assert!(text.contains("very-long-dire…"));
+        assert!(text.contains("/projects/wit…"));
     }
 
     #[test]
@@ -1235,7 +1256,7 @@ mod tests {
             status_icon_at(&Source::Agent, "", 0)
         )));
         assert!(text.contains(" ▾ root "));
-        assert!(text.contains("  └─ Dotfiles"));
+        assert!(text.contains("  └─   Dotfiles"));
     }
 
     #[test]
@@ -1504,10 +1525,9 @@ mod tests {
         let detail_row = lines
             .iter()
             .position(|line| line.contains("/two"))
-            .expect("second detailed row should remain visible after scrolling")
+            .expect("second result row should remain visible after scrolling")
             as u16;
 
-        assert!(!lines.iter().any(|line| line.contains("/one")));
         assert!(matches!(
             handle_mouse(
                 &mut app,

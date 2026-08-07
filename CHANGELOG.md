@@ -4,6 +4,11 @@ All notable changes to this project are documented here.
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-08-07
+
+### Changed
+- **Breaking:** New project and directory workspaces use plain names instead of `project:` and `dir:` prefixes.
+
 ## [0.4.0] - 2026-08-07
 
 ### Changed

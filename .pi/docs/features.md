@@ -13,7 +13,7 @@ Do not split into many specialized pickers unless the UX clearly needs it. The p
 
 ## Result rows
 
-`picker.detailed_rows = true` is the default: workspace, agent, project, session, server, quick, and plugin entries stay on one line with metadata in Herdr's responsive right column; zoxide/root entries add a second full-path line. Status, focus, expansion, and selection use Herdr's `prefix+g` glyphs (`◉`, Braille spinner, `●`, `✓`, `○`, `◆`, `▾`, `├─`, `└─`, `→`). Set it to `false` for the original compact list.
+`picker.detailed_rows = true` is the default: every entry stays on one line, with aligned name, path, and metadata columns. Status, focus, expansion, and selection use Herdr's `prefix+g` glyphs (`◉`, Braille spinner, `●`, `✓`, `○`, `◆`, `▾`, `├─`, `└─`, `→`). Set it to `false` for the original compact list.
 
 ## Notifications
 
