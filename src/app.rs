@@ -1016,14 +1016,6 @@ mod tests {
     #[test]
     fn source_specific_reuse_distinguishes_same_path_workspaces() {
         let mut app = App::new(Config::default(), Theme::load(false));
-        app.path_to_workspaces.insert(
-            "/tmp".into(),
-            vec![
-                workspace("w1", "project: tmp", WorkspaceKind::Project, "/tmp"),
-                workspace("w2", "dir: tmp", WorkspaceKind::Dir, "/tmp"),
-            ],
-        );
-
         let mut project = entry(Source::Project, "/tmp", "tmp");
         project.project = Some(Project {
             name: "tmp".into(),
@@ -1032,6 +1024,13 @@ mod tests {
             tabs: vec![],
         });
         let dir = entry(Source::Zoxide, "/tmp", "tmp");
+        app.path_to_workspaces.insert(
+            project.key(),
+            vec![
+                workspace("w1", "project: tmp", WorkspaceKind::Project, "/tmp"),
+                workspace("w2", "dir: tmp", WorkspaceKind::Dir, "/tmp"),
+            ],
+        );
 
         assert_eq!(app.matching_project_workspace(&project).unwrap().id, "w1");
         assert_eq!(app.matching_dir_workspace(&dir).unwrap().id, "w2");
@@ -1074,14 +1073,6 @@ mod tests {
     #[test]
     fn close_target_matches_entry_kind() {
         let mut app = App::new(Config::default(), Theme::load(false));
-        app.path_to_workspaces.insert(
-            "/tmp".into(),
-            vec![
-                workspace("w1", "project: tmp", WorkspaceKind::Project, "/tmp"),
-                workspace("w2", "dir: tmp", WorkspaceKind::Dir, "/tmp"),
-            ],
-        );
-
         let mut project = entry(Source::Project, "/tmp", "tmp");
         project.project = Some(Project {
             name: "tmp".into(),
@@ -1090,6 +1081,13 @@ mod tests {
             tabs: vec![],
         });
         let dir = entry(Source::Root, "/tmp", "tmp");
+        app.path_to_workspaces.insert(
+            project.key(),
+            vec![
+                workspace("w1", "project: tmp", WorkspaceKind::Project, "/tmp"),
+                workspace("w2", "dir: tmp", WorkspaceKind::Dir, "/tmp"),
+            ],
+        );
 
         assert_eq!(app.workspace_to_close(&project), Some("w1".into()));
         assert_eq!(app.workspace_to_close(&dir), Some("w2".into()));
