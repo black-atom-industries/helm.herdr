@@ -348,8 +348,16 @@ impl App {
                 .ok_or("no open workspace for selected item")?;
             (id, e.title.clone())
         };
-        if let Some(err) = close_current_workspace_error(&id, launch_workspace_id().as_deref()) {
-            return Err(err);
+        let launcher = launch_workspace_id();
+        if launcher.as_deref() == Some(&id) {
+            let previous = self
+                .previous_workspace_id
+                .as_deref()
+                .filter(|previous| *previous != id)
+                .ok_or("no previous workspace to focus before closing this one")?;
+            run_herdr(["workspace", "focus", previous])?;
+        } else if let Some(launcher) = launcher {
+            run_herdr(["workspace", "focus", &launcher])?;
         }
         run_herdr(["workspace", "close", &id])?;
         notify_done(&format!("Closed {title}"), &self.config.notifications);
@@ -743,11 +751,6 @@ fn launch_workspace_id() -> Option<String> {
         .filter(|s| !s.is_empty())
 }
 
-fn close_current_workspace_error(id: &str, current: Option<&str>) -> Option<String> {
-    (current == Some(id))
-        .then(|| "can't close the workspace that owns this picker; switch away first".into())
-}
-
 fn agent_sort(configured: &str) -> String {
     match configured.to_lowercase().as_str() {
         "priority" => "priority".into(),
@@ -1125,16 +1128,6 @@ mod tests {
 
         assert_eq!(app.workspace_to_close(&project), Some("w1".into()));
         assert_eq!(app.workspace_to_close(&dir), Some("w2".into()));
-    }
-
-    #[test]
-    fn refuses_to_close_picker_owning_workspace() {
-        assert_eq!(
-            close_current_workspace_error("w1", Some("w1")),
-            Some("can't close the workspace that owns this picker; switch away first".into())
-        );
-        assert_eq!(close_current_workspace_error("w1", Some("w2")), None);
-        assert_eq!(close_current_workspace_error("w1", None), None);
     }
 
     #[test]
