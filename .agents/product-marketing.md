@@ -4,10 +4,10 @@
 
 ## Product Overview
 
-**Display name:** Herdr Navigator
-**Technical plugin ID:** `herdr-navigator` (aligned with the display name, binary, actions, config path, and repository since v0.3.2)
+**Display name:** Helm for Herdr
+**Technical plugin ID:** `helm-herdr`
 **One-liner:** One fuzzy navigator for every place and action in Herdr.
-**What it does:** Herdr Navigator searches workspaces, agents, projects, remotes, directories, Quick Actions, and external command integrations from one Herdr-managed picker. Selecting a result performs the correct Herdr action: focus, create, hand off, invoke, or run.
+**What it does:** Helm searches workspaces, agents, projects, remotes, directories, Quick Actions, and external command integrations from one Herdr-managed picker. Selecting a result performs the correct Herdr action: focus, create, hand off, invoke, or run.
 **Product category:** Herdr plugin; terminal fuzzy navigator; workflow switcher.
 **Product type:** Free, MIT-licensed open-source developer tool.
 
@@ -82,5 +82,5 @@ No benchmarks, testimonials, adoption claims, or quantified time savings are cur
 ## Goals
 
 **Primary goal:** Increase qualified Herdr-user installs from the GitHub README.
-**Primary conversion action:** Run `herdr plugin install thanhdat77/herdr-navigator --yes`.
+**Primary conversion action:** Run `herdr plugin install black-atom-industries/helm.herdr --yes`.
 **Secondary actions:** Star the repository, configure `prefix+t`, and contribute integrations.

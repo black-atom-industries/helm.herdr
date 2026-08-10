@@ -6,14 +6,18 @@ use std::{
 pub(crate) fn plugin_config_dir() -> PathBuf {
     env::var("HERDR_PLUGIN_CONFIG_DIR")
         .map(PathBuf::from)
-        .unwrap_or_else(|_| home().join(".config/herdr/plugins/config/herdr-navigator"))
+        .unwrap_or_else(|_| home().join(".config/herdr/plugins/config/helm-herdr"))
 }
 
 pub(crate) fn migrate_legacy_plugin_config() {
     let current = plugin_config_dir();
-    let legacy = home().join(".config/herdr/plugins/config/herdr-picker-plus");
-    if current != legacy {
-        let _ = copy_missing_files(&legacy, &current);
+    let legacy_picker_plus = home().join(".config/herdr/plugins/config/herdr-picker-plus");
+    let legacy_navigator = home().join(".config/herdr/plugins/config/herdr-navigator");
+    if current != legacy_picker_plus {
+        let _ = copy_missing_files(&legacy_picker_plus, &current);
+    }
+    if current != legacy_navigator {
+        let _ = copy_missing_files(&legacy_navigator, &current);
     }
 }
 

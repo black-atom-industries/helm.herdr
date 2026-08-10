@@ -1,7 +1,9 @@
-# Herdr Navigator
+# Helm for Herdr
+
+> Originally forked from [thanhdat77/herdr-navigator](https://github.com/thanhdat77/herdr-navigator). Thanks to Thanh Dat for the foundation.
 
 <p align="center">
-  <img src="docs/assets/herdr-navigator.svg" alt="Herdr Navigator — jump to anything in Herdr" width="100%" />
+  <img src="docs/assets/herdr-navigator.svg" alt="Helm for Herdr — jump to anything in Herdr" width="100%" />
 </p>
 
 <p align="center">
@@ -9,60 +11,39 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/thanhdat77/herdr-navigator/actions/workflows/ci.yml"><img alt="CI" src="https://github.com/thanhdat77/herdr-navigator/actions/workflows/ci.yml/badge.svg" /></a>
+  <a href="https://github.com/black-atom-industries/helm.herdr/actions/workflows/ci.yml"><img alt="CI" src="https://github.com/black-atom-industries/helm.herdr/actions/workflows/ci.yml/badge.svg" /></a>
   <a href="LICENSE"><img alt="MIT License" src="https://img.shields.io/badge/license-MIT-2ea44f" /></a>
   <img alt="Herdr 0.7.3+" src="https://img.shields.io/badge/Herdr-0.7.3%2B-66b3ff" />
   <img alt="Linux and macOS" src="https://img.shields.io/badge/platform-Linux%20%7C%20macOS-c084fc" />
 </p>
 
-Type what you remember. Navigator decides whether to **focus, create, attach, hand off, invoke, or run**—without making you remember which Herdr surface owns the destination.
+Type what you remember. Helm decides whether to **focus, create, attach, hand off, invoke, or run**—without making you remember which Herdr surface owns the destination.
 
 ```text
 prefix+t  →  type  →  Enter
 ```
 
-> [!IMPORTANT]
-> **Upgrading from v0.3.1 or earlier?** Sorry for the one-time breaking rename. Starting with v0.3.2, the plugin ID, binary, config directory, and action prefix are all `herdr-navigator`. See the migration steps below.
-
 ## Install
 
 ```bash
-herdr plugin install thanhdat77/herdr-navigator --ref v0.3.3 --yes
-herdr plugin action invoke herdr-navigator.open
+herdr plugin install black-atom-industries/helm.herdr --yes
+herdr plugin action invoke helm-herdr.open
 ```
 
-If the overlay opens, add a shortcut to `~/.config/herdr/config.toml`. Invoking `open` again focuses the existing Navigator in the current workspace instead of opening a duplicate:
+If the overlay opens, add a shortcut to `~/.config/herdr/config.toml`. Invoking `open` again focuses the existing Helm in the current workspace instead of opening a duplicate:
 
 ```toml
 [[keys.command]]
 key = "prefix+t"
 type = "plugin_action"
-command = "herdr-navigator.open"
+command = "helm-herdr.open"
 description = "jump to anything"
-```
-
-### Upgrade from v0.3.1 or earlier
-
-Sorry for the migration. This completes the rename while the project is still young:
-
-```bash
-herdr plugin uninstall herdr-picker-plus
-herdr plugin install thanhdat77/herdr-navigator --ref v0.3.3 --yes
-herdr server reload-config
-```
-
-Replace `herdr-picker-plus` with `herdr-navigator` in your Herdr keybindings. Navigator copies your old plugin config and Jump Back state into the new config directory on first run; the old files are left untouched. Local development links should use `herdr plugin unlink herdr-picker-plus` instead of `uninstall`.
-
-Reload Herdr, then press `prefix+t`:
-
-```bash
-herdr server reload-config
 ```
 
 ## See it in action
 
 <p align="center">
-  <img src="docs/assets/herdr-navigator-demo.gif" alt="Herdr Navigator switching, filtering, and opening workspaces, agents, sessions, and directories" width="100%" />
+  <img src="docs/assets/herdr-navigator-demo.gif" alt="Helm switching, filtering, and opening workspaces, agents, sessions, and directories" width="100%" />
 </p>
 
 *Source-aware rows keep live status, tabs, and panes aligned at a glance. [Watch the full 17-second demo.](https://github.com/thanhdat77/herdr-navigator/releases/download/v0.3.2/herdr-navigator-v0.3.2-demo.mp4)*
@@ -74,7 +55,7 @@ A single result list can move between live Herdr state and things that are not o
 - Filter remotes → hand off with Herdr's own `--remote TARGET --handoff` flow.
 - Select an external integration → run its configured action.
 
-## Why Navigator
+## Why Helm
 
 | Capability | Why it matters |
 | --- | --- |
@@ -85,13 +66,13 @@ A single result list can move between live Herdr state and things that are not o
 | **Extensible without Rust** | Add another tool with a command that returns JSON and a command that opens the selected item. |
 | **No picker dependency** | The Rust/ratatui interface runs in a Herdr-managed pane; `fzf` and `tv` are not runtime requirements. |
 
-Herdr's built-in navigation remains the simpler choice for a single entity type. Navigator is for the moment when “where next?” could mean a workspace, agent, path, session, remote, project, or action.
+Herdr's built-in navigation remains the simpler choice for a single entity type. Helm is for the moment when "where next?" could mean a workspace, agent, path, session, remote, project, or action.
 
 ## Standout features
 
 | Feature | What it does |
 | --- | --- |
-| **Last Workspace** | `herdr-navigator.jump-back` toggles between the current and previously visited local workspace. |
+| **Last Workspace** | `helm-herdr.jump-back` toggles between the current and previously visited local workspace. |
 | **Pin** | `Ctrl-B` marks important entries and keeps them ahead of the normal source order. |
 | **Open with Template** | `Alt-Enter` by default applies one reusable Herdr Plus tabs/panes template to any zoxide/root directory, creating its workspace or appending fresh template tabs when already open. |
 
@@ -154,19 +135,19 @@ Set `vim_mode = true` for normal-mode `j`/`k`, source keys, and `/` search. All 
 
 ### Close an open directory
 
-Select an `open` or `agent` entry, or a `project`, `root`, or `zoxide` entry that matches an open workspace, then press `Ctrl-X`. Navigator closes that workspace and refreshes the list.
+Select an `open` or `agent` entry, or a `project`, `root`, or `zoxide` entry that matches an open workspace, then press `Ctrl-X`. Helm closes that workspace and refreshes the list.
 
-Navigator refuses to close the workspace that owns the picker; switch away first. Directories that are not open and server, session, quick-action, or plugin entries are left unchanged.
+Helm refuses to close the workspace that owns the picker; switch away first. Directories that are not open and server, session, quick-action, or plugin entries are left unchanged.
 
 ### Jump Back
 
-Navigator remembers the workspace left by a successful local navigation. Bind the dedicated action for tmux-style current/previous toggling:
+Helm remembers the workspace left by a successful local navigation. Bind the dedicated action for tmux-style current/previous toggling:
 
 ```toml
 [[keys.command]]
 key = "prefix+l"
 type = "plugin_action"
-command = "herdr-navigator.jump-back"
+command = "helm-herdr.jump-back"
 description = "jump to previous workspace"
 ```
 
@@ -184,10 +165,10 @@ If the previous workspace was closed, the next Jump Back clears the stale state 
 
 ### Persistent side pane
 
-Keep Navigator beside your work:
+Keep Helm beside your work:
 
 ```bash
-herdr plugin action invoke herdr-navigator.open-side
+herdr plugin action invoke helm-herdr.open-side
 ```
 
 The action opens the side pane, focuses it when it already exists, and closes it when invoked while focused. Unlike the overlay, the side pane stays open after `Enter`.
@@ -198,16 +179,16 @@ Optional binding:
 [[keys.command]]
 key = "prefix+shift+t"
 type = "plugin_action"
-command = "herdr-navigator.open-side"
-description = "navigator side pane"
+command = "helm-herdr.open-side"
+description = "helm side pane"
 ```
 
 ## Configuration
 
-Navigator writes a fully commented config on first run:
+Helm writes a fully commented config on first run:
 
 ```bash
-herdr plugin config-dir herdr-navigator
+herdr plugin config-dir helm-herdr
 ```
 
 See [`examples/default-config.toml`](examples/default-config.toml) for every option and its behavior. Common customizations:
@@ -251,7 +232,7 @@ max_depth = 3
 Useful config surfaces:
 
 - `picker.detailed_rows` shows every entry on one line, with aligned name, path, and metadata columns.
-- `picker.check_updates` checks GitHub releases in the background at most daily and shows `↑ vX.Y.Z available · F5 update`; press `F5`, confirm, and Navigator installs that release through Herdr. Failures stay silent until an update is requested.
+- `picker.check_updates` checks GitHub releases in the background at most daily and shows `↑ vX.Y.Z available · F5 update`; press `F5`, confirm, and Helm installs that release through Herdr. Failures stay silent until an update is requested.
 - `picker.directory_template = "default.toml"` reuses that Herdr Plus project file from its `projects/` config directory. `Enter` keeps normal reuse/create behavior. `picker.directory_template_key` defaults to `alt-enter` and also accepts Ctrl forms such as `ctrl-g`; the shortcut always applies all template tabs, panes, labels, and commands using the selected directory instead of the template's `working_dir`, creating the workspace or appending fresh template tabs.
 - `[notifications]` can disable notifications entirely or use Herdr's default sounds, no sound, or a custom audio file.
 - `[picker.filter_keys]` remaps source shortcuts.
@@ -281,7 +262,7 @@ notify_error = true
 [{"id":"abc","title":"Item","subtitle":"Info","path":"/tmp","kind":"bookmark"}]
 ```
 
-Navigator shell-quotes `{{id}}`, `{{title}}`, `{{subtitle}}`, `{{path}}`, and `{{kind}}` before running `open`. See [`docs/plugin-integrations.md`](docs/plugin-integrations.md) for the full contract.
+Helm shell-quotes `{{id}}`, `{{title}}`, `{{subtitle}}`, `{{path}}`, and `{{kind}}` before running `open`. See [`docs/plugin-integrations.md`](docs/plugin-integrations.md) for the full contract.
 
 ## Requirements
 
@@ -294,8 +275,8 @@ Navigator shell-quotes `{{id}}`, `{{title}}`, `{{subtitle}}`, `{{path}}`, and `{
 Build and link locally:
 
 ```bash
-git clone https://github.com/thanhdat77/herdr-navigator.git
-cd herdr-navigator
+git clone https://github.com/black-atom-industries/helm.herdr.git
+cd helm.herdr
 cargo build --release
 herdr plugin link "$PWD"
 ```
@@ -306,19 +287,19 @@ Check that Herdr sees the plugin and its actions:
 
 ```bash
 herdr plugin list
-herdr plugin action list --plugin herdr-navigator
+herdr plugin action list --plugin helm-herdr
 ```
 
 Inspect every collected candidate without opening the TUI:
 
 ```bash
-./target/release/herdr-navigator list
+./target/release/helm-herdr list
 ```
 
 If a keybinding does nothing, verify the action ID and reload config:
 
 ```bash
-rg "herdr-navigator.open" ~/.config/herdr/config.toml
+rg "helm-herdr.open" ~/.config/herdr/config.toml
 herdr server reload-config
 ```
 
@@ -338,6 +319,4 @@ find ~/.config/herdr/plugins/config/cloudmanic.herdr-plus/projects -name '*.toml
 - [`CHANGELOG.md`](CHANGELOG.md) — released and unreleased changes
 - [`CONTRIBUTING.md`](CONTRIBUTING.md) — development workflow
 
-Herdr Navigator is intentionally small: reuse Herdr primitives, keep optional integrations optional, and make the common path `prefix+t → type → Enter`.
-
-Originally forked from [thanhdat77/herdr-navigator](https://github.com/thanhdat77/herdr-navigator). Thanks to Thanh Dat for the foundation.
+Helm for Herdr is intentionally small: reuse Herdr primitives, keep optional integrations optional, and make the common path `prefix+t → type → Enter`.

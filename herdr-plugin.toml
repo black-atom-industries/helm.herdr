@@ -1,5 +1,5 @@
-id = "herdr-navigator"
-name = "Herdr Navigator"
+id = "helm-herdr"
+name = "Helm for Herdr"
 version = "0.5.0"
 min_herdr_version = "0.7.3"
 description = "Jump to any Herdr workspace, agent, project, remote, directory, or action from one fuzzy navigator."
@@ -10,33 +10,33 @@ command = ["cargo", "build", "--release"]
 
 [[actions]]
 id = "open"
-title = "Herdr Navigator: open"
+title = "Helm: open"
 contexts = ["workspace", "global"]
-command = ["./target/release/herdr-navigator", "open"]
+command = ["./target/release/helm-herdr", "open"]
 
 [[actions]]
 id = "open-side"
-title = "Herdr Navigator: side pane"
+title = "Helm: side pane"
 contexts = ["workspace", "global"]
-command = ["./target/release/herdr-navigator", "open-side"]
+command = ["./target/release/helm-herdr", "open-side"]
 
 [[actions]]
 id = "jump-back"
-title = "Herdr Navigator: jump back"
+title = "Helm: jump back"
 contexts = ["workspace", "global"]
-command = ["./target/release/herdr-navigator", "jump-back"]
+command = ["./target/release/helm-herdr", "jump-back"]
 
 [[panes]]
 id = "picker"
-title = "Herdr Navigator"
+title = "Helm"
 placement = "overlay"
-command = ["./target/release/herdr-navigator", "ui"]
+command = ["./target/release/helm-herdr", "ui"]
 
 # Persistent side pane variant: stays open after Enter, toggled by the open-side
 # action (launch-or-focus, close when already focused). Title must stay in sync
 # with SIDE_PANE_LABEL in src/main.rs.
 [[panes]]
 id = "picker-side"
-title = "Navigator Side"
+title = "Helm Side"
 placement = "split"
-command = ["./target/release/herdr-navigator", "ui", "--side"]
+command = ["./target/release/helm-herdr", "ui", "--side"]

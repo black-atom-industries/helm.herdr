@@ -1,6 +1,6 @@
 # Architecture
 
-Herdr Navigator is a picker center for Herdr: one overlay for choosing where to go or what Herdr-adjacent action to run.
+Helm for Herdr is a picker center for Herdr: one overlay for choosing where to go or what Herdr-adjacent action to run.
 
 It is similar in spirit to `tv`, but deeper integrated with Herdr. Instead of only returning a selected path/item, it can focus existing Herdr state, create Herdr workspaces, apply Herdr Plus project tabs, focus agents, or launch Herdr Plus Quick Actions.
 
@@ -8,9 +8,9 @@ It is similar in spirit to `tv`, but deeper integrated with Herdr. Instead of on
 
 ```text
 Herdr keybinding
-  -> plugin action: herdr-navigator.open
+  -> plugin action: helm-herdr.open
   -> Herdr opens overlay pane: picker
-  -> binary runs: herdr-navigator ui
+  -> binary runs: helm-herdr ui
   -> collect sources
   -> fuzzy filter/rank
   -> Enter dispatches Herdr action
@@ -22,9 +22,9 @@ The plugin is intentionally a terminal TUI running inside a Herdr-managed overla
 
 | Command | Purpose |
 | --- | --- |
-| `herdr-navigator open` | Ask Herdr to open the picker overlay pane |
-| `herdr-navigator ui` | Run the interactive TUI inside that pane |
-| `herdr-navigator list` | Debug: print collected entries without opening TUI |
+| `helm-herdr open` | Ask Herdr to open the picker overlay pane |
+| `helm-herdr ui` | Run the interactive TUI inside that pane |
+| `helm-herdr list` | Debug: print collected entries without opening TUI |
 
 ## Code layout
 
@@ -73,7 +73,7 @@ This keeps the picker useful as a navigation center, not only a launcher.
 
 ## Herdr Plus boundary
 
-Herdr Navigator integrates with Herdr Plus but does not copy all Herdr Plus behavior.
+Helm integrates with Herdr Plus but does not copy all Herdr Plus behavior.
 
 Current integration:
 
@@ -102,7 +102,7 @@ This is practical theme inheritance, not native palette access.
 
 ## Design goals
 
-- One fast overlay for “where next?”
+- One fast overlay for "where next?"
 - Deep Herdr actions on selection, not just printing paths
 - Optional integrations degrade quietly
 - Small Rust binary, no external picker UI dependency

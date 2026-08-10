@@ -26,12 +26,12 @@ jobs:
       - name: Package
         shell: bash
         run: |
-          mkdir -p dist/herdr-navigator
-          cp target/release/herdr-navigator dist/herdr-navigator/
-          cp README.md LICENSE CHANGELOG.md herdr-plugin.toml dist/herdr-navigator/
-          cp -R examples dist/herdr-navigator/
-          tar -C dist -czf herdr-navigator-${{ matrix.name }}.tar.gz herdr-navigator
+          mkdir -p dist/helm-herdr
+          cp target/release/helm-herdr dist/helm-herdr/
+          cp README.md LICENSE CHANGELOG.md herdr-plugin.toml dist/helm-herdr/
+          cp -R examples dist/helm-herdr/
+          tar -C dist -czf helm-herdr-${{ matrix.name }}.tar.gz helm-herdr
       - uses: softprops/action-gh-release@v2
         with:
-          files: herdr-navigator-${{ matrix.name }}.tar.gz
+          files: helm-herdr-${{ matrix.name }}.tar.gz
           generate_release_notes: true

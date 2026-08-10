@@ -1,5 +1,5 @@
 [package]
-name = "herdr-navigator"
+name = "helm-herdr"
 version = "0.5.0"
 edition = "2021"
 description = "Jump to anything in Herdr from one fuzzy navigator"

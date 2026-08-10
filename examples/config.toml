@@ -20,7 +20,7 @@ sound = "default" # default | custom
 custom_sound = "" # Used only when sound = "custom"
 
 [jump_back]
-# Record workspace transitions and enable herdr-navigator.jump-back.
+# Record workspace transitions and enable helm-herdr.jump-back.
 enabled = true
 # Pin the previous workspace first only in the initial unfiltered picker view.
 pin_previous = true

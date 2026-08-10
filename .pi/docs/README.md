@@ -1,10 +1,10 @@
-# Agent Docs: Herdr Navigator
+# Agent Docs: Helm for Herdr
 
 Purpose: compact project-only docs for future agents. Prefer intent over line-by-line code notes.
 
 ## Project intent
 
-Herdr Navigator is a Herdr picker-center plugin for one fast command-palette flow:
+Helm for Herdr is a Herdr picker-center plugin for one fast command-palette flow:
 
 ```text
 prefix+t -> search -> Enter -> land in the right place
@@ -22,15 +22,13 @@ Core UX: if something is already open, focus it; otherwise create/open the small
 
 ## Current public identity
 
-- Cargo package / binary: `herdr-navigator`
-- Herdr plugin id: `herdr-navigator`
-- Main action: `herdr-navigator.open`
+- Cargo package / binary: `helm-herdr`
+- Herdr plugin id: `helm-herdr`
+- Main action: `helm-herdr.open`
 - Overlay pane id: `picker`
 - Plugin manifest: `herdr-plugin.toml`
 - Main code: `src/main.rs`
 - Default config template: `examples/default-config.toml`
-
-Avoid reintroducing old names or personal prefixes.
 
 ## Fast checks
 
@@ -39,7 +37,7 @@ cargo fmt --check
 cargo clippy -- -D warnings
 cargo test
 cargo build --release
-./target/release/herdr-navigator list
+./target/release/helm-herdr list
 ```
 
 ## Docs map

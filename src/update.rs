@@ -9,8 +9,8 @@ use std::{
 use crate::{herdr::run_herdr, paths::plugin_config_dir};
 
 const CURRENT_VERSION: &str = env!("CARGO_PKG_VERSION");
-const PLUGIN_SOURCE: &str = "thanhdat77/herdr-navigator";
-const RELEASE_REPO: &str = "https://github.com/thanhdat77/herdr-navigator.git";
+const PLUGIN_SOURCE: &str = "black-atom-industries/helm.herdr";
+const RELEASE_REPO: &str = "https://github.com/black-atom-industries/helm.herdr.git";
 const CACHE_SECONDS: u64 = 86_400;
 
 pub(crate) fn check_in_background() -> Receiver<Option<String>> {

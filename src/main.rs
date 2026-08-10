@@ -30,7 +30,7 @@ fn main() {
         Some("ui") => run_ui(env::args().nth(2).as_deref() == Some("--side")),
         Some("list") => debug_list(),
         _ => {
-            eprintln!("usage: herdr-navigator <open|open-side|jump-back|ui|list>");
+            eprintln!("usage: helm-herdr <open|open-side|jump-back|ui|list>");
             process::exit(2);
         }
     }
@@ -38,8 +38,8 @@ fn main() {
 
 // Must match the pane `title` values in herdr-plugin.toml; Herdr exposes them
 // as labels in `pane list`.
-const PICKER_PANE_LABEL: &str = "Herdr Navigator";
-const SIDE_PANE_LABEL: &str = "Navigator Side";
+const PICKER_PANE_LABEL: &str = "Helm";
+const SIDE_PANE_LABEL: &str = "Helm Side";
 
 enum PickerDecision {
     Open,
@@ -114,7 +114,7 @@ fn open_side_picker() -> ! {
 }
 
 fn open_plugin_pane(entrypoint: &str, extra: &[&str]) -> ! {
-    let plugin = env::var("HERDR_PLUGIN_ID").unwrap_or_else(|_| "herdr-navigator".into());
+    let plugin = env::var("HERDR_PLUGIN_ID").unwrap_or_else(|_| "helm-herdr".into());
     let status = Command::new(herdr_bin())
         .args([
             "plugin",

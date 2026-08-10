@@ -1,15 +1,15 @@
 # Integrations
 
-Herdr Navigator is intended to be a picker center. Other Herdr plugins should integrate at the boundary of Herdr actions and config, not by depending on internal Rust modules.
+Helm for Herdr is intended to be a picker center. Other Herdr plugins should integrate at the boundary of Herdr actions and config, not by depending on internal Rust modules.
 
 ## Stable public surface
 
 | Surface | Value |
 | --- | --- |
-| Plugin id | `herdr-navigator` |
-| Open action | `herdr-navigator.open` |
-| Binary | `herdr-navigator` |
-| Debug list | `herdr-navigator list` |
+| Plugin id | `helm-herdr` |
+| Open action | `helm-herdr.open` |
+| Binary | `helm-herdr` |
+| Debug list | `helm-herdr list` |
 
 ## From Herdr config
 
@@ -19,16 +19,16 @@ Bind the picker to any key:
 [[keys.command]]
 key = "prefix+t"
 type = "plugin_action"
-command = "herdr-navigator.open"
+command = "helm-herdr.open"
 description = "picker center"
 ```
 
 ## From another plugin
 
-Another plugin can open Navigator by invoking its action through Herdr:
+Another plugin can open Helm by invoking its action through Herdr:
 
 ```bash
-herdr plugin action invoke herdr-navigator.open
+herdr plugin action invoke helm-herdr.open
 ```
 
 Use this when your plugin wants to hand control back to the central picker instead of building its own picker UI.
@@ -43,8 +43,8 @@ Current built-in integrations:
 This is the preferred pattern:
 
 ```text
-If the external plugin owns complex UI/execution, Navigator should launch/delegate.
-If the external plugin exposes simple declarative data, Navigator may read it as a source.
+If the external plugin owns complex UI/execution, Helm should launch/delegate.
+If the external plugin exposes simple declarative data, Helm may read it as a source.
 ```
 
 ## Adding future plugin sources

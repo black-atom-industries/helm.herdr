@@ -1,6 +1,6 @@
-# Herdr Navigator default config
+# Helm for Herdr default config
 # Location after first run:
-#   $(herdr plugin config-dir herdr-navigator)/config.toml
+#   $(herdr plugin config-dir helm-herdr)/config.toml
 
 [picker]
 # What happens after selecting an entry:

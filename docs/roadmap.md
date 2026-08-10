@@ -1,10 +1,10 @@
 # Roadmap
 
-Herdr Navigator stays a small Herdr-native navigation center. New features should reduce the cost of switching context rather than duplicate Herdr session management or existing picker filters.
+Helm for Herdr stays a small Herdr-native navigation center. New features should reduce the cost of switching context rather than duplicate Herdr session management or existing picker filters.
 
 ## Now
 
-- [x] **Jump Back** — configurable transition history and `herdr-navigator.jump-back` action. The previous workspace can be pinned first in the initial unfiltered picker view; closed workspaces invalidate the saved target cleanly.
+- [x] **Jump Back** — configurable transition history and `helm-herdr.jump-back` action. The previous workspace can be pinned first in the initial unfiltered picker view; closed workspaces invalidate the saved target cleanly.
 
 ## Next
 

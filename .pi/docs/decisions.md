@@ -2,8 +2,7 @@
 
 ## Public name
 
-Since v0.3.2, use `herdr-navigator` consistently for the plugin id, Cargo package/binary, config directory, repository, and action prefix. This intentionally replaces the pre-v0.3.2 `herdr-picker-plus` technical id while the project is still young; first run copies missing files from the legacy config directory.
-Do not introduce another technical id or personal prefix.
+Use `helm-herdr` for the plugin id, Cargo package/binary, config directory, and action prefix. The repository is `black-atom-industries/helm.herdr`. First run copies missing files from the legacy `herdr-navigator` and `herdr-picker-plus` config directories.
 
 ## Minimum release quality
 

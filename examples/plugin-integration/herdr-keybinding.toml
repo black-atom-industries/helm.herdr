@@ -1,8 +1,8 @@
-# Example Herdr keybinding for Herdr Navigator.
+# Example Herdr keybinding for Helm.
 # Add this to ~/.config/herdr/config.toml.
 
 [[keys.command]]
 key = "prefix+t"
 type = "plugin_action"
-command = "herdr-navigator.open"
+command = "helm-herdr.open"
 description = "picker center"

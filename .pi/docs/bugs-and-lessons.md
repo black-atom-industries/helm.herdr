@@ -9,7 +9,7 @@ Root cause found: Herdr was still linked/bound to the old plugin id/action:
 ```text
 old:       fenix.workdir-picker.open
 pre-v0.3.2: herdr-picker-plus.open
-current:   herdr-navigator.open
+current:   helm-herdr.open
 ```
 
 Fix:
@@ -24,14 +24,14 @@ herdr server reload-config
 Also update Herdr config keybinding to:
 
 ```toml
-command = "herdr-navigator.open"
+command = "helm-herdr.open"
 ```
 
 Lesson: after renaming plugin id/binary, always check:
 
 ```bash
 herdr plugin list
-herdr plugin action list --plugin herdr-navigator
+herdr plugin action list --plugin helm-herdr
 rg "fenix.workdir-picker|herdr-picker-plus|herdr-workdir-picker" ~/.config/herdr/config.toml .
 ```
 
@@ -66,7 +66,7 @@ Herdr active config is stow-managed from dotfiles. Plugin behavior can appear wr
 Always check both:
 
 ```bash
-rg "herdr-navigator|herdr-picker-plus|fenix.workdir-picker" ~/.config/herdr/config.toml /home/fenix/dotfiles/herdr/.config/herdr/config.toml
+rg "helm-herdr|herdr-navigator|herdr-picker-plus|fenix.workdir-picker" ~/.config/herdr/config.toml /home/fenix/dotfiles/herdr/.config/herdr/config.toml
 ```
 
 ## Project open path assumptions
