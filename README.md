@@ -1,12 +1,10 @@
 # Helm for Herdr
 
+> [!NOTE]
 > Part of the [Helm](https://github.com/black-atom-industries) family. See also [helm.tmux](https://github.com/black-atom-industries/helm.tmux) for the tmux version.
 
-> Originally forked from [thanhdat77/herdr-navigator](https://github.com/thanhdat77/herdr-navigator). Thanks to Thanh Dat for the foundation.
-
-<p align="center">
-  <img src="docs/assets/helm-herdr.svg" alt="Helm for Herdr — jump to anything in Herdr" width="100%" />
-</p>
+> [!NOTE]
+> Originally forked from [thanhdat77/herdr-navigator](https://github.com/thanhdat77/herdr-navigator). Thanks to thanhdat77 for the foundation.
 
 <p align="center">
   <strong>One fuzzy navigator for every workspace, agent, project, session, remote, directory, and action in Herdr.</strong>
@@ -51,64 +49,64 @@ A single result list can move between live Herdr state and things that are not o
 
 ## Why Helm
 
-| Capability | Why it matters |
-| --- | --- |
-| **One index across Herdr** | Search workspaces, agents, projects, sessions, remotes, directories, Quick Actions, and integrations together. |
-| **Action-aware Enter** | Results do not just return paths; they focus, create, attach, hand off, invoke, or run. |
-| **Reuse first** | Existing workspaces are focused before new ones are created. Project and directory workspaces sharing a cwd keep separate identities. |
-| **Agents are first-class** | Search agent name, status, workspace, cwd, pane/tab/terminal IDs, session ID, and your own aliases. |
-| **Extensible without Rust** | Add another tool with a command that returns JSON and a command that opens the selected item. |
-| **No picker dependency** | The Rust/ratatui interface runs in a Herdr-managed pane; `fzf` and `tv` are not runtime requirements. |
+| Capability                  | Why it matters                                                                                                                        |
+| --------------------------- | ------------------------------------------------------------------------------------------------------------------------------------- |
+| **One index across Herdr**  | Search workspaces, agents, projects, sessions, remotes, directories, Quick Actions, and integrations together.                        |
+| **Action-aware Enter**      | Results do not just return paths; they focus, create, attach, hand off, invoke, or run.                                               |
+| **Reuse first**             | Existing workspaces are focused before new ones are created. Project and directory workspaces sharing a cwd keep separate identities. |
+| **Agents are first-class**  | Search agent name, status, workspace, cwd, pane/tab/terminal IDs, session ID, and your own aliases.                                   |
+| **Extensible without Rust** | Add another tool with a command that returns JSON and a command that opens the selected item.                                         |
+| **No picker dependency**    | The Rust/ratatui interface runs in a Herdr-managed pane; `fzf` and `tv` are not runtime requirements.                                 |
 
 Herdr's built-in navigation remains the simpler choice for a single entity type. Helm is for the moment when "where next?" could mean a workspace, agent, path, session, remote, project, or action.
 
 ## Standout features
 
-| Feature | What it does |
-| --- | --- |
-| **Last Workspace** | `helm-herdr.jump-back` toggles between the current and previously visited local workspace. |
-| **Pin** | `Ctrl-B` marks important entries and keeps them ahead of the normal source order. |
+| Feature                | What it does                                                                                                                                                                        |
+| ---------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Last Workspace**     | `helm-herdr.jump-back` toggles between the current and previously visited local workspace.                                                                                          |
+| **Pin**                | `Ctrl-B` marks important entries and keeps them ahead of the normal source order.                                                                                                   |
 | **Open with Template** | `Alt-Enter` by default applies one reusable Herdr Plus tabs/panes template to any zoxide/root directory, creating its workspace or appending fresh template tabs when already open. |
 
 ## What it can open
 
-| Source | Data | Enter does |
-| --- | --- | --- |
-| `workspace` | `herdr workspace list` + pane cwd | Focus the exact workspace |
-| `agent` | `herdr agent list` | Focus the agent pane |
-| `project` | Herdr Plus project TOML | Reuse or create a project workspace and apply tabs and split panes |
-| `server` | Configured remote targets | Hand off to the remote Herdr server |
-| `zoxide` | `zoxide query -l` | Enter opens normally; `Alt-Enter` applies the shared template |
-| `root` | Configured filesystem roots | Enter opens normally; `Alt-Enter` applies the shared template |
-| `quick` | Herdr Plus Quick Actions | Open the Quick Actions picker |
-| `plugin` | Command/JSON integrations | Run the configured open command |
+| Source      | Data                              | Enter does                                                         |
+| ----------- | --------------------------------- | ------------------------------------------------------------------ |
+| `workspace` | `herdr workspace list` + pane cwd | Focus the exact workspace                                          |
+| `agent`     | `herdr agent list`                | Focus the agent pane                                               |
+| `project`   | Herdr Plus project TOML           | Reuse or create a project workspace and apply tabs and split panes |
+| `server`    | Configured remote targets         | Hand off to the remote Herdr server                                |
+| `zoxide`    | `zoxide query -l`                 | Enter opens normally; `Alt-Enter` applies the shared template      |
+| `root`      | Configured filesystem roots       | Enter opens normally; `Alt-Enter` applies the shared template      |
+| `quick`     | Herdr Plus Quick Actions          | Open the Quick Actions picker                                      |
+| `plugin`    | Command/JSON integrations         | Run the configured open command                                    |
 
 Every source can be disabled. Missing optional tools degrade quietly.
 
 ## Keyboard workflow
 
-| Key | Action |
-| --- | --- |
-| type | Fuzzy search |
-| `Enter` | Open selected item normally |
-| `Alt-Enter` | Apply `picker.directory_template` to the selected zoxide/root directory |
-| `Up` / `Down` | Move selection |
-| `Tab` | Cycle source filters |
-| `Ctrl-W` | Workspaces |
-| `Ctrl-A` / `@` | Agents, using configured status order |
-| `Ctrl-P` | Herdr Plus projects |
-| `Ctrl-Q` | Herdr Plus Quick Actions |
-| `Ctrl-S` | Remotes |
-| `Ctrl-L` | Sessions |
-| `Ctrl-Z` | Zoxide |
-| `Ctrl-R` | Roots |
-| `Ctrl-X` | Close the open workspace matching the selected item |
-| `Ctrl-B` | Mark or unmark the selected item |
-| `Ctrl-O` | Toggle preview |
-| `Ctrl-U` | Clear query and filter |
-| `Ctrl-Backspace` | Delete the last query word |
-| `?` | Show active keybindings |
-| `Esc` / `Ctrl-C` | Back or close |
+| Key              | Action                                                                  |
+| ---------------- | ----------------------------------------------------------------------- |
+| type             | Fuzzy search                                                            |
+| `Enter`          | Open selected item normally                                             |
+| `Alt-Enter`      | Apply `picker.directory_template` to the selected zoxide/root directory |
+| `Up` / `Down`    | Move selection                                                          |
+| `Tab`            | Cycle source filters                                                    |
+| `Ctrl-W`         | Workspaces                                                              |
+| `Ctrl-A` / `@`   | Agents, using configured status order                                   |
+| `Ctrl-P`         | Herdr Plus projects                                                     |
+| `Ctrl-Q`         | Herdr Plus Quick Actions                                                |
+| `Ctrl-S`         | Remotes                                                                 |
+| `Ctrl-L`         | Sessions                                                                |
+| `Ctrl-Z`         | Zoxide                                                                  |
+| `Ctrl-R`         | Roots                                                                   |
+| `Ctrl-X`         | Close the open workspace matching the selected item                     |
+| `Ctrl-B`         | Mark or unmark the selected item                                        |
+| `Ctrl-O`         | Toggle preview                                                          |
+| `Ctrl-U`         | Clear query and filter                                                  |
+| `Ctrl-Backspace` | Delete the last query word                                              |
+| `?`              | Show active keybindings                                                 |
+| `Esc` / `Ctrl-C` | Back or close                                                           |
 
 Status glyphs follow Herdr's `prefix+g` visual language: `◉` blocked/attention, animated Braille spinner working, `●` idle, `✓` done, and `○` unknown. Diamond color priority is marked yellow, current accent/blue, then previous red. Selection uses `→`, and source trees use `▾`, `├─`, and `└─` markers.
 
@@ -253,7 +251,15 @@ notify_error = true
 `collect` prints a JSON array:
 
 ```json
-[{"id":"abc","title":"Item","subtitle":"Info","path":"/tmp","kind":"bookmark"}]
+[
+  {
+    "id": "abc",
+    "title": "Item",
+    "subtitle": "Info",
+    "path": "/tmp",
+    "kind": "bookmark"
+  }
+]
 ```
 
 Helm shell-quotes `{{id}}`, `{{title}}`, `{{subtitle}}`, `{{path}}`, and `{{kind}}` before running `open`. See [`docs/plugin-integrations.md`](docs/plugin-integrations.md) for the full contract.
