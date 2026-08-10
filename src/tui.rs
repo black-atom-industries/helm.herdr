@@ -93,7 +93,7 @@ pub(crate) fn tui_loop(
                 if let Some(version) = app.update_available.clone() {
                     if confirm_update(&version)? {
                         match crate::update::install(&version) {
-                            Ok(()) => eprintln!("Updated Herdr Navigator to v{version}."),
+                            Ok(()) => eprintln!("Updated Helm to v{version}."),
                             Err(error) => eprintln!("Update failed: {error}"),
                         }
                         wait_for_key();
@@ -134,7 +134,7 @@ fn cleanup_terminal(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> io
 }
 
 fn confirm_update(version: &str) -> io::Result<bool> {
-    eprintln!("Update Herdr Navigator to v{version}? [y/N]");
+    eprintln!("Update Helm to v{version}? [y/N]");
     let mut answer = String::new();
     io::stdin().read_line(&mut answer)?;
     Ok(matches!(
@@ -1155,7 +1155,7 @@ mod tests {
             })
             .unwrap();
 
-        assert!(!buffer_text(&terminal).contains("Herdr Navigator"));
+        assert!(!buffer_text(&terminal).contains("Helm"));
     }
 
     #[test]

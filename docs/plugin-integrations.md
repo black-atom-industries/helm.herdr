@@ -1,6 +1,6 @@
 # Plugin integrations
 
-Herdr Navigator can show items from other tools/plugins through a small command/JSON contract.
+Helm can show items from other tools/plugins through a small command/JSON contract.
 
 ## Contract v1
 

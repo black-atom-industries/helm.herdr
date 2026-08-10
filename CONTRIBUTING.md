@@ -1,6 +1,6 @@
 # Contributing
 
-Thanks for helping improve Herdr Navigator.
+Thanks for helping improve Helm for Herdr.
 
 ## Development
 

@@ -1,9 +1,11 @@
 # Helm for Herdr
 
+> Part of the [Helm](https://github.com/black-atom-industries) family. See also [helm.tmux](https://github.com/black-atom-industries/helm.tmux) for the tmux version.
+
 > Originally forked from [thanhdat77/herdr-navigator](https://github.com/thanhdat77/herdr-navigator). Thanks to Thanh Dat for the foundation.
 
 <p align="center">
-  <img src="docs/assets/herdr-navigator.svg" alt="Helm for Herdr — jump to anything in Herdr" width="100%" />
+  <img src="docs/assets/helm-herdr.svg" alt="Helm for Herdr — jump to anything in Herdr" width="100%" />
 </p>
 
 <p align="center">
@@ -39,14 +41,6 @@ type = "plugin_action"
 command = "helm-herdr.open"
 description = "jump to anything"
 ```
-
-## See it in action
-
-<p align="center">
-  <img src="docs/assets/herdr-navigator-demo.gif" alt="Helm switching, filtering, and opening workspaces, agents, sessions, and directories" width="100%" />
-</p>
-
-*Source-aware rows keep live status, tabs, and panes aligned at a glance. [Watch the full 17-second demo.](https://github.com/thanhdat77/herdr-navigator/releases/download/v0.3.2/herdr-navigator-v0.3.2-demo.mp4)*
 
 A single result list can move between live Herdr state and things that are not open yet:
 

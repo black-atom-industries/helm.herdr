@@ -51,7 +51,7 @@ fn notify(body: &str, default_sound: &'static str, config: &NotificationsConfig)
         .args([
             "notification",
             "show",
-            "Herdr Navigator",
+            "Helm",
             "--body",
             &body,
             "--position",

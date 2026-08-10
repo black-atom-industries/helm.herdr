@@ -1,5 +1,5 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="1200" height="630" viewBox="0 0 1200 630" role="img" aria-labelledby="title desc">
-  <title id="title">Herdr Navigator</title>
+  <title id="title">Helm for Herdr</title>
   <desc id="desc">One fuzzy navigator for every workspace, agent, project, session, remote, and action in Herdr.</desc>
   <defs>
     <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
@@ -40,7 +40,7 @@
 
   <g font-family="system-ui,-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif">
     <text x="485" y="190" fill="#66b3ff" font-size="22" font-weight="700" letter-spacing="5">HERDR PLUGIN</text>
-    <text x="485" y="272" fill="#f0f6fc" font-size="66" font-weight="760" letter-spacing="-2">Herdr Navigator</text>
+    <text x="485" y="272" fill="#f0f6fc" font-size="66" font-weight="760" letter-spacing="-2">Helm for Herdr</text>
     <text x="485" y="330" fill="#b6c2d0" font-size="32">Jump to anything in Herdr.</text>
     <text x="485" y="382" fill="#8b949e" font-size="21">One fuzzy navigator. The right action on Enter.</text>
 
