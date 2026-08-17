@@ -50,6 +50,7 @@ pub(crate) struct App {
     pub(crate) expanded_sessions: HashSet<String>,
     pub(crate) expanded_workspaces: HashSet<String>,
     open_expansion_initialized: bool,
+    initial_selection_pending: bool,
 }
 
 impl App {
@@ -74,6 +75,7 @@ impl App {
             expanded_sessions: HashSet::new(),
             expanded_workspaces: HashSet::new(),
             open_expansion_initialized: false,
+            initial_selection_pending: true,
         }
     }
 
@@ -216,6 +218,24 @@ impl App {
             self.filtered_scores.push(score);
         }
         self.selected = 0;
+        if self.initial_selection_pending {
+            self.initial_selection_pending = false;
+            if self.query.trim().is_empty() && self.source_filter.is_none() {
+                if let Some(position) = self.filtered.iter().position(|index| {
+                    let entry = &self.entries[*index];
+                    matches!(entry.open_node, Some(OpenNode::Tab { focused: true, .. }))
+                        && matches!(
+                            entry.action,
+                            EntryAction::FocusTab {
+                                current_session: true,
+                                ..
+                            }
+                        )
+                }) {
+                    self.selected = position;
+                }
+            }
+        }
     }
 
     fn initialize_open_expansion(&mut self) {
@@ -1558,6 +1578,18 @@ mod tests {
         assert!(app.expanded_workspaces.contains("work::w1"));
         assert!(!app.expanded_sessions.contains("personal"));
         assert!(!app.expanded_workspaces.contains("personal::w3"));
+    }
+
+    #[test]
+    fn initial_open_selects_the_focused_tab_in_the_current_session_once() {
+        let mut app = App::new(Config::default(), Theme::load(false));
+        app.entries = topology_entries();
+
+        app.apply_filter();
+        assert_eq!(app.selected_entry().unwrap().title, "Code");
+
+        app.apply_filter();
+        assert_eq!(app.selected_entry().unwrap().title, "work");
     }
 
     #[test]
