@@ -5,6 +5,7 @@ Helm for Herdr stays a small Herdr-native navigation center. New features should
 ## Now
 
 - [x] **Jump Back** — configurable transition history and `helm-herdr.jump-back` action. The previous workspace can be pinned first in the initial unfiltered picker view; closed workspaces invalidate the saved target cleanly.
+- [x] **Open topology** — browse running sessions, workspaces, and tabs as a collapsible tree. Linked-worktree workspaces nest beneath their open repository workspace.
 
 ## Next
 
@@ -17,7 +18,7 @@ Helm for Herdr stays a small Herdr-native navigation center. New features should
 
 ## Explore later
 
-- [ ] **Tree view** — optional server → session → workspace → agent browsing while keeping flat fuzzy search as the default.
+- [ ] **Remote topology** — extend the Open tree to remote servers only if cross-server browsing proves useful.
 - [ ] **Contextual side pane** — show the current workspace, previous workspace, relevant agents, and quick actions until the user starts searching.
 
 ## Not planned

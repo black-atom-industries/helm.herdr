@@ -13,7 +13,9 @@ Do not split into many specialized pickers unless the UX clearly needs it. The p
 
 ## Result rows
 
-`picker.detailed_rows = true` is the default: every entry stays on one line, with aligned name, path, and metadata columns. Status, focus, expansion, and selection use Herdr's `prefix+g` glyphs (`◉`, Braille spinner, `●`, `✓`, `○`, `◆`, `▾`, `├─`, `└─`, `→`). Set it to `false` for the original compact list.
+`picker.detailed_rows = true` is the default: every entry stays on one line, with aligned name, path, and metadata columns. Status, focus, expansion, and selection use Herdr's `prefix+g` glyphs (`◉`, Braille spinner, `●`, `✓`, `○`, `◆`, `▾`, `▸`, `├─`, `└─`, `→`). Set it to `false` for compact rows.
+
+Open is a live session → workspace → tab topology. Linked-worktree workspaces nest beneath the open non-linked workspace with the same repository identity. Search keeps the full ancestry of matching tabs.
 
 ## Notifications
 
@@ -36,7 +38,7 @@ Source priority is intentional: existing/open things first, creation sources lat
 ## Keybindings
 
 - `Tab`: cycle source filters
-- `Ctrl-W`: workspace
+- `Ctrl-W`: Open topology
 - `Ctrl-P`: Herdr Plus projects
 - `Ctrl-Q`: Herdr Plus Quick Actions
 - `Ctrl-Z`: zoxide
@@ -52,7 +54,7 @@ Keep keybindings mnemonic and few.
 
 Navigator owns remote handoff, not SSH terminal wrapping. `Ctrl-S` filters Herdr remote targets. Manual remote rows come from `[sessions.entries]` and run `herdr --remote TARGET --handoff`.
 
-Do not add `.herdr-server.toml`, SSH config parsing, local session attach, or terminal attach listing unless terminal-level search becomes an explicit UX goal.
+The Open topology may hand off to an actual running local named session. Do not add `.herdr-server.toml`, SSH config parsing, configured session aliases, or terminal attach listing unless terminal-level search becomes an explicit UX goal.
 
 ## Herdr Plus
 

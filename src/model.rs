@@ -66,8 +66,19 @@ impl Source {
 
 #[derive(Clone, Debug)]
 pub(crate) enum EntryAction {
+    FocusSession {
+        name: Option<String>,
+        current: bool,
+    },
     FocusWorkspace {
+        session: Option<String>,
         id: String,
+        current_session: bool,
+    },
+    FocusTab {
+        session: Option<String>,
+        id: String,
+        current_session: bool,
     },
     FocusAgent {
         target: String,
@@ -104,6 +115,46 @@ pub(crate) struct WorkspaceRef {
     pub(crate) pane_count: i64,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub(crate) enum OpenNode {
+    Session {
+        name: Option<String>,
+        current: bool,
+        workspace_count: usize,
+    },
+    Workspace {
+        session: Option<String>,
+        parent_workspace_id: Option<String>,
+        focused: bool,
+        tab_count: i64,
+        pane_count: i64,
+    },
+    Tab {
+        session: Option<String>,
+        workspace_id: String,
+        focused: bool,
+        pane_count: i64,
+    },
+}
+
+impl OpenNode {
+    pub(crate) fn session(&self) -> Option<&str> {
+        match self {
+            Self::Session { name, .. }
+            | Self::Workspace { session: name, .. }
+            | Self::Tab { session: name, .. } => name.as_deref(),
+        }
+    }
+
+    pub(crate) fn kind_label(&self) -> &'static str {
+        match self {
+            Self::Session { .. } => "session",
+            Self::Workspace { .. } => "workspace",
+            Self::Tab { .. } => "tab",
+        }
+    }
+}
+
 #[derive(Clone, Debug)]
 pub(crate) struct Entry {
     pub(crate) source: Source,
@@ -117,6 +168,7 @@ pub(crate) struct Entry {
     pub(crate) action: EntryAction,
     pub(crate) source_label: Option<String>,
     pub(crate) search_terms: Vec<String>,
+    pub(crate) open_node: Option<OpenNode>,
 }
 
 impl Entry {

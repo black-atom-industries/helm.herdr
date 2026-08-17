@@ -24,7 +24,7 @@ use ratatui::{
 use crate::{
     app::{App, InputMode},
     keymap::{keybindings, Command},
-    model::{Entry, EntryAction, Source},
+    model::{Entry, EntryAction, OpenNode, Source},
     paths::home,
     sources::status_icon_at,
     theme::Theme,
@@ -242,6 +242,14 @@ fn execute_command(app: &mut App, command: Command, key: KeyEvent) -> Action {
         }
         Command::MoveDown => {
             app.next();
+            Action::Continue
+        }
+        Command::Collapse => {
+            app.collapse_selected();
+            Action::Continue
+        }
+        Command::Expand => {
+            app.expand_selected();
             Action::Continue
         }
         Command::StartSearch => {
@@ -615,6 +623,265 @@ fn truncate_end(value: &str, max_chars: usize) -> String {
         .collect()
 }
 
+fn topology_session_key(name: Option<&str>) -> String {
+    name.unwrap_or("<default>").to_string()
+}
+
+fn topology_workspace_key(session: Option<&str>, workspace_id: &str) -> String {
+    format!("{}::{workspace_id}", topology_session_key(session))
+}
+
+fn topology_session_node_key(session: Option<&str>) -> String {
+    format!("session::{}", topology_session_key(session))
+}
+
+fn topology_workspace_node_key(session: Option<&str>, workspace_id: &str) -> String {
+    format!(
+        "workspace::{}",
+        topology_workspace_key(session, workspace_id)
+    )
+}
+
+fn topology_parent_key(entry: &Entry) -> Option<String> {
+    match entry.open_node.as_ref()? {
+        OpenNode::Session { .. } => None,
+        OpenNode::Workspace {
+            session,
+            parent_workspace_id,
+            ..
+        } => Some(match parent_workspace_id.as_deref() {
+            Some(parent_id) => topology_workspace_node_key(session.as_deref(), parent_id),
+            None => topology_session_node_key(session.as_deref()),
+        }),
+        OpenNode::Tab {
+            session,
+            workspace_id,
+            ..
+        } => Some(topology_workspace_node_key(
+            session.as_deref(),
+            workspace_id,
+        )),
+    }
+}
+
+fn topology_row_is_last(app: &App, row: usize, entry: &Entry) -> bool {
+    let Some(parent_key) = topology_parent_key(entry) else {
+        return true;
+    };
+    !app.filtered.iter().skip(row + 1).any(|index| {
+        topology_parent_key(&app.entries[*index]).as_deref() == Some(parent_key.as_str())
+    })
+}
+
+fn topology_workspace_entry_index(
+    app: &App,
+    session: Option<&str>,
+    workspace_id: &str,
+) -> Option<usize> {
+    app.entries.iter().position(|entry| {
+        entry.workspace_id.as_deref() == Some(workspace_id)
+            && matches!(
+                entry.open_node.as_ref(),
+                Some(OpenNode::Workspace { session: candidate, .. })
+                    if candidate.as_deref() == session
+            )
+    })
+}
+
+fn topology_workspace_ancestors(app: &App, entry: &Entry) -> Vec<usize> {
+    let (session, mut workspace_id) = match entry.open_node.as_ref() {
+        Some(OpenNode::Workspace {
+            session,
+            parent_workspace_id,
+            ..
+        }) => (session.as_deref(), parent_workspace_id.as_deref()),
+        Some(OpenNode::Tab {
+            session,
+            workspace_id,
+            ..
+        }) => (session.as_deref(), Some(workspace_id.as_str())),
+        _ => return Vec::new(),
+    };
+    let mut ancestors = Vec::new();
+    while let Some(id) = workspace_id {
+        let Some(index) = topology_workspace_entry_index(app, session, id) else {
+            break;
+        };
+        ancestors.push(index);
+        workspace_id = match app.entries[index].open_node.as_ref() {
+            Some(OpenNode::Workspace {
+                parent_workspace_id,
+                ..
+            }) => parent_workspace_id.as_deref(),
+            _ => None,
+        };
+    }
+    ancestors.reverse();
+    ancestors
+}
+
+fn topology_branch_prefix(app: &App, entry: &Entry, row: usize) -> String {
+    let mut prefix = String::from("    ");
+    for ancestor_index in topology_workspace_ancestors(app, entry) {
+        let continuation = app
+            .filtered
+            .iter()
+            .position(|candidate| *candidate == ancestor_index)
+            .is_some_and(|ancestor_row| {
+                !topology_row_is_last(app, ancestor_row, &app.entries[ancestor_index])
+            });
+        prefix.push_str(if continuation { "│   " } else { "    " });
+    }
+    prefix.push_str(if topology_row_is_last(app, row, entry) {
+        "└─ "
+    } else {
+        "├─ "
+    });
+    prefix
+}
+
+fn open_entry_line(app: &App, entry: &Entry, row: usize, row_width: usize) -> Line<'static> {
+    let node = entry.open_node.as_ref().expect("open topology entry");
+    let searching = !app.query.trim().is_empty();
+    let (prefix, prefix_color, marker, marker_color, metadata) = match node {
+        OpenNode::Session {
+            name,
+            workspace_count,
+            ..
+        } => {
+            let expanded = searching
+                || app
+                    .expanded_sessions
+                    .contains(&topology_session_key(name.as_deref()));
+            (
+                format!("  {} ", if expanded { '▾' } else { '▸' }),
+                app.theme.mauve,
+                "  ".to_string(),
+                app.theme.accent,
+                format!("session · {workspace_count} workspaces"),
+            )
+        }
+        OpenNode::Workspace {
+            session,
+            focused,
+            tab_count,
+            pane_count,
+            ..
+        } => {
+            let expanded = searching
+                || entry.workspace_id.as_deref().is_some_and(|id| {
+                    app.expanded_workspaces
+                        .contains(&topology_workspace_key(session.as_deref(), id))
+                });
+            let marker_color = if app.is_pinned(entry) {
+                app.theme.yellow
+            } else if *focused {
+                app.theme.accent
+            } else if app.config.jump_back.pin_previous
+                && app.query.trim().is_empty()
+                && app.source_filter.is_none()
+                && matches!(
+                    entry.action,
+                    EntryAction::FocusWorkspace {
+                        current_session: true,
+                        ..
+                    }
+                )
+                && entry.workspace_id == app.previous_workspace_id
+            {
+                app.theme.red
+            } else {
+                app.theme.overlay0
+            };
+            (
+                format!(
+                    "{}{} ",
+                    topology_branch_prefix(app, entry, row),
+                    if expanded { '▾' } else { '▸' }
+                ),
+                app.theme.overlay0,
+                if app.is_pinned(entry) || *focused || marker_color == app.theme.red {
+                    "◆ ".to_string()
+                } else {
+                    "  ".to_string()
+                },
+                marker_color,
+                format!("workspace · {tab_count} tabs · {pane_count} panes"),
+            )
+        }
+        OpenNode::Tab {
+            focused,
+            pane_count,
+            ..
+        } => (
+            topology_branch_prefix(app, entry, row),
+            app.theme.overlay0,
+            if *focused { "● " } else { "  " }.to_string(),
+            app.theme.green,
+            format!(
+                "tab · {pane_count} {}",
+                if *pane_count == 1 { "pane" } else { "panes" }
+            ),
+        ),
+    };
+
+    let fixed_width = prefix.chars().count() + marker.chars().count();
+    let available = row_width.saturating_sub(fixed_width);
+    let metadata_budget = if available >= 36 {
+        metadata.chars().count().min((available / 3).max(14))
+    } else {
+        0
+    };
+    let metadata = truncate_end(&metadata, metadata_budget);
+    let metadata_separator = usize::from(!metadata.is_empty());
+    let content_budget = available
+        .saturating_sub(metadata.chars().count())
+        .saturating_sub(metadata_separator);
+
+    let raw_path = if app.config.picker.detailed_rows && matches!(node, OpenNode::Workspace { .. })
+    {
+        display_path(entry)
+    } else {
+        String::new()
+    };
+    let show_path = !raw_path.is_empty() && content_budget >= 24;
+    let title_budget = if show_path {
+        (content_budget / 2).min(32)
+    } else {
+        content_budget
+    };
+    let title = truncate_end(display_title(entry), title_budget);
+    let path_budget = content_budget
+        .saturating_sub(title.chars().count())
+        .saturating_sub(usize::from(show_path) * 2);
+    let path = show_path.then(|| truncate_end(&raw_path, path_budget));
+    let path_text = path
+        .filter(|path| !path.is_empty())
+        .map(|path| format!("  {path}"))
+        .unwrap_or_default();
+    let occupied = fixed_width
+        + title.chars().count()
+        + path_text.chars().count()
+        + metadata_separator
+        + metadata.chars().count();
+    let spacer = " ".repeat(row_width.saturating_sub(occupied));
+    Line::from(vec![
+        Span::styled(prefix, Style::default().fg(prefix_color)),
+        Span::styled(marker, Style::default().fg(marker_color)),
+        Span::styled(title, Style::default().fg(app.theme.text)),
+        Span::styled(path_text, Style::default().fg(app.theme.subtext0)),
+        Span::raw(spacer),
+        Span::styled(
+            if metadata.is_empty() {
+                String::new()
+            } else {
+                format!(" {metadata}")
+            },
+            Style::default().fg(app.theme.overlay0),
+        ),
+    ])
+}
+
 fn entry_branch(app: &App, entry: &Entry, group_end: bool) -> (&'static str, Color) {
     let is_workspace = entry.source == Source::Workspace;
     let is_current = is_workspace && entry.search_terms.iter().any(|term| term == "focused");
@@ -651,8 +918,9 @@ fn draw_list(f: &mut Frame, app: &App, area: Rect) -> ListHits {
         let group_end = row + 1 == app.filtered.len()
             || app.entries[app.filtered[row + 1]].source_name() != e.source_name();
         if group_start {
+            let live = if e.open_node.is_some() { "  LIVE" } else { "" };
             items.push(ListItem::new(Line::from(Span::styled(
-                format!(" ▾ {} ", e.source_name()),
+                format!(" ▾ {}{live} ", e.source_name()),
                 Style::default().fg(color).add_modifier(Modifier::BOLD),
             ))));
             item_entries.push(None);
@@ -666,7 +934,9 @@ fn draw_list(f: &mut Frame, app: &App, area: Rect) -> ListHits {
             .then(|| app.filtered_scores.get(row).map(|s| format!("score {s}")))
             .flatten();
 
-        if app.config.picker.detailed_rows {
+        if e.open_node.is_some() {
+            items.push(ListItem::new(open_entry_line(app, e, row, row_width)));
+        } else if app.config.picker.detailed_rows {
             let status = entry_status(e);
             let icon = status
                 .map(|status| format!("{} ", status_icon_at(&e.source, status, app.spinner_tick)))
@@ -844,11 +1114,18 @@ fn draw_preview(f: &mut Frame, app: &App, area: Rect) {
 }
 
 fn preview_text(app: &App, e: &Entry) -> String {
-    let mut lines = vec![
-        format!("type: {}", e.source_name()),
-        format!("title: {}", e.title),
-        format!("path: {}", e.path.display()),
-    ];
+    let entry_type = e
+        .open_node
+        .as_ref()
+        .map(OpenNode::kind_label)
+        .unwrap_or_else(|| e.source_name());
+    let mut lines = vec![format!("type: {entry_type}"), format!("title: {}", e.title)];
+    if let Some(node) = &e.open_node {
+        lines.push(format!("session: {}", node.session().unwrap_or("default")));
+    }
+    if !e.path.as_os_str().is_empty() {
+        lines.push(format!("path: {}", e.path.display()));
+    }
     if !e.subtitle.is_empty() {
         lines.push(format!("info: {}", e.subtitle));
     }
@@ -894,7 +1171,10 @@ fn preview_text(app: &App, e: &Entry) -> String {
     }
     lines.push("".into());
     let action: &str = match &e.action {
+        EntryAction::FocusSession { current: true, .. } => "already in this session",
+        EntryAction::FocusSession { .. } => "focus session",
         EntryAction::FocusWorkspace { .. } => "focus existing workspace",
+        EntryAction::FocusTab { .. } => "focus exact tab",
         EntryAction::FocusAgent { .. } => "focus agent pane",
         EntryAction::OpenRemote { .. } => "open remote Herdr",
         EntryAction::InvokePluginAction { .. } => "invoke Herdr plugin action",
@@ -959,7 +1239,161 @@ mod tests {
             action: EntryAction::FocusOrCreateDir,
             source_label: None,
             search_terms: vec![],
+            open_node: None,
         }
+    }
+
+    fn topology_app(query: &str) -> App {
+        let mut session = entry(Source::Workspace, "work");
+        session.path = PathBuf::new();
+        session.action = EntryAction::FocusSession {
+            name: Some("work".into()),
+            current: true,
+        };
+        session.open_node = Some(OpenNode::Session {
+            name: Some("work".into()),
+            current: true,
+            workspace_count: 1,
+        });
+
+        let mut workspace = entry(Source::Workspace, "Project");
+        workspace.path = PathBuf::from("/tmp/project");
+        workspace.workspace_id = Some("w1".into());
+        workspace.action = EntryAction::FocusWorkspace {
+            session: Some("work".into()),
+            id: "w1".into(),
+            current_session: true,
+        };
+        workspace.open_node = Some(OpenNode::Workspace {
+            session: Some("work".into()),
+            parent_workspace_id: None,
+            focused: true,
+            tab_count: 2,
+            pane_count: 3,
+        });
+
+        let mut code = entry(Source::Workspace, "Code");
+        code.workspace_id = Some("w1".into());
+        code.workspace_label = Some("Project".into());
+        code.action = EntryAction::FocusTab {
+            session: Some("work".into()),
+            id: "w1:t1".into(),
+            current_session: true,
+        };
+        code.open_node = Some(OpenNode::Tab {
+            session: Some("work".into()),
+            workspace_id: "w1".into(),
+            focused: true,
+            pane_count: 1,
+        });
+
+        let mut server = entry(Source::Workspace, "Server");
+        server.workspace_id = Some("w1".into());
+        server.workspace_label = Some("Project".into());
+        server.action = EntryAction::FocusTab {
+            session: Some("work".into()),
+            id: "w1:t2".into(),
+            current_session: true,
+        };
+        server.open_node = Some(OpenNode::Tab {
+            session: Some("work".into()),
+            workspace_id: "w1".into(),
+            focused: false,
+            pane_count: 2,
+        });
+
+        let mut agent = entry(Source::Agent, "claude · Project");
+        agent.subtitle = "idle · w1:p1 · w1:t1".into();
+        let mut app = App::new(Config::default(), Theme::load(false));
+        app.entries = vec![session, workspace, code, server, agent];
+        app.query = query.into();
+        app.apply_filter();
+        app
+    }
+
+    fn worktree_topology_app() -> App {
+        let base = topology_app("");
+        let session = base.entries[0].clone();
+        let parent = base.entries[1].clone();
+        let parent_code = base.entries[2].clone();
+        let parent_server = base.entries[3].clone();
+        let agent = base.entries[4].clone();
+
+        let mut child_a = parent.clone();
+        child_a.title = "Feature A".into();
+        child_a.path = PathBuf::from("/tmp/feature-a");
+        child_a.workspace_id = Some("child-a".into());
+        child_a.workspace_label = Some("Feature A".into());
+        child_a.action = EntryAction::FocusWorkspace {
+            session: Some("work".into()),
+            id: "child-a".into(),
+            current_session: true,
+        };
+        child_a.open_node = Some(OpenNode::Workspace {
+            session: Some("work".into()),
+            parent_workspace_id: Some("w1".into()),
+            focused: false,
+            tab_count: 1,
+            pane_count: 1,
+        });
+        let mut child_a_tab = parent_code.clone();
+        child_a_tab.title = "Child A Tab".into();
+        child_a_tab.workspace_id = Some("child-a".into());
+        child_a_tab.workspace_label = Some("Feature A".into());
+        child_a_tab.action = EntryAction::FocusTab {
+            session: Some("work".into()),
+            id: "child-a:t1".into(),
+            current_session: true,
+        };
+        child_a_tab.open_node = Some(OpenNode::Tab {
+            session: Some("work".into()),
+            workspace_id: "child-a".into(),
+            focused: false,
+            pane_count: 1,
+        });
+
+        let mut child_b = child_a.clone();
+        child_b.title = "Feature B".into();
+        child_b.workspace_id = Some("child-b".into());
+        child_b.workspace_label = Some("Feature B".into());
+        child_b.action = EntryAction::FocusWorkspace {
+            session: Some("work".into()),
+            id: "child-b".into(),
+            current_session: true,
+        };
+        let mut child_b_tab = child_a_tab.clone();
+        child_b_tab.title = "Child B Tab".into();
+        child_b_tab.workspace_id = Some("child-b".into());
+        child_b_tab.workspace_label = Some("Feature B".into());
+        child_b_tab.action = EntryAction::FocusTab {
+            session: Some("work".into()),
+            id: "child-b:t1".into(),
+            current_session: true,
+        };
+        child_b_tab.open_node = Some(OpenNode::Tab {
+            session: Some("work".into()),
+            workspace_id: "child-b".into(),
+            focused: false,
+            pane_count: 1,
+        });
+
+        let mut app = App::new(Config::default(), Theme::load(false));
+        app.entries = vec![
+            session,
+            parent,
+            parent_code,
+            parent_server,
+            child_a,
+            child_a_tab,
+            child_b,
+            child_b_tab,
+            agent,
+        ];
+        app.apply_filter();
+        app.expanded_workspaces.insert("work::child-a".into());
+        app.expanded_workspaces.insert("work::child-b".into());
+        app.apply_filter();
+        app
     }
 
     fn buffer_text(terminal: &Terminal<TestBackend>) -> String {
@@ -1119,7 +1553,11 @@ mod tests {
         let mut app = App::new(Config::default(), Theme::load(false));
         let mut previous = entry(Source::Workspace, "Previous");
         previous.workspace_id = Some("w2".into());
-        previous.action = EntryAction::FocusWorkspace { id: "w2".into() };
+        previous.action = EntryAction::FocusWorkspace {
+            session: None,
+            id: "w2".into(),
+            current_session: true,
+        };
         app.previous_workspace_id = Some("w2".into());
         app.pinned_entries.insert("workspace:w2".into());
 
@@ -1134,7 +1572,11 @@ mod tests {
         let mut app = App::new(Config::default(), Theme::load(false));
         let mut current = entry(Source::Workspace, "Current");
         current.workspace_id = Some("w1".into());
-        current.action = EntryAction::FocusWorkspace { id: "w1".into() };
+        current.action = EntryAction::FocusWorkspace {
+            session: None,
+            id: "w1".into(),
+            current_session: true,
+        };
         current.search_terms.push("focused".into());
         app.pinned_entries.insert("workspace:w1".into());
 
@@ -1224,6 +1666,229 @@ mod tests {
 
         assert!(text.contains("very-long-dire…"));
         assert!(text.contains("/projects/wit…"));
+    }
+
+    #[test]
+    fn rendered_open_topology_shows_session_workspace_tab_ancestry_and_flat_sources() {
+        let app = topology_app("");
+        let backend = TestBackend::new(110, 16);
+        let mut terminal = Terminal::new(backend).unwrap();
+        terminal
+            .draw(|frame| {
+                draw_list(frame, &app, frame.area());
+            })
+            .unwrap();
+        let text = buffer_text(&terminal);
+
+        let open = text.find("open  LIVE").unwrap();
+        let session = text.find("work").unwrap();
+        let workspace = text.find("Project").unwrap();
+        let code = text.find("Code").unwrap();
+        let server = text.find("Server").unwrap();
+        let agent = text.find("agent").unwrap();
+        assert!(open < session && session < workspace && workspace < code && code < server);
+        assert!(server < agent);
+        assert!(text.contains("session · 1 workspaces"));
+        assert!(text.contains("workspace · 2 tabs · 3 panes"));
+        assert!(text.contains("tab · 1 pane"));
+    }
+
+    #[test]
+    fn rendered_worktree_workspaces_nest_between_parent_and_child_tabs() {
+        let app = worktree_topology_app();
+        let backend = TestBackend::new(120, 18);
+        let mut terminal = Terminal::new(backend).unwrap();
+        terminal
+            .draw(|frame| {
+                draw_list(frame, &app, frame.area());
+            })
+            .unwrap();
+        let text = buffer_text(&terminal);
+        let parent = text.lines().find(|line| line.contains("Project")).unwrap();
+        let parent_tab = text.lines().find(|line| line.contains("Code")).unwrap();
+        let child_a = text
+            .lines()
+            .find(|line| line.contains("Feature A"))
+            .unwrap();
+        let child_a_tab = text
+            .lines()
+            .find(|line| line.contains("Child A Tab"))
+            .unwrap();
+        let child_b = text
+            .lines()
+            .find(|line| line.contains("Feature B"))
+            .unwrap();
+        let child_b_tab = text
+            .lines()
+            .find(|line| line.contains("Child B Tab"))
+            .unwrap();
+
+        let column = |line: &str, label: &str| line[..line.find(label).unwrap()].chars().count();
+        let parent_column = column(parent, "Project");
+        let direct_child_column = column(parent_tab, "Code");
+        assert_eq!(direct_child_column + 2, column(child_a, "Feature A"));
+        assert_eq!(column(child_a, "Feature A"), column(child_b, "Feature B"));
+        assert!(parent_column < direct_child_column);
+        assert!(direct_child_column < column(child_a_tab, "Child A Tab"));
+        assert_eq!(
+            column(child_a_tab, "Child A Tab"),
+            column(child_b_tab, "Child B Tab")
+        );
+        assert!(text.find("Project").unwrap() < text.find("Code").unwrap());
+        assert!(text.find("Code").unwrap() < text.find("Feature A").unwrap());
+        assert!(text.find("Child A Tab").unwrap() < text.find("Feature B").unwrap());
+        assert!(text.find("Feature B").unwrap() < text.find("Child B Tab").unwrap());
+    }
+
+    #[test]
+    fn narrow_detailed_open_rows_budget_title_path_and_metadata() {
+        let mut app = topology_app("");
+        app.entries[1].title = "Extremely-long-workspace-title".into();
+        app.entries[1].path = PathBuf::from("/projects/with/a/very/long/workspace/path");
+        let backend = TestBackend::new(42, 10);
+        let mut terminal = Terminal::new(backend).unwrap();
+        terminal
+            .draw(|frame| {
+                draw_list(frame, &app, frame.area());
+            })
+            .unwrap();
+        let text = buffer_text(&terminal);
+        let workspace_line = text
+            .lines()
+            .find(|line| line.contains("Extremely"))
+            .unwrap();
+
+        assert!(workspace_line.contains('…'));
+        assert!(!workspace_line.contains("workspace · 2 tabs · 3 panes"));
+        assert!(!workspace_line.contains("very/long/workspace/path"));
+    }
+
+    #[test]
+    fn narrow_compact_worktree_rows_budget_extra_indentation() {
+        let mut app = worktree_topology_app();
+        app.config.picker.detailed_rows = false;
+        app.entries[4].title = "Extremely-long-linked-worktree-title".into();
+        let backend = TestBackend::new(42, 14);
+        let mut terminal = Terminal::new(backend).unwrap();
+        terminal
+            .draw(|frame| {
+                draw_list(frame, &app, frame.area());
+            })
+            .unwrap();
+        let text = buffer_text(&terminal);
+        let child_line = text
+            .lines()
+            .find(|line| line.contains("Extremely"))
+            .unwrap();
+        assert!(child_line.contains('…'));
+        assert!(!child_line.contains("/tmp/feature-a"));
+    }
+
+    #[test]
+    fn compact_open_rows_keep_topology_title_and_hide_workspace_path() {
+        let mut app = topology_app("");
+        app.config.picker.detailed_rows = false;
+        app.entries[1].title = "Extremely-long-workspace-title".into();
+        app.entries[1].path = PathBuf::from("/projects/with/a/very/long/workspace/path");
+        let backend = TestBackend::new(42, 10);
+        let mut terminal = Terminal::new(backend).unwrap();
+        terminal
+            .draw(|frame| {
+                draw_list(frame, &app, frame.area());
+            })
+            .unwrap();
+        let text = buffer_text(&terminal);
+
+        let workspace_line = text
+            .lines()
+            .find(|line| line.contains("Extremely"))
+            .unwrap();
+        assert!(workspace_line.contains('…'));
+        assert!(!text.contains("/projects"));
+    }
+
+    #[test]
+    fn non_current_duplicate_workspace_id_does_not_get_previous_marker() {
+        let mut app = topology_app("");
+        app.previous_workspace_id = Some("w1".into());
+        let mut other = app.entries[1].clone();
+        other.action = EntryAction::FocusWorkspace {
+            session: Some("personal".into()),
+            id: "w1".into(),
+            current_session: false,
+        };
+        other.open_node = Some(OpenNode::Workspace {
+            session: Some("personal".into()),
+            parent_workspace_id: None,
+            focused: false,
+            tab_count: 2,
+            pane_count: 3,
+        });
+
+        let line = open_entry_line(&app, &other, 0, 80);
+        assert!(!line.to_string().contains('◆'));
+    }
+
+    #[test]
+    fn topology_previous_marker_only_shows_on_initial_unfiltered_view() {
+        let mut app = topology_app("");
+        app.previous_workspace_id = Some("w1".into());
+        let mut previous = app.entries[1].clone();
+        previous.open_node = Some(OpenNode::Workspace {
+            session: Some("work".into()),
+            parent_workspace_id: None,
+            focused: false,
+            tab_count: 2,
+            pane_count: 3,
+        });
+
+        assert!(open_entry_line(&app, &previous, 0, 80)
+            .to_string()
+            .contains('◆'));
+
+        app.query = "project".into();
+        assert!(!open_entry_line(&app, &previous, 0, 80)
+            .to_string()
+            .contains('◆'));
+
+        app.query.clear();
+        app.source_filter = Some(Source::Workspace);
+        assert!(!open_entry_line(&app, &previous, 0, 80)
+            .to_string()
+            .contains('◆'));
+    }
+
+    #[test]
+    fn rendered_open_search_retains_ancestors_and_only_matching_tabs() {
+        let app = topology_app("server");
+        let backend = TestBackend::new(110, 12);
+        let mut terminal = Terminal::new(backend).unwrap();
+        terminal
+            .draw(|frame| {
+                draw_list(frame, &app, frame.area());
+            })
+            .unwrap();
+        let text = buffer_text(&terminal);
+
+        assert!(text.contains("work"));
+        assert!(text.contains("Project"));
+        assert!(text.contains("Server"));
+        assert!(!text.contains("Code"));
+        assert!(text.find("work").unwrap() < text.find("Project").unwrap());
+        assert!(text.find("Project").unwrap() < text.find("Server").unwrap());
+    }
+
+    #[test]
+    fn left_and_right_collapse_then_expand_open_workspace() {
+        let mut app = topology_app("");
+        app.selected = 1;
+        execute_command(&mut app, Command::Collapse, key(KeyCode::Left));
+        assert_eq!(app.filtered.len(), 2 + 1); // session + workspace + agent
+        assert_eq!(app.selected_entry().unwrap().title, "Project");
+
+        execute_command(&mut app, Command::Expand, key(KeyCode::Right));
+        assert_eq!(app.filtered.len(), 5);
+        assert_eq!(app.selected_entry().unwrap().title, "Project");
     }
 
     #[test]

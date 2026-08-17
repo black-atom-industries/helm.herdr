@@ -12,6 +12,14 @@ pub(crate) fn herdr_bin() -> String {
     env::var("HERDR_BIN_PATH").unwrap_or_else(|_| "herdr".into())
 }
 pub(crate) fn herdr_json<const N: usize>(args: [&str; N]) -> Result<Value, String> {
+    herdr_json_args(args)
+}
+
+pub(crate) fn herdr_json_args<I, S>(args: I) -> Result<Value, String>
+where
+    I: IntoIterator<Item = S>,
+    S: AsRef<std::ffi::OsStr>,
+{
     let out = Command::new(herdr_bin())
         .args(args)
         .output()
@@ -21,7 +29,16 @@ pub(crate) fn herdr_json<const N: usize>(args: [&str; N]) -> Result<Value, Strin
     }
     serde_json::from_slice(&out.stdout).map_err(|e| e.to_string())
 }
+
 pub(crate) fn run_herdr<const N: usize>(args: [&str; N]) -> Result<(), String> {
+    run_herdr_args(args)
+}
+
+pub(crate) fn run_herdr_args<I, S>(args: I) -> Result<(), String>
+where
+    I: IntoIterator<Item = S>,
+    S: AsRef<std::ffi::OsStr>,
+{
     let status = Command::new(herdr_bin())
         .args(args)
         .status()

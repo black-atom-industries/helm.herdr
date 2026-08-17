@@ -13,6 +13,8 @@ pub(crate) enum Command {
     OpenTemplate,
     MoveUp,
     MoveDown,
+    Collapse,
+    Expand,
     StartSearch,
     CycleFilter,
     DeleteChar,
@@ -208,6 +210,20 @@ pub(crate) fn keybindings(app: &App) -> Vec<Keybind> {
             "Navigation",
             Some("up/down"),
         ),
+        binding(
+            Command::Collapse,
+            vec![key(KeyCode::Left, KeyModifiers::NONE, "←")],
+            "collapse / parent",
+            "Navigation",
+            Some("collapse"),
+        ),
+        binding(
+            Command::Expand,
+            vec![key(KeyCode::Right, KeyModifiers::NONE, "→")],
+            "expand",
+            "Navigation",
+            Some("expand"),
+        ),
     ];
 
     for source in app.config.enabled_sources_in_order() {
@@ -338,7 +354,7 @@ pub(crate) fn keybindings(app: &App) -> Vec<Keybind> {
 
 fn source_help_label(source: &Source) -> &'static str {
     match source {
-        Source::Workspace => "workspaces",
+        Source::Workspace => "open topology",
         Source::Project => "projects",
         Source::Zoxide => "zoxide",
         Source::Root => "roots",
