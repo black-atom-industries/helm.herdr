@@ -217,7 +217,12 @@ impl App {
             self.filtered.push(index);
             self.filtered_scores.push(score);
         }
-        self.selected = 0;
+        self.selected = if searching {
+            self.best_search_position(&query, use_agent_priority)
+                .unwrap_or(0)
+        } else {
+            0
+        };
         if self.initial_selection_pending {
             self.initial_selection_pending = false;
             if self.query.trim().is_empty() && self.source_filter.is_none() {
@@ -236,6 +241,33 @@ impl App {
                 }
             }
         }
+    }
+
+    fn best_search_position(&self, query: &Query, use_agent_priority: bool) -> Option<usize> {
+        self.filtered
+            .iter()
+            .enumerate()
+            .filter_map(|(position, index)| {
+                let entry = &self.entries[*index];
+                if !query.filters_match(entry) {
+                    return None;
+                }
+                let score = if query.plain.is_empty() {
+                    0
+                } else {
+                    match_score(&self.config.picker.engine, &entry.haystack(), &query.plain)?
+                };
+                let score = score
+                    + self.config.picker.source_bonus(&entry.source)
+                    + query.score_bonus(entry, use_agent_priority);
+                Some((score, position))
+            })
+            .max_by(|(score_a, position_a), (score_b, position_b)| {
+                score_a
+                    .cmp(score_b)
+                    .then_with(|| position_b.cmp(position_a))
+            })
+            .map(|(_, position)| position)
     }
 
     fn initialize_open_expansion(&mut self) {
@@ -1844,6 +1876,20 @@ mod tests {
                 ..
             }
         ));
+    }
+
+    #[test]
+    fn open_topology_search_selects_the_best_matching_node() {
+        let mut entries = worktree_topology_entries();
+        entries[5].title = "Keycloak".into();
+        entries[5].workspace_label = Some("Keycloak".into());
+
+        let mut app = App::new(Config::default(), Theme::load(false));
+        app.entries = entries;
+        app.query = "keycl".into();
+        app.apply_filter();
+
+        assert_eq!(app.selected_entry().unwrap().title, "Keycloak");
     }
 
     #[test]
