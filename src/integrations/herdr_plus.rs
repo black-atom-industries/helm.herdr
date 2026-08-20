@@ -269,12 +269,10 @@ split = "right"
         use std::{
             env,
             os::unix::fs::PermissionsExt,
-            sync::{Mutex, OnceLock},
             time::{SystemTime, UNIX_EPOCH},
         };
 
-        static ENV_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
-        let _lock = ENV_LOCK.get_or_init(|| Mutex::new(())).lock().unwrap();
+        let _lock = crate::herdr::test_env_lock();
         let dir = env::temp_dir().join(format!(
             "herdr-navigator-split-test-{}-{}",
             std::process::id(),

@@ -4,6 +4,17 @@ use std::{
     thread,
 };
 
+#[cfg(test)]
+use std::sync::{Mutex, MutexGuard, OnceLock};
+
+#[cfg(test)]
+static TEST_ENV_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+
+#[cfg(test)]
+pub(crate) fn test_env_lock() -> MutexGuard<'static, ()> {
+    TEST_ENV_LOCK.get_or_init(|| Mutex::new(())).lock().unwrap()
+}
+
 use serde_json::Value;
 
 use crate::{config::NotificationsConfig, paths::expand_path};

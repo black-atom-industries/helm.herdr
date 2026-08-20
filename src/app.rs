@@ -1507,12 +1507,24 @@ fn push_unique(entries: &mut Vec<Entry>, seen: &mut HashSet<String>, incoming: V
 #[cfg(test)]
 mod tests {
     use std::{
+        env,
+        ffi::OsString,
+        fs,
         path::PathBuf,
+        sync::MutexGuard,
         time::{SystemTime, UNIX_EPOCH},
     };
 
+    #[cfg(unix)]
+    use std::os::unix::fs::PermissionsExt;
+
     use super::*;
-    use crate::{config::Config, model::Project, theme::Theme};
+    use crate::{
+        config::{Config, JumpBackConfig},
+        model::Project,
+        paths::recent_workspaces_state_path,
+        theme::Theme,
+    };
 
     fn entry(source: Source, path: &str, title: &str) -> Entry {
         Entry {
@@ -1617,6 +1629,105 @@ mod tests {
                 pane_count: 1,
             }),
         }
+    }
+
+    struct CommandTestEnv {
+        _lock: MutexGuard<'static, ()>,
+        dir: PathBuf,
+        previous_vars: Vec<(&'static str, Option<OsString>)>,
+    }
+
+    impl Drop for CommandTestEnv {
+        fn drop(&mut self) {
+            let _ = fs::remove_dir_all(&self.dir);
+            for (name, value) in &self.previous_vars {
+                match value {
+                    Some(value) => env::set_var(name, value),
+                    None => env::remove_var(name),
+                }
+            }
+        }
+    }
+
+    fn command_test_env() -> CommandTestEnv {
+        let lock = crate::herdr::test_env_lock();
+        let suffix = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let dir = env::temp_dir().join(format!("helm-app-command-test-{suffix}"));
+        fs::create_dir_all(&dir).unwrap();
+        let script = dir.join("herdr");
+        fs::write(
+            &script,
+            r#"#!/bin/sh
+printf '%s\n' "$*" >> "$HERDR_TEST_LOG"
+if [ "$1" = "workspace" ] && [ "$2" = "list" ]; then
+  printf '%s\n' '{"result":{"workspaces":[{"workspace_id":"w-current","label":"Current","focused":true},{"workspace_id":"w-previous","label":"Previous","focused":false}]}}'
+  exit 0
+fi
+if [ "$HERDR_TEST_MODE" = "fail" ]; then
+  exit 1
+fi
+if [ "$HERDR_TEST_MODE" = "focus-fail" ] && [ "$1" = "workspace" ] && [ "$2" = "focus" ]; then
+  exit 1
+fi
+exit 0
+"#,
+        )
+        .unwrap();
+        #[cfg(unix)]
+        fs::set_permissions(&script, fs::Permissions::from_mode(0o755)).unwrap();
+
+        let names = [
+            "HERDR_BIN_PATH",
+            "HERDR_PLUGIN_CONFIG_DIR",
+            "HERDR_PLUGIN_CONTEXT_JSON",
+            "HERDR_SESSION",
+            "HERDR_TEST_LOG",
+            "HERDR_TEST_MODE",
+        ];
+        let previous_vars = names
+            .into_iter()
+            .map(|name| (name, env::var_os(name)))
+            .collect();
+        env::set_var("HERDR_BIN_PATH", &script);
+        env::set_var("HERDR_PLUGIN_CONFIG_DIR", &dir);
+        env::set_var(
+            "HERDR_PLUGIN_CONTEXT_JSON",
+            r#"{"workspace_id":"w-launch"}"#,
+        );
+        env::set_var("HERDR_SESSION", "work");
+        env::set_var("HERDR_TEST_LOG", dir.join("calls"));
+        env::set_var("HERDR_TEST_MODE", "success");
+
+        CommandTestEnv {
+            _lock: lock,
+            dir,
+            previous_vars,
+        }
+    }
+
+    fn command_test_config() -> Config {
+        let mut config = Config::default();
+        config.notifications.enabled = false;
+        config.sources.open_workspaces = false;
+        config.sources.herdr_plus_projects = false;
+        config.sources.zoxide = false;
+        config.sources.roots = false;
+        config.sources.agents = false;
+        config.sources.servers = false;
+        config.sources.sessions = false;
+        config.sources.herdr_plus_quick_actions = false;
+        config.jump_back.pin_previous = false;
+        config
+    }
+
+    fn app_with_selected_entry(config: Config, entry: Entry) -> App {
+        let mut app = App::new(config, Theme::load(false));
+        app.entries = vec![entry];
+        app.filtered = vec![0];
+        app
     }
 
     fn topology_entries() -> Vec<Entry> {
@@ -2416,6 +2527,133 @@ mod tests {
         );
 
         assert_eq!(entries.len(), 2);
+    }
+
+    #[test]
+    fn open_selected_records_and_persists_a_successful_workspace_focus() {
+        let _env = command_test_env();
+        let mut app = app_with_selected_entry(
+            command_test_config(),
+            open_workspace("work", "w1", "Workspace", false),
+        );
+
+        app.open_selected(false).unwrap();
+
+        assert_eq!(app.recent_state.recent_ids(Some("work")), &["w1"]);
+        assert_eq!(RecentState::load().recent_ids(Some("work")), &["w1"]);
+        let calls = fs::read_to_string(env::var("HERDR_TEST_LOG").unwrap()).unwrap();
+        assert!(calls.lines().any(|line| line == "workspace focus w1"));
+    }
+
+    #[test]
+    fn open_selected_failure_leaves_recent_state_and_persistence_unchanged() {
+        let _env = command_test_env();
+        env::set_var("HERDR_TEST_MODE", "fail");
+        let mut initial = RecentState::default();
+        initial.record(Some("work"), "existing");
+        initial.save();
+        let before = fs::read(recent_workspaces_state_path()).unwrap();
+        let mut app = app_with_selected_entry(
+            command_test_config(),
+            open_workspace("work", "w1", "Workspace", false),
+        );
+        app.recent_state = RecentState::load();
+        let state_before = app.recent_state.clone();
+
+        assert!(app.open_selected(false).is_err());
+
+        assert_eq!(app.recent_state, state_before);
+        assert_eq!(fs::read(recent_workspaces_state_path()).unwrap(), before);
+    }
+
+    #[test]
+    fn close_selected_workspace_records_and_persists_its_successful_destination() {
+        let _env = command_test_env();
+        let mut app = app_with_selected_entry(
+            command_test_config(),
+            open_workspace("work", "w1", "Workspace", false),
+        );
+
+        app.close_selected_workspace().unwrap();
+
+        assert_eq!(RecentState::load().recent_ids(Some("work")), &["w-launch"]);
+        let calls = fs::read_to_string(env::var("HERDR_TEST_LOG").unwrap()).unwrap();
+        assert!(calls.lines().any(|line| line == "workspace focus w-launch"));
+        assert!(calls.lines().any(|line| line == "workspace close w1"));
+    }
+
+    #[test]
+    fn close_selected_workspace_failure_leaves_recent_state_and_persistence_unchanged() {
+        let _env = command_test_env();
+        env::set_var("HERDR_TEST_MODE", "fail");
+        let mut initial = RecentState::default();
+        initial.record(Some("work"), "existing");
+        initial.save();
+        let before = fs::read(recent_workspaces_state_path()).unwrap();
+        let mut app = app_with_selected_entry(
+            command_test_config(),
+            open_workspace("work", "w1", "Workspace", false),
+        );
+        app.recent_state = RecentState::load();
+        let state_before = app.recent_state.clone();
+
+        assert!(app.close_selected_workspace().is_err());
+
+        assert_eq!(app.recent_state, state_before);
+        assert_eq!(fs::read(recent_workspaces_state_path()).unwrap(), before);
+        let calls = fs::read_to_string(env::var("HERDR_TEST_LOG").unwrap()).unwrap();
+        assert!(!calls.lines().any(|line| line == "workspace close w1"));
+    }
+
+    #[test]
+    fn jump_back_records_and_persists_only_after_focus_succeeds() {
+        let _env = command_test_env();
+        let config = Config {
+            jump_back: JumpBackConfig {
+                enabled: true,
+                pin_previous: false,
+            },
+            ..Config::default()
+        };
+        save_previous_workspace("w-previous").unwrap();
+
+        assert_eq!(jump_back(&config).unwrap(), "Previous");
+
+        assert_eq!(
+            RecentState::load().recent_ids(Some("work")),
+            &["w-previous"]
+        );
+        assert_eq!(read_previous_workspace().unwrap(), "w-current");
+    }
+
+    #[test]
+    fn jump_back_focus_failure_leaves_recent_state_and_persistence_unchanged() {
+        let _env = command_test_env();
+        env::set_var("HERDR_TEST_MODE", "focus-fail");
+        let mut initial = RecentState::default();
+        initial.record(Some("work"), "existing");
+        initial.save();
+        save_previous_workspace("w-previous").unwrap();
+        let recent_before = fs::read(recent_workspaces_state_path()).unwrap();
+        let previous_before = fs::read(plugin_config_dir().join(JUMP_BACK_STATE_FILE)).unwrap();
+        let config = Config {
+            jump_back: JumpBackConfig {
+                enabled: true,
+                pin_previous: false,
+            },
+            ..Config::default()
+        };
+
+        assert!(jump_back(&config).is_err());
+
+        assert_eq!(
+            fs::read(recent_workspaces_state_path()).unwrap(),
+            recent_before
+        );
+        assert_eq!(
+            fs::read(plugin_config_dir().join(JUMP_BACK_STATE_FILE)).unwrap(),
+            previous_before
+        );
     }
 
     #[test]
