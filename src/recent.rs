@@ -10,12 +10,14 @@ use crate::paths::recent_workspaces_state_path;
 
 const STATE_VERSION: u32 = 1;
 pub(crate) const DEFAULT_SESSION_KEY: &str = "d";
+const ENCODED_KEY_FORMAT: &str = "encoded";
 const NAMED_SESSION_PREFIX: &str = "n:";
-const LEGACY_DEFAULT_SESSION_KEYS: [&str; 2] = ["default", "__default__"];
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 pub(crate) struct RecentState {
     version: u32,
+    #[serde(default)]
+    key_format: Option<String>,
     pub(crate) sessions: BTreeMap<String, Vec<String>>,
 }
 
@@ -23,6 +25,7 @@ impl Default for RecentState {
     fn default() -> Self {
         Self {
             version: STATE_VERSION,
+            key_format: Some(ENCODED_KEY_FORMAT.into()),
             sessions: BTreeMap::new(),
         }
     }
@@ -42,7 +45,16 @@ impl RecentState {
                 format!("unsupported recent state version {}", state.version),
             ));
         }
-        state.migrate_legacy_session_keys();
+        match state.key_format.as_deref() {
+            Some(ENCODED_KEY_FORMAT) => {}
+            None => state.migrate_legacy_session_keys(),
+            Some(format) => {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    format!("unsupported recent session key format {format}"),
+                ));
+            }
+        }
         Ok(state)
     }
 
@@ -110,14 +122,10 @@ impl RecentState {
     }
 
     fn migrate_legacy_session_keys(&mut self) {
-        if self.sessions.keys().all(|key| is_encoded_session_key(key)) {
-            return;
-        }
-
         let legacy = std::mem::take(&mut self.sessions);
         let mut migrated = BTreeMap::new();
         for (key, history) in legacy {
-            let encoded_key = if LEGACY_DEFAULT_SESSION_KEYS.contains(&key.as_str()) {
+            let encoded_key = if key == "default" {
                 DEFAULT_SESSION_KEY.to_string()
             } else {
                 named_session_key(&key)
@@ -127,6 +135,7 @@ impl RecentState {
                 .or_insert_with(Vec::new)
                 .extend(history);
         }
+        self.key_format = Some(ENCODED_KEY_FORMAT.into());
         self.sessions = migrated;
     }
 }
@@ -145,17 +154,6 @@ fn named_session_key(name: &str) -> String {
         encoded.push_str(&format!("{byte:02x}"));
     }
     encoded
-}
-
-fn is_encoded_session_key(key: &str) -> bool {
-    key == DEFAULT_SESSION_KEY
-        || key
-            .strip_prefix(NAMED_SESSION_PREFIX)
-            .is_some_and(|encoded| {
-                !encoded.is_empty()
-                    && encoded.len() % 2 == 0
-                    && encoded.bytes().all(|byte| byte.is_ascii_hexdigit())
-            })
 }
 
 #[cfg(test)]
@@ -180,11 +178,10 @@ mod tests {
 
         state.save_to(&path).unwrap();
         assert_eq!(RecentState::load_from(&path).unwrap(), state);
-        assert_eq!(
-            serde_json::from_slice::<serde_json::Value>(&fs::read(&path).unwrap()).unwrap()
-                ["version"],
-            1
-        );
+        let persisted =
+            serde_json::from_slice::<serde_json::Value>(&fs::read(&path).unwrap()).unwrap();
+        assert_eq!(persisted["version"], 1);
+        assert_eq!(persisted["key_format"], ENCODED_KEY_FORMAT);
         let _ = fs::remove_file(path);
     }
 
@@ -205,19 +202,47 @@ mod tests {
     }
 
     #[test]
-    fn load_migrates_legacy_default_key() {
+    fn load_migrates_legacy_default_without_merging_named_sentinel() {
         let path = temp_path("legacy-default");
         fs::write(
             &path,
-            br#"{"version":1,"sessions":{"default":["old-workspace"]}}"#,
+            br#"{"version":1,"sessions":{"default":["default-workspace"],"__default__":["named-workspace"]}}"#,
         )
         .unwrap();
 
         let state = RecentState::load_from(&path).unwrap();
 
-        assert_eq!(state.recent_ids(None), &["old-workspace"]);
+        assert_eq!(state.recent_ids(None), &["default-workspace"]);
+        assert_eq!(state.recent_ids(Some("__default__")), &["named-workspace"]);
+        assert_eq!(state.key_format.as_deref(), Some(ENCODED_KEY_FORMAT));
         assert!(!state.sessions.contains_key("default"));
         assert!(state.sessions.contains_key(DEFAULT_SESSION_KEY));
+        let _ = fs::remove_file(path);
+    }
+
+    #[test]
+    fn load_treats_encoded_looking_legacy_names_as_named_sessions() {
+        let path = temp_path("legacy-encoded-looking");
+        fs::write(
+            &path,
+            br#"{"version":1,"sessions":{"d":["d-workspace"],"n:64":["n-workspace"]}}"#,
+        )
+        .unwrap();
+
+        let state = RecentState::load_from(&path).unwrap();
+
+        assert_eq!(state.recent_ids(None), &[] as &[String]);
+        assert_eq!(state.recent_ids(Some("d")), &["d-workspace"]);
+        assert_eq!(state.recent_ids(Some("n:64")), &["n-workspace"]);
+        assert_eq!(
+            state.sessions.get(&named_session_key("d")),
+            Some(&vec!["d-workspace".into()])
+        );
+        assert_eq!(
+            state.sessions.get(&named_session_key("n:64")),
+            Some(&vec!["n-workspace".into()])
+        );
+        assert!(!state.sessions.contains_key("d"));
         let _ = fs::remove_file(path);
     }
 
