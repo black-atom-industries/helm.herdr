@@ -39,16 +39,15 @@ Each picker row is an `Entry`:
 - optional `workspace_id`
 - optional `agent_target`
 - optional Herdr Plus `Project`
-- optional `OpenNode` topology metadata for sessions, workspaces, and tabs
+- optional `OpenNode` topology metadata for workspaces and tabs
 - action enum for focus/create/remote/integration behavior
 
-Open entries keep their exact session/workspace/tab identity. Other workspace/project/root/zoxide paths are collapsed by canonical path where applicable. Agent entries are appended separately because multiple agents can share cwd. Server entries dedupe by remote target.
+Open entries keep their exact workspace/tab identity within the current session. Other workspace/project/root/zoxide paths are collapsed by canonical path where applicable. Agent entries are appended separately because multiple agents can share cwd. Server entries dedupe by remote target.
 
 ## Open behavior
 
-- Session: hand off to the selected running named session
-- Workspace: `herdr workspace focus <id>` in its owning session
-- Tab: `herdr tab focus <id>` in its owning session
+- Workspace: `herdr workspace focus <id>` in the current session
+- Tab: `herdr tab focus <id>` in the current session
 - Agent: `herdr agent focus <target>`
 - Server: `herdr --remote <target> --handoff`
 - Project: focus existing path if open; else create workspace and apply tabs

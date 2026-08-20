@@ -66,19 +66,13 @@ impl Source {
 
 #[derive(Clone, Debug)]
 pub(crate) enum EntryAction {
-    FocusSession {
-        name: Option<String>,
-        current: bool,
-    },
     FocusWorkspace {
         session: Option<String>,
         id: String,
-        current_session: bool,
     },
     FocusTab {
         session: Option<String>,
         id: String,
-        current_session: bool,
     },
     FocusAgent {
         target: String,
@@ -117,11 +111,6 @@ pub(crate) struct WorkspaceRef {
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub(crate) enum OpenNode {
-    Session {
-        name: Option<String>,
-        current: bool,
-        workspace_count: usize,
-    },
     Workspace {
         session: Option<String>,
         parent_workspace_id: Option<String>,
@@ -141,15 +130,12 @@ pub(crate) enum OpenNode {
 impl OpenNode {
     pub(crate) fn session(&self) -> Option<&str> {
         match self {
-            Self::Session { name, .. }
-            | Self::Workspace { session: name, .. }
-            | Self::Tab { session: name, .. } => name.as_deref(),
+            Self::Workspace { session, .. } | Self::Tab { session, .. } => session.as_deref(),
         }
     }
 
     pub(crate) fn kind_label(&self) -> &'static str {
         match self {
-            Self::Session { .. } => "session",
             Self::Workspace { .. } => "workspace",
             Self::Tab { .. } => "tab",
         }

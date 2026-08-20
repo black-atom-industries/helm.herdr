@@ -81,8 +81,8 @@ enabled = true
 pin_previous = true
 
 [sources]
-# Live Open topology for running sessions, workspaces, and tabs.
-# Selecting a row focuses that exact session, workspace, or tab.
+# Live Open topology for workspaces and tabs in the current session.
+# Selecting a row focuses that exact workspace or tab.
 open_workspaces = true
 
 # Herdr Plus project templates from:

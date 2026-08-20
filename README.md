@@ -72,7 +72,7 @@ Herdr's built-in navigation remains the simpler choice for a single entity type.
 
 | Source      | Data                              | Enter does                                                         |
 | ----------- | --------------------------------- | ------------------------------------------------------------------ |
-| `open`      | Running sessions → workspaces → tabs | Focus the exact session, workspace, or tab                         |
+| `open`      | Current-session workspaces → tabs    | Focus the exact workspace or tab                                  |
 | `agent`     | `herdr agent list`                | Focus the agent pane                                               |
 | `project`   | Herdr Plus project TOML           | Reuse or create a project workspace and apply tabs and split panes |
 | `server`    | Configured remote targets         | Hand off to the remote Herdr server                                |
@@ -90,10 +90,10 @@ Every source can be disabled. Missing optional tools degrade quietly.
 | type             | Fuzzy search                                                            |
 | `Enter`          | Open selected item normally                                             |
 | `Alt-Enter`      | Apply `picker.directory_template` to the selected zoxide/root directory |
-| `Up` / `Down`    | Move across visible session, workspace, tab, and flat-source rows          |
-| `Left` / `Right` | Collapse/expand Open sessions and workspaces                              |
+| `Up` / `Down`    | Move across visible workspace, tab, and flat-source rows                  |
+| `Left` / `Right` | Collapse/expand Open workspaces                                           |
 | `Tab`            | Cycle source filters                                                    |
-| `Ctrl-W`         | Open topology (sessions, workspaces, and tabs)                           |
+| `Ctrl-W`         | Open topology (workspaces and tabs)                                     |
 | `Ctrl-A` / `@`   | Agents, using configured status order                                   |
 | `Ctrl-P`         | Herdr Plus projects                                                     |
 | `Ctrl-Q`         | Herdr Plus Quick Actions                                                |
@@ -109,7 +109,7 @@ Every source can be disabled. Missing optional tools degrade quietly.
 | `?`              | Show active keybindings                                                 |
 | `Esc` / `Ctrl-C` | Back or close                                                           |
 
-Open is a live topology rather than a flat source: running sessions contain workspaces, and workspaces contain tabs. Linked-worktree workspaces are nested beneath the open non-linked workspace for the same repository, with their own tabs one level deeper; orphaned worktrees remain top-level. The current session and workspace start expanded, with the focused current tab selected; `Left`/`Right` collapse or expand them. Search retains matching tabs' full session, parent-workspace, and linked-worktree ancestry so repeated names such as `Code`, `Agents`, or `Server` remain distinguishable.
+Open is a live topology for the current session: workspaces are top-level rows and contain tabs. Linked-worktree workspaces are nested beneath the open non-linked workspace for the same repository, with their own tabs one level deeper; orphaned worktrees remain top-level. Workspaces start collapsed, with the focused workspace selected; `Left`/`Right` collapse or expand them. Search retains matching tabs' workspace and linked-worktree ancestry so repeated names such as `Code`, `Agents`, or `Server` remain distinguishable.
 
 Status glyphs follow Herdr's `prefix+g` visual language. Agent rows use `◉` for blocked/attention, an animated Braille spinner for working, `●` for done, `✓` for idle, and `○` for unknown. Workspace status dots use `●` for blocked/working/done, `○` for idle, and `·` for unknown. Diamond color priority is marked yellow, current accent/blue, then previous red. The active tab uses a green dot. Selection uses `→`, and topology/source trees use `▾`, `▸`, `├─`, and `└─` markers.
 

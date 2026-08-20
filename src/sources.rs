@@ -17,7 +17,6 @@ use crate::{
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct SessionSpec {
     name: Option<String>,
-    current: bool,
 }
 
 impl SessionSpec {
@@ -27,10 +26,8 @@ impl SessionSpec {
 
     fn args(&self, command: [&str; 2]) -> Vec<String> {
         let mut args = Vec::new();
-        match (&self.name, self.current) {
-            (Some(name), _) => args.extend(["--session".into(), name.clone()]),
-            (None, false) => args.extend(["--session".into(), "default".into()]),
-            (None, true) => {}
+        if let Some(name) = &self.name {
+            args.extend(["--session".into(), name.clone()]);
         }
         args.extend(command.map(str::to_string));
         args
@@ -43,31 +40,21 @@ pub(crate) fn collect_open_topology(
     let current_name = std::env::var("HERDR_SESSION")
         .ok()
         .filter(|name| !name.trim().is_empty());
-    let session_json = if include_topology {
-        herdr_json(["session", "list"]).unwrap_or(Value::Null)
-    } else {
-        Value::Null
-    };
-    let sessions = collection_sessions(include_topology, current_name, &session_json);
-    let mut topology = Vec::new();
-    let mut current_workspaces = Vec::new();
-    let mut current_map = HashMap::new();
+    let session = SessionSpec { name: current_name };
+    let (ws_json, tab_json, pane_json) =
+        session_state_with(&session, include_topology, herdr_json_args);
+    let (topology, current_workspaces, current_map) =
+        topology_from_json(&session, &ws_json, &tab_json, &pane_json);
 
-    for session in sessions {
-        let (ws_json, tab_json, pane_json) =
-            session_state_with(&session, include_topology, herdr_json_args);
-        let (entries, workspaces, map) =
-            topology_from_json(&session, &ws_json, &tab_json, &pane_json);
+    (
         if include_topology {
-            topology.extend(entries);
-        }
-        if session.current {
-            current_workspaces = workspaces;
-            current_map = map;
-        }
-    }
-
-    (topology, current_workspaces, current_map)
+            topology
+        } else {
+            Vec::new()
+        },
+        current_workspaces,
+        current_map,
+    )
 }
 
 fn snapshot_is_usable(value: &Value, include_tabs: bool) -> bool {
@@ -119,57 +106,6 @@ fn result_array<'a>(value: &'a Value, name: &str) -> Option<&'a Vec<Value>> {
         .and_then(Value::as_array)
 }
 
-fn collection_sessions(
-    include_topology: bool,
-    current_name: Option<String>,
-    session_json: &Value,
-) -> Vec<SessionSpec> {
-    if include_topology {
-        session_specs_from_json(session_json, current_name.as_deref())
-    } else {
-        vec![SessionSpec {
-            name: current_name,
-            current: true,
-        }]
-    }
-}
-
-fn session_specs_from_json(value: &Value, current_name: Option<&str>) -> Vec<SessionSpec> {
-    let mut sessions = Vec::new();
-    if let Some(items) = value.get("sessions").and_then(Value::as_array) {
-        for item in items {
-            let running = item
-                .get("running")
-                .and_then(Value::as_bool)
-                .unwrap_or(false);
-            let Some(name) = item.get("name").and_then(Value::as_str) else {
-                continue;
-            };
-            let is_default = item
-                .get("default")
-                .and_then(Value::as_bool)
-                .unwrap_or(false);
-            let current = current_name.map_or(is_default, |current| current == name);
-            if running || current {
-                sessions.push(SessionSpec {
-                    name: (!is_default).then(|| name.to_string()),
-                    current,
-                });
-            }
-        }
-    }
-
-    let current = current_name.map(str::to_string);
-    if !sessions.iter().any(|session| session.current) {
-        sessions.push(SessionSpec {
-            name: current,
-            current: true,
-        });
-    }
-    sessions.sort_by_key(|session| !session.current);
-    sessions
-}
-
 #[derive(Clone, Debug)]
 struct WorkspaceTopologyBlock {
     entry: Entry,
@@ -219,28 +155,6 @@ fn topology_from_json(
     let workspaces = result_array(ws_json, "workspaces")
         .cloned()
         .unwrap_or_default();
-    entries.push(Entry {
-        source: Source::Workspace,
-        title: session.label().into(),
-        subtitle: format!("{} workspaces", workspaces.len()),
-        path: PathBuf::new(),
-        workspace_id: None,
-        workspace_label: None,
-        agent_target: None,
-        project: None,
-        action: EntryAction::FocusSession {
-            name: session.name.clone(),
-            current: session.current,
-        },
-        source_label: None,
-        search_terms: vec!["session".into(), session.label().into()],
-        open_node: Some(OpenNode::Session {
-            name: session.name.clone(),
-            current: session.current,
-            workspace_count: workspaces.len(),
-        }),
-    });
-
     let tabs = result_array(tab_json, "tabs").cloned().unwrap_or_default();
     let mut canonical_parent_by_repo = HashMap::new();
     for workspace in &workspaces {
@@ -324,7 +238,6 @@ fn topology_from_json(
             action: EntryAction::FocusWorkspace {
                 session: session.name.clone(),
                 id: id.into(),
-                current_session: session.current,
             },
             source_label: None,
             search_terms,
@@ -337,19 +250,17 @@ fn topology_from_json(
                 pane_count,
             }),
         };
-        if session.current {
-            if let Some(key) = canonical_str(&path) {
-                map.entry(key).or_insert_with(Vec::new).push(WorkspaceRef {
-                    id: id.into(),
-                    label: label.into(),
-                    kind: workspace_kind(label),
-                    path: path.clone(),
-                    tab_count,
-                    pane_count,
-                });
-            }
-            workspace_entries.push(entry.clone());
+        if let Some(key) = canonical_str(&path) {
+            map.entry(key).or_insert_with(Vec::new).push(WorkspaceRef {
+                id: id.into(),
+                label: label.into(),
+                kind: workspace_kind(label),
+                path: path.clone(),
+                tab_count,
+                pane_count,
+            });
         }
+        workspace_entries.push(entry.clone());
 
         let mut workspace_tabs = tabs
             .iter()
@@ -379,7 +290,6 @@ fn topology_from_json(
                     action: EntryAction::FocusTab {
                         session: session.name.clone(),
                         id: tab_id.into(),
-                        current_session: session.current,
                     },
                     source_label: None,
                     search_terms: vec![
@@ -643,7 +553,6 @@ mod tests {
     fn parses_open_topology_and_agent_list_json() {
         let session = SessionSpec {
             name: Some("work".into()),
-            current: true,
         };
         let ws_json = serde_json::json!({"id":"cli:workspace:list","result":{"type":"workspace_list","workspaces":[
             {"active_tab_id":"w41:t1","agent_status":"unknown","focused":false,"label":"~","number":1,"pane_count":1,"tab_count":1,"workspace_id":"w41"},
@@ -656,21 +565,17 @@ mod tests {
             {"workspace_id":"w43","foreground_cwd":"/tmp"}]}});
         let (topology, entries, map) =
             topology_from_json(&session, &ws_json, &tab_json, &pane_json);
-        assert_eq!(topology.len(), 5);
+        assert_eq!(topology.len(), 4);
         assert!(matches!(
             topology[0].open_node,
-            Some(OpenNode::Session {
-                current: true,
-                workspace_count: 2,
-                ..
-            })
+            Some(OpenNode::Workspace { focused: false, .. })
         ));
         assert!(matches!(
-            topology[2].open_node,
+            topology[1].open_node,
             Some(OpenNode::Tab { focused: false, .. })
         ));
         assert!(matches!(
-            topology[4].open_node,
+            topology[3].open_node,
             Some(OpenNode::Tab { focused: true, .. })
         ));
         assert_eq!(entries.len(), 2);
@@ -700,7 +605,6 @@ mod tests {
     fn snapshot_supplies_workspace_tab_and_pane_topology_in_one_read() {
         let session = SessionSpec {
             name: Some("work".into()),
-            current: true,
         };
         let snapshot = serde_json::json!({"result":{"snapshot":{
             "workspaces":[{"workspace_id":"w1","label":"Project","focused":true,"tab_count":1,"pane_count":1}],
@@ -715,16 +619,15 @@ mod tests {
 
         assert_eq!(calls, vec![vec!["--session", "work", "api", "snapshot"]]);
         let (topology, current, _) = topology_from_json(&session, &workspaces, &tabs, &panes);
-        assert_eq!(topology.len(), 3);
+        assert_eq!(topology.len(), 2);
         assert_eq!(current[0].path, PathBuf::from("/tmp/project"));
-        assert_eq!(topology[2].title, "Code");
+        assert_eq!(topology[1].title, "Code");
     }
 
     #[test]
     fn snapshot_failure_falls_back_to_list_commands() {
         let session = SessionSpec {
             name: Some("work".into()),
-            current: true,
         };
         let mut calls = Vec::new();
         let _ = session_state_with(&session, true, |args| {
@@ -746,7 +649,6 @@ mod tests {
     fn malformed_snapshot_arrays_fall_back_to_list_commands() {
         let session = SessionSpec {
             name: Some("work".into()),
-            current: true,
         };
         let malformed = [
             serde_json::json!({"result":{"snapshot":{
@@ -779,25 +681,16 @@ mod tests {
     }
 
     #[test]
-    fn disabled_open_collection_stays_in_current_session_and_skips_tabs() {
-        let sessions = collection_sessions(
-            false,
-            Some("current".into()),
-            &serde_json::json!({"sessions":[{"name":"other","running":true}]}),
-        );
-        assert_eq!(
-            sessions,
-            vec![SessionSpec {
-                name: Some("current".into()),
-                current: true
-            }]
-        );
+    fn disabled_open_collection_skips_tabs() {
+        let session = SessionSpec {
+            name: Some("current".into()),
+        };
 
         let snapshot = serde_json::json!({"result":{"snapshot":{
             "workspaces":[], "tabs":[{"tab_id":"ignored"}], "panes":[]
         }}});
         let mut calls = Vec::new();
-        let (_, tabs, _) = session_state_with(&sessions[0], false, |args| {
+        let (_, tabs, _) = session_state_with(&session, false, |args| {
             calls.push(args);
             Ok(snapshot.clone())
         });
@@ -809,7 +702,6 @@ mod tests {
     fn linked_worktree_workspaces_follow_their_repo_parent_in_preorder() {
         let session = SessionSpec {
             name: Some("work".into()),
-            current: true,
         };
         let workspaces = serde_json::json!({"result":{"workspaces":[
             {"workspace_id":"parent","label":"Web UI","number":1,"tab_count":1,"pane_count":1,
@@ -839,7 +731,6 @@ mod tests {
         assert_eq!(
             titles,
             vec![
-                "work",
                 "Web UI",
                 "Main",
                 "feature-b",
@@ -876,10 +767,9 @@ mod tests {
     }
 
     #[test]
-    fn linked_worktree_parent_is_repo_scoped_deterministic_and_session_local() {
+    fn linked_worktree_parent_is_repo_scoped_and_deterministic() {
         let session = SessionSpec {
             name: Some("work".into()),
-            current: true,
         };
         let workspaces = serde_json::json!({"result":{"workspaces":[
             {"workspace_id":"first","label":"Parent","worktree":{"repo_key":"repo-a","is_linked_worktree":false}},
@@ -900,31 +790,12 @@ mod tests {
                 ..
             }) if parent == "first"
         ));
-
-        let other_session = SessionSpec {
-            name: Some("personal".into()),
-            current: false,
-        };
-        let linked_only = serde_json::json!({"result":{"workspaces":[
-            {"workspace_id":"child","label":"Child","worktree":{"repo_key":"repo-a","is_linked_worktree":true}}
-        ]}});
-        let (other_topology, _, _) =
-            topology_from_json(&other_session, &linked_only, &empty, &empty);
-        assert!(matches!(
-            other_topology[1].open_node.as_ref(),
-            Some(OpenNode::Workspace {
-                parent_workspace_id: None,
-                linked_worktree: true,
-                ..
-            })
-        ));
     }
 
     #[test]
     fn tabs_are_sorted_by_number_within_their_workspace() {
         let session = SessionSpec {
             name: Some("work".into()),
-            current: true,
         };
         let workspaces = serde_json::json!({"result":{"workspaces":[
             {"workspace_id":"w1","label":"Project","tab_count":3,"pane_count":3}
@@ -945,49 +816,6 @@ mod tests {
             })
             .collect::<Vec<_>>();
         assert_eq!(titles, vec!["First", "Second", "Third"]);
-    }
-
-    #[test]
-    fn current_named_session_is_included_when_session_list_omits_it() {
-        let value = serde_json::json!({"sessions":[
-            {"default":true,"name":"default","running":false},
-            {"default":false,"name":"other","running":true}
-        ]});
-        let sessions = session_specs_from_json(&value, Some("current"));
-
-        assert_eq!(sessions[0].name.as_deref(), Some("current"));
-        assert!(sessions[0].current);
-        assert!(sessions
-            .iter()
-            .any(|session| session.name.as_deref() == Some("other")));
-    }
-
-    #[test]
-    fn default_session_is_current_without_a_named_session() {
-        let value = serde_json::json!({"sessions":[
-            {"default":true,"name":"default","running":true}
-        ]});
-        let sessions = session_specs_from_json(&value, None);
-
-        assert_eq!(
-            sessions,
-            vec![SessionSpec {
-                name: None,
-                current: true
-            }]
-        );
-    }
-
-    #[test]
-    fn non_current_default_session_is_addressed_explicitly() {
-        let session = SessionSpec {
-            name: None,
-            current: false,
-        };
-        assert_eq!(
-            session.args(["workspace", "list"]),
-            vec!["--session", "default", "workspace", "list"]
-        );
     }
 
     #[test]

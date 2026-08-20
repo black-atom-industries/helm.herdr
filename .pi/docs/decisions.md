@@ -39,7 +39,7 @@ This project should stay a compact plugin. Avoid speculative abstractions, plugi
 
 ## Server access uses remote handoff
 
-Treat a remote server as a Herdr remote target, not a remote session. `Ctrl-S` filters servers; remote rows run `herdr --remote TARGET --handoff` to avoid nested Herdr. The Open topology may list and hand off to actual running local named sessions, but it does not parse configured session aliases. Picker should not own SSH config parsing, `.herdr-server.toml`, autossh tabs, or remote terminal attach listing unless terminal-level search becomes an explicit UX goal.
+Treat a remote server as a Herdr remote target, not a remote session. `Ctrl-S` filters servers; remote rows run `herdr --remote TARGET --handoff` to avoid nested Herdr. Open reads workspaces and tabs from the current local session. Picker should not own SSH config parsing, `.herdr-server.toml`, autossh tabs, or remote terminal attach listing unless terminal-level search becomes an explicit UX goal.
 
 ## Integration contract v1
 
