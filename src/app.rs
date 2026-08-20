@@ -13,6 +13,7 @@ use crate::{
     matcher::match_score,
     model::{Entry, EntryAction, OpenNode, Source, WorkspaceKind, WorkspaceRef},
     paths::{canonical_str, herdr_plus_quick_actions_dir, home, plugin_config_dir},
+    recent::RecentState,
     sources::{collect_agents, collect_open_topology, collect_roots, collect_zoxide},
     theme::Theme,
 };
@@ -45,6 +46,7 @@ pub(crate) struct App {
     pub(crate) path_to_workspaces: HashMap<String, Vec<WorkspaceRef>>,
     pub(crate) previous_workspace_id: Option<String>,
     pub(crate) pinned_entries: HashSet<String>,
+    pub(crate) recent_state: RecentState,
     pub(crate) spinner_tick: u32,
     pub(crate) update_available: Option<String>,
     pub(crate) expanded_sessions: HashSet<String>,
@@ -70,6 +72,7 @@ impl App {
             path_to_workspaces: HashMap::new(),
             previous_workspace_id: None,
             pinned_entries: HashSet::new(),
+            recent_state: RecentState::default(),
             spinner_tick: 0,
             update_available: None,
             expanded_sessions: HashSet::new(),
@@ -85,6 +88,11 @@ impl App {
         let (open_entries, workspace_entries, path_to_workspaces) =
             collect_open_topology(self.config.sources.open_workspaces);
         self.path_to_workspaces = path_to_workspaces;
+        self.recent_state = RecentState::load();
+        if self.config.sources.open_workspaces {
+            normalize_recent_state(&mut self.recent_state, &open_entries);
+            self.recent_state.save();
+        }
 
         if self.config.sources.open_workspaces {
             push_unique(&mut entries, &mut seen, open_entries);
@@ -315,20 +323,23 @@ impl App {
         &self,
         left: &OpenWorkspaceBlock,
         right: &OpenWorkspaceBlock,
-        pin_previous: bool,
+        session: Option<&str>,
     ) -> std::cmp::Ordering {
         let left_workspace = &self.entries[left.workspace_index];
         let right_workspace = &self.entries[right.workspace_index];
-        let left_previous = pin_previous
-            && is_current_workspace_entry(left_workspace)
-            && left_workspace.workspace_id.as_deref() == self.previous_workspace_id.as_deref();
-        let right_previous = pin_previous
-            && is_current_workspace_entry(right_workspace)
-            && right_workspace.workspace_id.as_deref() == self.previous_workspace_id.as_deref();
-        right_previous.cmp(&left_previous).then_with(|| {
-            self.is_pinned(right_workspace)
-                .cmp(&self.is_pinned(left_workspace))
-        })
+        is_focused_workspace_entry(right_workspace)
+            .cmp(&is_focused_workspace_entry(left_workspace))
+            .then_with(|| {
+                recent_workspace_rank(
+                    self.recent_state.recent_ids(session),
+                    left_workspace.workspace_id.as_deref(),
+                )
+                .cmp(&recent_workspace_rank(
+                    self.recent_state.recent_ids(session),
+                    right_workspace.workspace_id.as_deref(),
+                ))
+            })
+            .then_with(|| left.workspace_index.cmp(&right.workspace_index))
     }
 
     fn visible_open_entries(&self, query: &Query, searching: bool) -> (Vec<usize>, Vec<i64>) {
@@ -378,15 +389,12 @@ impl App {
                             _ => {}
                         }
                     }
-                    let pin_previous = self.config.jump_back.enabled
-                        && self.config.jump_back.pin_previous
-                        && self.source_filter.is_none();
                     let mut parents = blocks
                         .iter()
                         .filter(|block| block.parent_workspace_id.is_none())
                         .collect::<Vec<_>>();
                     parents.sort_by(|left, right| {
-                        self.compare_open_workspace_blocks(left, right, pin_previous)
+                        self.compare_open_workspace_blocks(left, right, name.as_deref())
                     });
                     for parent in parents {
                         let workspace = &self.entries[parent.workspace_index];
@@ -405,7 +413,7 @@ impl App {
                             .filter(|block| block.parent_workspace_id.as_deref() == Some(parent_id))
                             .collect::<Vec<_>>();
                         children.sort_by(|left, right| {
-                            self.compare_open_workspace_blocks(left, right, pin_previous)
+                            self.compare_open_workspace_blocks(left, right, name.as_deref())
                         });
                         for child in children {
                             let child_workspace = &self.entries[child.workspace_index];
@@ -953,6 +961,40 @@ impl App {
     }
 }
 
+fn normalize_recent_state(state: &mut RecentState, entries: &[Entry]) {
+    let mut cursor = 0;
+    while cursor < entries.len() {
+        let Some(OpenNode::Session { name, .. }) = entries[cursor].open_node.as_ref() else {
+            cursor += 1;
+            continue;
+        };
+        let end = entries[cursor + 1..]
+            .iter()
+            .position(|entry| matches!(entry.open_node, Some(OpenNode::Session { .. })))
+            .map(|offset| cursor + 1 + offset)
+            .unwrap_or(entries.len());
+        let live_ids = entries[cursor + 1..end]
+            .iter()
+            .filter_map(|entry| match entry.open_node.as_ref() {
+                Some(OpenNode::Workspace { .. }) => entry.workspace_id.clone(),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        let current_id = entries[cursor + 1..end]
+            .iter()
+            .find(|entry| is_focused_workspace_entry(entry))
+            .and_then(|entry| entry.workspace_id.as_deref());
+        state.normalize(name.as_deref(), &live_ids, current_id);
+        cursor = end;
+    }
+}
+
+fn recent_workspace_rank(recent_ids: &[String], workspace_id: Option<&str>) -> usize {
+    workspace_id
+        .and_then(|id| recent_ids.iter().position(|recent_id| recent_id == id))
+        .unwrap_or(usize::MAX)
+}
+
 fn session_key(name: Option<&str>) -> String {
     name.unwrap_or("<default>").to_string()
 }
@@ -961,13 +1003,10 @@ fn workspace_key(session: Option<&str>, workspace_id: &str) -> String {
     format!("{}::{workspace_id}", session_key(session))
 }
 
-fn is_current_workspace_entry(entry: &Entry) -> bool {
+fn is_focused_workspace_entry(entry: &Entry) -> bool {
     matches!(
-        entry.action,
-        EntryAction::FocusWorkspace {
-            current_session: true,
-            ..
-        }
+        entry.open_node.as_ref(),
+        Some(OpenNode::Workspace { focused: true, .. })
     )
 }
 
@@ -1613,6 +1652,121 @@ mod tests {
     }
 
     #[test]
+    fn unfiltered_open_uses_stored_session_local_recent_order() {
+        let mut entries = topology_entries();
+        for entry in &mut entries {
+            if let Some(OpenNode::Workspace { focused, .. }) = entry.open_node.as_mut() {
+                *focused = false;
+            }
+        }
+
+        let mut app = App::new(Config::default(), Theme::load(false));
+        app.entries = entries;
+        app.recent_state.record(Some("work"), "w1");
+        app.recent_state.record(Some("work"), "w2");
+        app.apply_filter();
+
+        assert_eq!(
+            app.filtered
+                .iter()
+                .map(|index| app.entries[*index].title.as_str())
+                .collect::<Vec<_>>(),
+            vec!["work", "Other", "Current", "personal"]
+        );
+    }
+
+    #[test]
+    fn unfiltered_open_normalization_puts_changed_current_focus_first() {
+        let mut entries = topology_entries();
+        if let Some(OpenNode::Workspace { focused, .. }) = entries[1].open_node.as_mut() {
+            *focused = false;
+        }
+        if let Some(OpenNode::Workspace { focused, .. }) = entries[4].open_node.as_mut() {
+            *focused = true;
+        }
+
+        let mut app = App::new(Config::default(), Theme::load(false));
+        app.entries = entries;
+        app.recent_state.record(Some("work"), "w2");
+        app.recent_state.record(Some("work"), "w1");
+        normalize_recent_state(&mut app.recent_state, &app.entries);
+        app.apply_filter();
+
+        assert_eq!(app.recent_state.recent_ids(Some("work")), &["w2", "w1"]);
+        assert_eq!(app.entries[app.filtered[1]].title, "Other");
+    }
+
+    #[test]
+    fn unfiltered_open_normalization_prunes_stale_and_duplicate_ids() {
+        let mut entries = topology_entries();
+        for entry in &mut entries {
+            if let Some(OpenNode::Workspace { focused, .. }) = entry.open_node.as_mut() {
+                *focused = false;
+            }
+        }
+        let mut app = App::new(Config::default(), Theme::load(false));
+        app.entries = entries;
+        app.recent_state.sessions.insert(
+            crate::recent::session_key(Some("work")),
+            vec!["stale".into(), "w2".into(), "w2".into(), "w1".into()],
+        );
+        normalize_recent_state(&mut app.recent_state, &app.entries);
+        app.apply_filter();
+
+        assert_eq!(app.recent_state.recent_ids(Some("work")), &["w2", "w1"]);
+        assert_eq!(app.entries[app.filtered[1]].title, "Other");
+        assert_eq!(app.entries[app.filtered[2]].title, "Current");
+    }
+
+    #[test]
+    fn unfiltered_open_keeps_named_session_histories_isolated() {
+        let entries = vec![
+            open_session("work", true, 2),
+            open_workspace("work", "same", "Work Shared", false),
+            open_workspace("work", "w1", "Work One", false),
+            open_session("personal", false, 2),
+            open_workspace("personal", "same", "Personal Shared", false),
+            open_workspace("personal", "p1", "Personal One", false),
+        ];
+        let mut app = App::new(Config::default(), Theme::load(false));
+        app.entries = entries;
+        app.expanded_sessions
+            .extend(["work".into(), "personal".into()]);
+        app.recent_state.record(Some("work"), "same");
+        app.recent_state.record(Some("personal"), "p1");
+        app.apply_filter();
+
+        let titles = app
+            .filtered
+            .iter()
+            .map(|index| app.entries[*index].title.as_str())
+            .collect::<Vec<_>>();
+        assert_eq!(
+            titles,
+            vec![
+                "work",
+                "Work Shared",
+                "Work One",
+                "personal",
+                "Personal One",
+                "Personal Shared"
+            ]
+        );
+    }
+
+    #[test]
+    fn unfiltered_open_keeps_empty_sessions_visible() {
+        let entries = vec![open_session("empty", false, 0)];
+        let mut app = App::new(Config::default(), Theme::load(false));
+        app.entries = entries;
+        normalize_recent_state(&mut app.recent_state, &app.entries);
+        app.apply_filter();
+
+        assert!(app.recent_state.recent_ids(Some("empty")).is_empty());
+        assert_eq!(app.filtered, vec![0]);
+    }
+
+    #[test]
     fn initial_open_selects_the_focused_tab_in_the_current_session_once() {
         let mut app = App::new(Config::default(), Theme::load(false));
         app.entries = topology_entries();
@@ -1729,7 +1883,7 @@ mod tests {
     }
 
     #[test]
-    fn pin_and_previous_order_linked_worktrees_within_their_parent() {
+    fn pins_and_previous_do_not_change_linked_worktree_order() {
         let mut app = App::new(Config::default(), Theme::load(false));
         app.entries = worktree_topology_entries();
         app.pinned_entries.insert("workspace:work:child-b".into());
@@ -1739,7 +1893,7 @@ mod tests {
                 .iter()
                 .map(|index| app.entries[*index].title.as_str())
                 .collect::<Vec<_>>(),
-            vec!["work", "Web UI", "Main", "Feature B", "Feature A", "Orphan"]
+            vec!["work", "Web UI", "Main", "Feature A", "Feature B", "Orphan"]
         );
 
         app.pinned_entries.clear();
@@ -1750,7 +1904,7 @@ mod tests {
                 .iter()
                 .map(|index| app.entries[*index].title.as_str())
                 .collect::<Vec<_>>(),
-            vec!["work", "Web UI", "Main", "Feature B", "Feature A", "Orphan"]
+            vec!["work", "Web UI", "Main", "Feature A", "Feature B", "Orphan"]
         );
     }
 
@@ -1789,7 +1943,7 @@ mod tests {
     }
 
     #[test]
-    fn open_topology_moves_marked_workspace_with_its_subtree() {
+    fn open_topology_ignores_workspace_pins_for_ordering() {
         let mut app = App::new(Config::default(), Theme::load(false));
         app.entries = topology_entries();
         app.pinned_entries.insert("workspace:w2".into());
@@ -1802,7 +1956,7 @@ mod tests {
             .collect::<Vec<_>>();
         assert_eq!(
             titles,
-            vec!["work", "Other", "Current", "Code", "Server", "personal"]
+            vec!["work", "Current", "Code", "Server", "Other", "personal"]
         );
     }
 
@@ -1831,7 +1985,7 @@ mod tests {
     }
 
     #[test]
-    fn previous_workspace_priority_is_limited_to_current_session_with_duplicate_ids() {
+    fn open_topology_ignores_previous_workspace_for_ordering() {
         let mut app = App::new(Config::default(), Theme::load(false));
         app.entries = vec![
             open_session("work", true, 2),
@@ -1852,7 +2006,7 @@ mod tests {
             .collect::<Vec<_>>();
         assert_eq!(
             titles,
-            vec!["work", "Previous", "Current", "personal", "Other", "Same ID"]
+            vec!["work", "Current", "Previous", "personal", "Other", "Same ID"]
         );
     }
 
