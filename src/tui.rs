@@ -233,7 +233,23 @@ fn execute_command(app: &mut App, command: Command, key: KeyEvent) -> Action {
                 Action::Quit
             }
         }
-        Command::Open => Action::Open,
+        Command::Open => {
+            let drills_into_tabs = app.selected_entry().is_some_and(|entry| {
+                matches!(
+                    entry.action,
+                    EntryAction::FocusWorkspace {
+                        current_session: true,
+                        ..
+                    }
+                )
+            });
+            if drills_into_tabs {
+                app.expand_selected();
+                Action::Continue
+            } else {
+                Action::Open
+            }
+        }
         Command::OpenTemplate => Action::OpenTemplate,
         Command::Update => Action::Update,
         Command::MoveUp => {
@@ -740,6 +756,17 @@ fn topology_branch_prefix(app: &App, entry: &Entry, row: usize) -> String {
     prefix
 }
 
+fn flat_branch_prefix(app: &App, entry: &Entry, row: usize) -> String {
+    match entry.open_node.as_ref() {
+        Some(OpenNode::Workspace { .. }) => "    ".into(),
+        Some(OpenNode::Tab { .. }) => {
+            let last = topology_row_is_last(app, row, entry);
+            format!("      {}", if last { "└─ " } else { "├─ " })
+        }
+        _ => topology_branch_prefix(app, entry, row),
+    }
+}
+
 fn open_entry_line(app: &App, entry: &Entry, row: usize, row_width: usize) -> Line<'static> {
     let node = entry.open_node.as_ref().expect("open topology entry");
     let searching = !app.query.trim().is_empty();
@@ -796,7 +823,11 @@ fn open_entry_line(app: &App, entry: &Entry, row: usize, row_width: usize) -> Li
             (
                 format!(
                     "{}{} ",
-                    topology_branch_prefix(app, entry, row),
+                    if searching {
+                        topology_branch_prefix(app, entry, row)
+                    } else {
+                        flat_branch_prefix(app, entry, row)
+                    },
                     if expanded { '▾' } else { '▸' }
                 ),
                 app.theme.overlay0,
@@ -814,7 +845,11 @@ fn open_entry_line(app: &App, entry: &Entry, row: usize, row_width: usize) -> Li
             pane_count,
             ..
         } => (
-            topology_branch_prefix(app, entry, row),
+            if searching {
+                topology_branch_prefix(app, entry, row)
+            } else {
+                flat_branch_prefix(app, entry, row)
+            },
             app.theme.overlay0,
             if *focused { "● " } else { "  " }.to_string(),
             app.theme.green,
@@ -838,21 +873,49 @@ fn open_entry_line(app: &App, entry: &Entry, row: usize, row_width: usize) -> Li
         .saturating_sub(metadata.chars().count())
         .saturating_sub(metadata_separator);
 
-    let raw_path = if app.config.picker.detailed_rows && matches!(node, OpenNode::Workspace { .. })
-    {
+    let is_workspace = matches!(node, OpenNode::Workspace { .. });
+    let linked_worktree = matches!(
+        node,
+        OpenNode::Workspace {
+            parent_workspace_id: Some(_),
+            ..
+        }
+    ) || entry.search_terms.iter().any(|term| term == "worktree");
+    let kind_column = if is_workspace {
+        if linked_worktree {
+            "⎇ "
+        } else {
+            "  "
+        }
+    } else {
+        ""
+    };
+    let kind_width = kind_column.chars().count();
+    let raw_path = if app.config.picker.detailed_rows && is_workspace {
         display_path(entry)
     } else {
         String::new()
     };
-    let show_path = !raw_path.is_empty() && content_budget >= 24;
+    let show_path = !raw_path.is_empty() && content_budget >= 24 + kind_width;
     let title_budget = if show_path {
-        (content_budget / 2).min(32)
-    } else {
         content_budget
+            .saturating_sub(kind_width)
+            .saturating_sub(2)
+            .min(32)
+            .max(1)
+    } else {
+        content_budget.saturating_sub(kind_width).max(1)
     };
     let title = truncate_end(display_title(entry), title_budget);
+    let title_len = title.chars().count();
+    let title_column_width = if is_workspace {
+        title_budget
+    } else {
+        title.chars().count()
+    };
     let path_budget = content_budget
-        .saturating_sub(title.chars().count())
+        .saturating_sub(title_column_width)
+        .saturating_sub(kind_width)
         .saturating_sub(usize::from(show_path) * 2);
     let path = show_path.then(|| truncate_end(&raw_path, path_budget));
     let path_text = path
@@ -860,7 +923,8 @@ fn open_entry_line(app: &App, entry: &Entry, row: usize, row_width: usize) -> Li
         .map(|path| format!("  {path}"))
         .unwrap_or_default();
     let occupied = fixed_width
-        + title.chars().count()
+        + title_column_width
+        + kind_width
         + path_text.chars().count()
         + metadata_separator
         + metadata.chars().count();
@@ -869,6 +933,15 @@ fn open_entry_line(app: &App, entry: &Entry, row: usize, row_width: usize) -> Li
         Span::styled(prefix, Style::default().fg(prefix_color)),
         Span::styled(marker, Style::default().fg(marker_color)),
         Span::styled(title, Style::default().fg(app.theme.text)),
+        Span::raw(" ".repeat(title_column_width.saturating_sub(title_len))),
+        Span::styled(
+            kind_column,
+            Style::default().fg(if linked_worktree {
+                app.theme.teal
+            } else {
+                app.theme.overlay0
+            }),
+        ),
         Span::styled(path_text, Style::default().fg(app.theme.subtext0)),
         Span::raw(spacer),
         Span::styled(
@@ -1669,7 +1742,7 @@ mod tests {
     }
 
     #[test]
-    fn rendered_open_topology_shows_session_workspace_tab_ancestry_and_flat_sources() {
+    fn rendered_open_topology_starts_with_collapsed_flat_workspace_rows() {
         let app = topology_app("");
         let backend = TestBackend::new(110, 16);
         let mut terminal = Terminal::new(backend).unwrap();
@@ -1683,18 +1756,18 @@ mod tests {
         let open = text.find("open  LIVE").unwrap();
         let session = text.find("work").unwrap();
         let workspace = text.find("Project").unwrap();
-        let code = text.find("Code").unwrap();
-        let server = text.find("Server").unwrap();
         let agent = text.find("agent").unwrap();
-        assert!(open < session && session < workspace && workspace < code && code < server);
-        assert!(server < agent);
+        assert!(open < session && session < workspace);
+        assert!(workspace < agent);
+        assert!(!text.contains("Code"));
+        assert!(!text.contains("Server"));
         assert!(text.contains("session · 1 workspaces"));
         assert!(text.contains("workspace · 2 tabs · 3 panes"));
-        assert!(text.contains("tab · 1 pane"));
+        assert!(!text.contains("tab · 1 pane"));
     }
 
     #[test]
-    fn rendered_worktree_workspaces_nest_between_parent_and_child_tabs() {
+    fn rendered_worktree_workspaces_are_flat_siblings_with_attached_tabs() {
         let app = worktree_topology_app();
         let backend = TestBackend::new(120, 18);
         let mut terminal = Terminal::new(backend).unwrap();
@@ -1705,7 +1778,6 @@ mod tests {
             .unwrap();
         let text = buffer_text(&terminal);
         let parent = text.lines().find(|line| line.contains("Project")).unwrap();
-        let parent_tab = text.lines().find(|line| line.contains("Code")).unwrap();
         let child_a = text
             .lines()
             .find(|line| line.contains("Feature A"))
@@ -1724,18 +1796,20 @@ mod tests {
             .unwrap();
 
         let column = |line: &str, label: &str| line[..line.find(label).unwrap()].chars().count();
-        let parent_column = column(parent, "Project");
-        let direct_child_column = column(parent_tab, "Code");
-        assert_eq!(direct_child_column + 2, column(child_a, "Feature A"));
+        let path_column = |line: &str| line.find("/tmp/").unwrap();
+        assert_eq!(column(parent, "Project"), column(child_a, "Feature A"));
         assert_eq!(column(child_a, "Feature A"), column(child_b, "Feature B"));
-        assert!(parent_column < direct_child_column);
-        assert!(direct_child_column < column(child_a_tab, "Child A Tab"));
+        assert_eq!(path_column(parent), path_column(child_a));
+        assert_eq!(path_column(child_a), path_column(child_b));
+        assert!(child_a.contains('⎇'));
+        assert!(child_b.contains('⎇'));
+        assert!(column(child_a_tab, "Child A Tab") > column(child_a, "Feature A"));
         assert_eq!(
             column(child_a_tab, "Child A Tab"),
             column(child_b_tab, "Child B Tab")
         );
-        assert!(text.find("Project").unwrap() < text.find("Code").unwrap());
-        assert!(text.find("Code").unwrap() < text.find("Feature A").unwrap());
+        assert!(!text.contains("Code"));
+        assert!(text.find("Project").unwrap() < text.find("Feature A").unwrap());
         assert!(text.find("Child A Tab").unwrap() < text.find("Feature B").unwrap());
         assert!(text.find("Feature B").unwrap() < text.find("Child B Tab").unwrap());
     }
@@ -1781,6 +1855,7 @@ mod tests {
             .find(|line| line.contains("Extremely"))
             .unwrap();
         assert!(child_line.contains('…'));
+        assert!(child_line.contains('⎇'));
         assert!(!child_line.contains("/tmp/feature-a"));
     }
 
@@ -1883,12 +1958,21 @@ mod tests {
         let mut app = topology_app("");
         app.selected = 1;
         execute_command(&mut app, Command::Collapse, key(KeyCode::Left));
-        assert_eq!(app.filtered.len(), 2 + 1); // session + workspace + agent
+        assert_eq!(app.filtered.len(), 3); // session + workspace + agent
         assert_eq!(app.selected_entry().unwrap().title, "Project");
 
         execute_command(&mut app, Command::Expand, key(KeyCode::Right));
         assert_eq!(app.filtered.len(), 5);
+        assert_eq!(app.selected_entry().unwrap().title, "Code");
+        execute_command(&mut app, Command::Collapse, key(KeyCode::Left));
         assert_eq!(app.selected_entry().unwrap().title, "Project");
+
+        let mut app = topology_app("");
+        assert!(matches!(
+            execute_command(&mut app, Command::Open, key(KeyCode::Enter)),
+            Action::Continue
+        ));
+        assert_eq!(app.selected_entry().unwrap().title, "Code");
     }
 
     #[test]

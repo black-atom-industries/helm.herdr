@@ -29,7 +29,6 @@ pub(crate) enum InputMode {
 struct OpenWorkspaceBlock {
     workspace_index: usize,
     tab_indices: Vec<usize>,
-    parent_workspace_id: Option<String>,
 }
 
 pub(crate) struct App {
@@ -235,15 +234,13 @@ impl App {
             self.initial_selection_pending = false;
             if self.query.trim().is_empty() && self.source_filter.is_none() {
                 if let Some(position) = self.filtered.iter().position(|index| {
-                    let entry = &self.entries[*index];
-                    matches!(entry.open_node, Some(OpenNode::Tab { focused: true, .. }))
-                        && matches!(
-                            entry.action,
-                            EntryAction::FocusTab {
-                                current_session: true,
-                                ..
-                            }
-                        )
+                    matches!(
+                        self.entries[*index].action,
+                        EntryAction::FocusWorkspace {
+                            current_session: true,
+                            ..
+                        }
+                    )
                 }) {
                     self.selected = position;
                 }
@@ -290,28 +287,6 @@ impl App {
                     ..
                 }) => {
                     self.expanded_sessions.insert(session_key(name.as_deref()));
-                }
-                Some(OpenNode::Workspace {
-                    session,
-                    parent_workspace_id,
-                    focused: true,
-                    ..
-                }) if matches!(
-                    &entry.action,
-                    EntryAction::FocusWorkspace {
-                        current_session: true,
-                        ..
-                    }
-                ) =>
-                {
-                    if let Some(id) = entry.workspace_id.as_deref() {
-                        self.expanded_workspaces
-                            .insert(workspace_key(session.as_deref(), id));
-                    }
-                    if let Some(parent_id) = parent_workspace_id.as_deref() {
-                        self.expanded_workspaces
-                            .insert(workspace_key(session.as_deref(), parent_id));
-                    }
                 }
                 _ => {}
             }
@@ -373,13 +348,9 @@ impl App {
                     let mut blocks = Vec::new();
                     for (index, entry) in &open[cursor + 1..end] {
                         match entry.open_node.as_ref() {
-                            Some(OpenNode::Workspace {
-                                parent_workspace_id,
-                                ..
-                            }) => blocks.push(OpenWorkspaceBlock {
+                            Some(OpenNode::Workspace { .. }) => blocks.push(OpenWorkspaceBlock {
                                 workspace_index: *index,
                                 tab_indices: Vec::new(),
-                                parent_workspace_id: parent_workspace_id.clone(),
                             }),
                             Some(OpenNode::Tab { .. }) => {
                                 if let Some(block) = blocks.last_mut() {
@@ -389,43 +360,18 @@ impl App {
                             _ => {}
                         }
                     }
-                    let mut parents = blocks
-                        .iter()
-                        .filter(|block| block.parent_workspace_id.is_none())
-                        .collect::<Vec<_>>();
-                    parents.sort_by(|left, right| {
+                    blocks.sort_by(|left, right| {
                         self.compare_open_workspace_blocks(left, right, name.as_deref())
                     });
-                    for parent in parents {
-                        let workspace = &self.entries[parent.workspace_index];
-                        indices.push(parent.workspace_index);
+                    for block in blocks {
+                        let workspace = &self.entries[block.workspace_index];
+                        indices.push(block.workspace_index);
                         let expanded = workspace.workspace_id.as_deref().is_some_and(|id| {
                             self.expanded_workspaces
                                 .contains(&workspace_key(name.as_deref(), id))
                         });
-                        if !expanded {
-                            continue;
-                        }
-                        indices.extend(parent.tab_indices.iter().copied());
-                        let parent_id = workspace.workspace_id.as_deref().unwrap_or("");
-                        let mut children = blocks
-                            .iter()
-                            .filter(|block| block.parent_workspace_id.as_deref() == Some(parent_id))
-                            .collect::<Vec<_>>();
-                        children.sort_by(|left, right| {
-                            self.compare_open_workspace_blocks(left, right, name.as_deref())
-                        });
-                        for child in children {
-                            let child_workspace = &self.entries[child.workspace_index];
-                            indices.push(child.workspace_index);
-                            let child_expanded =
-                                child_workspace.workspace_id.as_deref().is_some_and(|id| {
-                                    self.expanded_workspaces
-                                        .contains(&workspace_key(name.as_deref(), id))
-                                });
-                            if child_expanded {
-                                indices.extend(child.tab_indices.iter().copied());
-                            }
+                        if expanded {
+                            indices.extend(block.tab_indices.iter().copied());
                         }
                     }
                 }
@@ -590,6 +536,21 @@ impl App {
         }
         self.apply_filter();
         self.select_entry_index(index);
+        if matches!(
+            self.entries[index].action,
+            EntryAction::FocusWorkspace {
+                current_session: true,
+                ..
+            }
+        ) {
+            if let Some(position) = self.filtered.iter().position(|candidate| {
+                let entry = &self.entries[*candidate];
+                matches!(entry.open_node, Some(OpenNode::Tab { focused: true, .. }))
+                    && entry.workspace_id == self.entries[index].workspace_id
+            }) {
+                self.selected = position;
+            }
+        }
     }
 
     pub(crate) fn collapse_selected(&mut self) {
@@ -1806,7 +1767,7 @@ exit 0
     }
 
     #[test]
-    fn open_topology_defaults_to_current_session_and_workspace_expanded() {
+    fn open_topology_defaults_to_current_session_expanded_and_workspace_collapsed() {
         let mut app = App::new(Config::default(), Theme::load(false));
         app.entries = topology_entries();
         app.apply_filter();
@@ -1816,12 +1777,9 @@ exit 0
             .iter()
             .map(|index| app.entries[*index].title.as_str())
             .collect::<Vec<_>>();
-        assert_eq!(
-            titles,
-            vec!["work", "Current", "Code", "Server", "Other", "personal"]
-        );
+        assert_eq!(titles, vec!["work", "Current", "Other", "personal"]);
         assert!(app.expanded_sessions.contains("work"));
-        assert!(app.expanded_workspaces.contains("work::w1"));
+        assert!(!app.expanded_workspaces.contains("work::w1"));
         assert!(!app.expanded_sessions.contains("personal"));
         assert!(!app.expanded_workspaces.contains("personal::w3"));
     }
@@ -1942,12 +1900,12 @@ exit 0
     }
 
     #[test]
-    fn initial_open_selects_the_focused_tab_in_the_current_session_once() {
+    fn initial_open_selects_the_current_workspace_once() {
         let mut app = App::new(Config::default(), Theme::load(false));
         app.entries = topology_entries();
 
         app.apply_filter();
-        assert_eq!(app.selected_entry().unwrap().title, "Code");
+        assert_eq!(app.selected_entry().unwrap().title, "Current");
 
         app.apply_filter();
         assert_eq!(app.selected_entry().unwrap().title, "work");
@@ -1995,7 +1953,7 @@ exit 0
         );
 
         app.expand_selected();
-        assert_eq!(app.selected_entry().unwrap().title, "Current");
+        assert_eq!(app.selected_entry().unwrap().title, "Code");
         assert!(app
             .filtered
             .iter()
@@ -2013,7 +1971,7 @@ exit 0
                 .iter()
                 .map(|index| app.entries[*index].title.as_str())
                 .collect::<Vec<_>>(),
-            vec!["work", "Web UI", "Main", "Feature A", "Feature B", "Orphan"]
+            vec!["work", "Web UI", "Feature A", "Feature B", "Orphan"]
         );
 
         app.selected = app
@@ -2030,7 +1988,6 @@ exit 0
             vec![
                 "work",
                 "Web UI",
-                "Main",
                 "Feature A",
                 "Child A Tab",
                 "Feature B",
@@ -2053,7 +2010,14 @@ exit 0
                 .iter()
                 .map(|index| app.entries[*index].title.as_str())
                 .collect::<Vec<_>>(),
-            vec!["work", "Web UI", "Orphan"]
+            vec![
+                "work",
+                "Web UI",
+                "Feature A",
+                "Child A Tab",
+                "Feature B",
+                "Orphan"
+            ]
         );
     }
 
@@ -2068,7 +2032,7 @@ exit 0
                 .iter()
                 .map(|index| app.entries[*index].title.as_str())
                 .collect::<Vec<_>>(),
-            vec!["work", "Web UI", "Main", "Feature A", "Feature B", "Orphan"]
+            vec!["work", "Web UI", "Feature A", "Feature B", "Orphan"]
         );
 
         app.pinned_entries.clear();
@@ -2079,12 +2043,12 @@ exit 0
                 .iter()
                 .map(|index| app.entries[*index].title.as_str())
                 .collect::<Vec<_>>(),
-            vec!["work", "Web UI", "Main", "Feature A", "Feature B", "Orphan"]
+            vec!["work", "Web UI", "Feature A", "Feature B", "Orphan"]
         );
     }
 
     #[test]
-    fn focused_worktree_expands_its_parent_and_search_keeps_full_ancestry() {
+    fn focused_worktree_stays_flat_and_search_keeps_full_ancestry() {
         let mut entries = worktree_topology_entries();
         if let Some(OpenNode::Workspace { focused, .. }) = entries[1].open_node.as_mut() {
             *focused = false;
@@ -2096,9 +2060,9 @@ exit 0
         let mut app = App::new(Config::default(), Theme::load(false));
         app.entries = entries.clone();
         app.apply_filter();
-        assert!(app.expanded_workspaces.contains("work::parent"));
-        assert!(app.expanded_workspaces.contains("work::child-b"));
-        assert!(app
+        assert!(!app.expanded_workspaces.contains("work::parent"));
+        assert!(!app.expanded_workspaces.contains("work::child-b"));
+        assert!(!app
             .filtered
             .iter()
             .any(|index| app.entries[*index].title == "Unique Zebra Target"));
@@ -2129,10 +2093,7 @@ exit 0
             .iter()
             .map(|index| app.entries[*index].title.as_str())
             .collect::<Vec<_>>();
-        assert_eq!(
-            titles,
-            vec!["work", "Current", "Code", "Server", "Other", "personal"]
-        );
+        assert_eq!(titles, vec!["work", "Current", "Other", "personal"]);
     }
 
     #[test]
