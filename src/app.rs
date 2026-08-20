@@ -689,8 +689,9 @@ impl App {
         .then_some(template)
     }
 
-    pub(crate) fn open_selected(&self, use_directory_template: bool) -> Result<(), String> {
-        let e = self.selected_entry().ok_or("nothing selected")?;
+    pub(crate) fn open_selected(&mut self, use_directory_template: bool) -> Result<(), String> {
+        let e = self.selected_entry().cloned().ok_or("nothing selected")?;
+        let action_destination = recent_destination_for_entry(&e);
         let tracks_workspace_transition = self.config.jump_back.enabled
             && matches!(
                 &e.action,
@@ -736,7 +737,7 @@ impl App {
                 true,
                 true,
             ),
-            EntryAction::OpenProject => (self.open_project(e), true, true),
+            EntryAction::OpenProject => (self.open_project(&e), true, true),
             EntryAction::OpenRemote { target } => (sessions::open_remote(target), false, true),
             EntryAction::InvokePluginAction { action } => (
                 run_herdr(["plugin", "action", "invoke", action]),
@@ -770,6 +771,15 @@ impl App {
                         let _ = save_previous_workspace(previous);
                     }
                 }
+                let destination = action_destination.or_else(|| {
+                    recent_destination_after_indirect_success(
+                        &e.action,
+                        current_workspace_id().ok().as_deref(),
+                    )
+                });
+                if let Some((session, workspace_id)) = destination {
+                    self.record_recent_workspace(session.as_deref(), &workspace_id);
+                }
                 if notify_success {
                     notify_done(&format!("Opened {}", e.title), &self.config.notifications);
                 }
@@ -796,20 +806,32 @@ impl App {
             (id, e.title.clone())
         };
         let launcher = launch_workspace_id();
-        if launcher.as_deref() == Some(&id) {
+        let destination = if launcher.as_deref() == Some(&id) {
             let previous = self
                 .previous_workspace_id
                 .as_deref()
                 .filter(|previous| *previous != id)
                 .ok_or("no previous workspace to focus before closing this one")?;
             run_herdr(["workspace", "focus", previous])?;
+            Some(previous.to_string())
         } else if let Some(launcher) = launcher {
             run_herdr(["workspace", "focus", &launcher])?;
-        }
+            Some(launcher)
+        } else {
+            None
+        };
         run_herdr(["workspace", "close", &id])?;
+        if let Some(destination) = destination {
+            self.record_recent_workspace(current_session_name().as_deref(), &destination);
+        }
         notify_done(&format!("Closed {title}"), &self.config.notifications);
         self.refresh();
         Ok(())
+    }
+
+    fn record_recent_workspace(&mut self, session: Option<&str>, workspace_id: &str) {
+        self.recent_state.record(session, workspace_id);
+        self.recent_state.save();
     }
 
     fn workspace_to_close(&self, e: &Entry) -> Option<String> {
@@ -997,6 +1019,47 @@ fn recent_workspace_rank(recent_ids: &[String], workspace_id: Option<&str>) -> u
 
 fn session_key(name: Option<&str>) -> String {
     name.unwrap_or("<default>").to_string()
+}
+
+fn current_session_name() -> Option<String> {
+    env::var("HERDR_SESSION")
+        .ok()
+        .filter(|name| !name.trim().is_empty())
+}
+
+fn recent_destination_for_entry(e: &Entry) -> Option<(Option<String>, String)> {
+    match &e.action {
+        EntryAction::FocusWorkspace { session, id, .. } => Some((session.clone(), id.clone())),
+        EntryAction::FocusTab { session, .. } => e
+            .workspace_id
+            .as_ref()
+            .map(|workspace_id| (session.clone(), workspace_id.clone())),
+        EntryAction::FocusAgent { .. } => e
+            .workspace_id
+            .as_ref()
+            .map(|workspace_id| (current_session_name(), workspace_id.clone())),
+        _ => None,
+    }
+}
+
+fn recent_destination_after_indirect_success(
+    action: &EntryAction,
+    resulting_workspace_id: Option<&str>,
+) -> Option<(Option<String>, String)> {
+    matches!(
+        action,
+        EntryAction::FocusAgent { .. } | EntryAction::OpenProject | EntryAction::FocusOrCreateDir
+    )
+    .then(|| {
+        resulting_workspace_id.map(|workspace_id| (current_session_name(), workspace_id.into()))
+    })
+    .flatten()
+}
+
+fn record_persisted_recent_workspace(session: Option<&str>, workspace_id: &str) {
+    let mut state = RecentState::load();
+    state.record(session, workspace_id);
+    state.save();
 }
 
 fn workspace_key(session: Option<&str>, workspace_id: &str) -> String {
@@ -1214,6 +1277,7 @@ pub(crate) fn jump_back(config: &Config) -> Result<String, String> {
 
     run_herdr(["workspace", "focus", &previous])?;
     save_previous_workspace(&current)?;
+    record_persisted_recent_workspace(current_session_name().as_deref(), &previous);
     Ok(label)
 }
 
@@ -2352,6 +2416,53 @@ mod tests {
         );
 
         assert_eq!(entries.len(), 2);
+    }
+
+    #[test]
+    fn successful_focus_actions_resolve_workspace_destinations() {
+        let workspace = open_workspace("work", "w1", "Workspace", false);
+        assert_eq!(
+            recent_destination_for_entry(&workspace),
+            Some((Some("work".into()), "w1".into()))
+        );
+
+        let tab = open_tab("work", "w2", "w2:t1", "Tab", false);
+        assert_eq!(
+            recent_destination_for_entry(&tab),
+            Some((Some("work".into()), "w2".into()))
+        );
+
+        let mut agent = entry(Source::Agent, "/tmp", "agent");
+        agent.workspace_id = Some("w3".into());
+        agent.action = EntryAction::FocusAgent {
+            target: "pane-1".into(),
+        };
+        assert_eq!(
+            recent_destination_for_entry(&agent).map(|(_, workspace_id)| workspace_id),
+            Some("w3".into())
+        );
+    }
+
+    #[test]
+    fn indirect_success_uses_resulting_workspace_and_failure_has_no_destination() {
+        let action = EntryAction::OpenProject;
+        let destination = recent_destination_after_indirect_success(&action, Some("w4"));
+        assert_eq!(
+            destination
+                .as_ref()
+                .map(|(_, workspace_id)| workspace_id.as_str()),
+            Some("w4")
+        );
+
+        let mut state = RecentState::default();
+        if let Some((session, workspace_id)) = destination {
+            state.record(session.as_deref(), &workspace_id);
+        }
+        assert_eq!(state.sessions.len(), 1);
+        assert_eq!(state.recent_ids(current_session_name().as_deref()), &["w4"]);
+        let unchanged = state.clone();
+        assert!(recent_destination_after_indirect_success(&action, None).is_none());
+        assert_eq!(state, unchanged);
     }
 
     #[test]
