@@ -9,7 +9,7 @@ use serde::{Deserialize, Serialize};
 use crate::paths::recent_workspaces_state_path;
 
 const STATE_VERSION: u32 = 1;
-pub(crate) const DEFAULT_SESSION_KEY: &str = "default";
+pub(crate) const DEFAULT_SESSION_KEY: &str = "__default__";
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 pub(crate) struct RecentState {
@@ -149,15 +149,18 @@ mod tests {
     }
 
     #[test]
-    fn default_and_named_sessions_are_isolated() {
+    fn default_session_sentinel_does_not_collide_with_named_default() {
         let mut state = RecentState::default();
         state.record(None, "default-workspace");
-        state.record(Some("work"), "named-workspace");
+        state.record(Some("default"), "named-default-workspace");
 
         assert_eq!(state.recent_ids(None), &["default-workspace"]);
-        assert_eq!(state.recent_ids(Some("work")), &["named-workspace"]);
+        assert_eq!(
+            state.recent_ids(Some("default")),
+            &["named-default-workspace"]
+        );
         assert_eq!(session_key(None), DEFAULT_SESSION_KEY);
-        assert_ne!(session_key(None), session_key(Some("work")));
+        assert_ne!(session_key(None), session_key(Some("default")));
     }
 
     #[test]
