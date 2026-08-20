@@ -287,7 +287,8 @@ fn topology_from_json(
             .and_then(Value::as_bool)
             .unwrap_or(false);
         let repo_key = worktree_repo_key(workspace);
-        let parent_workspace_id = if is_linked_worktree(workspace) == Some(true) {
+        let linked_worktree = is_linked_worktree(workspace) == Some(true);
+        let parent_workspace_id = if linked_worktree {
             repo_key
                 .and_then(|repo_key| canonical_parent_by_repo.get(repo_key))
                 .filter(|parent_id| parent_id.as_str() != id)
@@ -305,7 +306,7 @@ fn topology_from_json(
         if let Some(repo_key) = repo_key {
             search_terms.push(repo_key.into());
         }
-        if parent_workspace_id.is_some() {
+        if linked_worktree {
             search_terms.push("worktree".into());
         }
         if focused {
@@ -330,6 +331,7 @@ fn topology_from_json(
             open_node: Some(OpenNode::Workspace {
                 session: session.name.clone(),
                 parent_workspace_id: parent_workspace_id.clone(),
+                linked_worktree,
                 focused,
                 tab_count,
                 pane_count,
@@ -912,6 +914,7 @@ mod tests {
             other_topology[1].open_node.as_ref(),
             Some(OpenNode::Workspace {
                 parent_workspace_id: None,
+                linked_worktree: true,
                 ..
             })
         ));

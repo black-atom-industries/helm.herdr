@@ -543,10 +543,20 @@ impl App {
                 ..
             }
         ) {
+            let workspace_session = match self.entries[index].open_node.as_ref() {
+                Some(OpenNode::Workspace { session, .. }) => session.as_deref(),
+                _ => return,
+            };
             if let Some(position) = self.filtered.iter().position(|candidate| {
                 let entry = &self.entries[*candidate];
-                matches!(entry.open_node, Some(OpenNode::Tab { focused: true, .. }))
-                    && entry.workspace_id == self.entries[index].workspace_id
+                matches!(
+                    entry.open_node.as_ref(),
+                    Some(OpenNode::Tab {
+                        session,
+                        focused: true,
+                        ..
+                    }) if session.as_deref() == workspace_session
+                ) && entry.workspace_id == self.entries[index].workspace_id
             }) {
                 self.selected = position;
             }
@@ -1559,6 +1569,7 @@ mod tests {
             open_node: Some(OpenNode::Workspace {
                 session: Some(session.into()),
                 parent_workspace_id: None,
+                linked_worktree: false,
                 focused,
                 tab_count: 2,
                 pane_count: 2,
@@ -1958,6 +1969,30 @@ exit 0
             .filtered
             .iter()
             .any(|index| app.entries[*index].title == "Code"));
+    }
+
+    #[test]
+    fn expanding_workspace_selects_focused_tab_from_the_same_session() {
+        let mut app = App::new(Config::default(), Theme::load(false));
+        app.entries = vec![
+            open_session("personal", false, 1),
+            open_workspace("personal", "same", "Personal", false),
+            open_tab("personal", "same", "personal:t1", "Personal Tab", true),
+            open_session("work", true, 1),
+            open_workspace("work", "same", "Work", true),
+            open_tab("work", "same", "work:t1", "Work Tab", true),
+        ];
+        app.expanded_sessions.insert("personal".into());
+        app.apply_filter();
+        app.selected = app
+            .filtered
+            .iter()
+            .position(|index| app.entries[*index].title == "Work")
+            .unwrap();
+
+        app.expand_selected();
+
+        assert_eq!(app.selected_entry().unwrap().title, "Work Tab");
     }
 
     #[test]

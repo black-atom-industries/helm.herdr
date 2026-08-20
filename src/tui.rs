@@ -877,10 +877,10 @@ fn open_entry_line(app: &App, entry: &Entry, row: usize, row_width: usize) -> Li
     let linked_worktree = matches!(
         node,
         OpenNode::Workspace {
-            parent_workspace_id: Some(_),
+            linked_worktree: true,
             ..
         }
-    ) || entry.search_terms.iter().any(|term| term == "worktree");
+    );
     let kind_column = if is_workspace {
         if linked_worktree {
             "⎇ "
@@ -1340,6 +1340,7 @@ mod tests {
         workspace.open_node = Some(OpenNode::Workspace {
             session: Some("work".into()),
             parent_workspace_id: None,
+            linked_worktree: false,
             focused: true,
             tab_count: 2,
             pane_count: 3,
@@ -1405,6 +1406,7 @@ mod tests {
         child_a.open_node = Some(OpenNode::Workspace {
             session: Some("work".into()),
             parent_workspace_id: Some("w1".into()),
+            linked_worktree: true,
             focused: false,
             tab_count: 1,
             pane_count: 1,
@@ -1883,6 +1885,25 @@ mod tests {
     }
 
     #[test]
+    fn unresolved_linked_worktree_keeps_its_marker_without_a_parent() {
+        let app = topology_app("");
+        let mut orphan = app.entries[1].clone();
+        if let Some(OpenNode::Workspace {
+            parent_workspace_id,
+            linked_worktree,
+            ..
+        }) = orphan.open_node.as_mut()
+        {
+            *parent_workspace_id = None;
+            *linked_worktree = true;
+        }
+
+        assert!(open_entry_line(&app, &orphan, 0, 80)
+            .to_string()
+            .contains("⎇"));
+    }
+
+    #[test]
     fn non_current_duplicate_workspace_id_does_not_get_previous_marker() {
         let mut app = topology_app("");
         app.previous_workspace_id = Some("w1".into());
@@ -1895,6 +1916,7 @@ mod tests {
         other.open_node = Some(OpenNode::Workspace {
             session: Some("personal".into()),
             parent_workspace_id: None,
+            linked_worktree: false,
             focused: false,
             tab_count: 2,
             pane_count: 3,
@@ -1912,6 +1934,7 @@ mod tests {
         previous.open_node = Some(OpenNode::Workspace {
             session: Some("work".into()),
             parent_workspace_id: None,
+            linked_worktree: false,
             focused: false,
             tab_count: 2,
             pane_count: 3,

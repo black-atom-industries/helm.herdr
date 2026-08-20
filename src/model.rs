@@ -125,6 +125,7 @@ pub(crate) enum OpenNode {
     Workspace {
         session: Option<String>,
         parent_workspace_id: Option<String>,
+        linked_worktree: bool,
         focused: bool,
         tab_count: i64,
         pane_count: i64,
