@@ -35,6 +35,10 @@ fn copy_missing_files(from: &Path, to: &Path) -> io::Result<()> {
     }
     Ok(())
 }
+pub(crate) fn recent_workspaces_state_path() -> PathBuf {
+    plugin_config_dir().join("recent-workspaces.json")
+}
+
 pub(crate) fn herdr_plus_projects_dir() -> PathBuf {
     home().join(".config/herdr/plugins/config/cloudmanic.herdr-plus/projects")
 }
@@ -69,6 +73,18 @@ pub(crate) fn canonical_str(path: &Path) -> Option<String> {
 mod tests {
     use super::*;
     use std::time::{SystemTime, UNIX_EPOCH};
+
+    #[test]
+    fn recent_workspaces_state_uses_plugin_config_directory() {
+        assert_eq!(
+            recent_workspaces_state_path().file_name().unwrap(),
+            "recent-workspaces.json"
+        );
+        assert_eq!(
+            recent_workspaces_state_path().parent().unwrap(),
+            plugin_config_dir()
+        );
+    }
 
     #[test]
     fn legacy_config_files_copy_without_overwriting_new_values() {

@@ -11,6 +11,7 @@ mod keymap;
 mod matcher;
 mod model;
 mod paths;
+mod recent;
 mod sources;
 mod theme;
 mod tui;
