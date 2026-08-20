@@ -9,7 +9,9 @@ use serde::{Deserialize, Serialize};
 use crate::paths::recent_workspaces_state_path;
 
 const STATE_VERSION: u32 = 1;
-pub(crate) const DEFAULT_SESSION_KEY: &str = "__default__";
+pub(crate) const DEFAULT_SESSION_KEY: &str = "d";
+const NAMED_SESSION_PREFIX: &str = "n:";
+const LEGACY_DEFAULT_SESSION_KEYS: [&str; 2] = ["default", "__default__"];
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 pub(crate) struct RecentState {
@@ -32,7 +34,7 @@ impl RecentState {
     }
 
     pub(crate) fn load_from(path: &Path) -> io::Result<Self> {
-        let state: Self = serde_json::from_slice(&fs::read(path)?)
+        let mut state: Self = serde_json::from_slice(&fs::read(path)?)
             .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?;
         if state.version != STATE_VERSION {
             return Err(io::Error::new(
@@ -40,6 +42,7 @@ impl RecentState {
                 format!("unsupported recent state version {}", state.version),
             ));
         }
+        state.migrate_legacy_session_keys();
         Ok(state)
     }
 
@@ -63,20 +66,15 @@ impl RecentState {
     }
 
     pub(crate) fn recent_ids(&self, session: Option<&str>) -> &[String] {
-        self.sessions
-            .get(session_key(session))
-            .map(Vec::as_slice)
-            .unwrap_or(&[])
+        let key = session_key(session);
+        self.sessions.get(&key).map(Vec::as_slice).unwrap_or(&[])
     }
 
     pub(crate) fn record(&mut self, session: Option<&str>, workspace_id: &str) {
         if workspace_id.is_empty() {
             return;
         }
-        let history = self
-            .sessions
-            .entry(session_key(session).to_string())
-            .or_default();
+        let history = self.sessions.entry(session_key(session)).or_default();
         history.retain(|id| id != workspace_id);
         history.insert(0, workspace_id.to_string());
     }
@@ -107,15 +105,57 @@ impl RecentState {
         }
 
         self.sessions
-            .insert(session_key(session).to_string(), normalized.clone());
+            .insert(session_key(session), normalized.clone());
         normalized
+    }
+
+    fn migrate_legacy_session_keys(&mut self) {
+        if self.sessions.keys().all(|key| is_encoded_session_key(key)) {
+            return;
+        }
+
+        let legacy = std::mem::take(&mut self.sessions);
+        let mut migrated = BTreeMap::new();
+        for (key, history) in legacy {
+            let encoded_key = if LEGACY_DEFAULT_SESSION_KEYS.contains(&key.as_str()) {
+                DEFAULT_SESSION_KEY.to_string()
+            } else {
+                named_session_key(&key)
+            };
+            migrated
+                .entry(encoded_key)
+                .or_insert_with(Vec::new)
+                .extend(history);
+        }
+        self.sessions = migrated;
     }
 }
 
-pub(crate) fn session_key(session: Option<&str>) -> &str {
+pub(crate) fn session_key(session: Option<&str>) -> String {
     session
         .filter(|name| !name.is_empty())
-        .unwrap_or(DEFAULT_SESSION_KEY)
+        .map(named_session_key)
+        .unwrap_or_else(|| DEFAULT_SESSION_KEY.to_string())
+}
+
+fn named_session_key(name: &str) -> String {
+    let mut encoded = String::with_capacity(NAMED_SESSION_PREFIX.len() + name.len() * 2);
+    encoded.push_str(NAMED_SESSION_PREFIX);
+    for byte in name.as_bytes() {
+        encoded.push_str(&format!("{byte:02x}"));
+    }
+    encoded
+}
+
+fn is_encoded_session_key(key: &str) -> bool {
+    key == DEFAULT_SESSION_KEY
+        || key
+            .strip_prefix(NAMED_SESSION_PREFIX)
+            .is_some_and(|encoded| {
+                !encoded.is_empty()
+                    && encoded.len() % 2 == 0
+                    && encoded.bytes().all(|byte| byte.is_ascii_hexdigit())
+            })
 }
 
 #[cfg(test)]
@@ -149,18 +189,36 @@ mod tests {
     }
 
     #[test]
-    fn default_session_sentinel_does_not_collide_with_named_default() {
+    fn encoded_default_key_does_not_collide_with_named_sentinel() {
         let mut state = RecentState::default();
         state.record(None, "default-workspace");
-        state.record(Some("default"), "named-default-workspace");
+        state.record(Some("__default__"), "named-sentinel-workspace");
 
         assert_eq!(state.recent_ids(None), &["default-workspace"]);
         assert_eq!(
-            state.recent_ids(Some("default")),
-            &["named-default-workspace"]
+            state.recent_ids(Some("__default__")),
+            &["named-sentinel-workspace"]
         );
         assert_eq!(session_key(None), DEFAULT_SESSION_KEY);
-        assert_ne!(session_key(None), session_key(Some("default")));
+        assert_ne!(session_key(None), session_key(Some("__default__")));
+        assert_eq!(state.sessions.len(), 2);
+    }
+
+    #[test]
+    fn load_migrates_legacy_default_key() {
+        let path = temp_path("legacy-default");
+        fs::write(
+            &path,
+            br#"{"version":1,"sessions":{"default":["old-workspace"]}}"#,
+        )
+        .unwrap();
+
+        let state = RecentState::load_from(&path).unwrap();
+
+        assert_eq!(state.recent_ids(None), &["old-workspace"]);
+        assert!(!state.sessions.contains_key("default"));
+        assert!(state.sessions.contains_key(DEFAULT_SESSION_KEY));
+        let _ = fs::remove_file(path);
     }
 
     #[test]
