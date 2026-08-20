@@ -233,23 +233,7 @@ fn execute_command(app: &mut App, command: Command, key: KeyEvent) -> Action {
                 Action::Quit
             }
         }
-        Command::Open => {
-            let drills_into_tabs = app.selected_entry().is_some_and(|entry| {
-                matches!(
-                    entry.action,
-                    EntryAction::FocusWorkspace {
-                        current_session: true,
-                        ..
-                    }
-                )
-            });
-            if drills_into_tabs {
-                app.expand_selected();
-                Action::Continue
-            } else {
-                Action::Open
-            }
-        }
+        Command::Open => Action::Open,
         Command::OpenTemplate => Action::OpenTemplate,
         Command::Update => Action::Update,
         Command::MoveUp => {
@@ -566,17 +550,6 @@ fn entry_status(entry: &Entry) -> Option<&str> {
 
 fn entry_metadata(entry: &Entry) -> String {
     match entry.source {
-        Source::Agent => {
-            let metadata = entry
-                .subtitle
-                .split_once(" · ")
-                .map(|(_, metadata)| metadata)
-                .unwrap_or("");
-            metadata
-                .split_once(" · ")
-                .map(|(pane, tab)| format!("{tab} · {pane}"))
-                .unwrap_or_else(|| metadata.to_string())
-        }
         Source::Workspace => {
             let metadata = entry
                 .subtitle
@@ -767,15 +740,84 @@ fn flat_branch_prefix(app: &App, entry: &Entry, row: usize) -> String {
     }
 }
 
+#[derive(Clone, Copy)]
+struct DetailedLayout {
+    prefix_width: usize,
+    title_width: usize,
+    marker_width: usize,
+    right_width: usize,
+}
+
+fn detailed_layout(app: &App, row_width: usize) -> DetailedLayout {
+    let searching = !app.query.trim().is_empty();
+    let prefix_width = app
+        .filtered
+        .iter()
+        .enumerate()
+        .filter_map(|(row, index)| {
+            let entry = &app.entries[*index];
+            match entry.open_node.as_ref()? {
+                OpenNode::Session { .. } => Some(6),
+                OpenNode::Workspace { .. } | OpenNode::Tab { .. } => {
+                    let branch = if searching {
+                        topology_branch_prefix(app, entry, row)
+                    } else {
+                        flat_branch_prefix(app, entry, row)
+                    };
+                    Some(branch.chars().count() + 2)
+                }
+            }
+        })
+        .max()
+        .unwrap_or(8)
+        .max(8);
+    let marker_width = if row_width >= 80 { 10 } else { 4 };
+    let state_width = app
+        .filtered
+        .iter()
+        .filter_map(|index| {
+            let entry = &app.entries[*index];
+            (entry.open_node.is_none())
+                .then(|| entry_status(entry))
+                .flatten()
+                .filter(|status| *status != "unknown")
+                .map(|status| status.chars().count())
+        })
+        .max()
+        .unwrap_or(0);
+    let right_width = metadata_width(row_width.saturating_add(3) as u16)
+        .max(state_width)
+        .min(row_width.saturating_sub(prefix_width + marker_width + 4));
+    let right_separator = usize::from(right_width > 0);
+    let content_width = row_width
+        .saturating_sub(prefix_width)
+        .saturating_sub(marker_width)
+        .saturating_sub(right_width)
+        .saturating_sub(right_separator);
+    let title_width = content_width.min(48) / 2;
+    DetailedLayout {
+        prefix_width,
+        title_width,
+        marker_width,
+        right_width,
+    }
+}
+
+fn worktree_label(row_width: usize) -> &'static str {
+    if row_width >= 80 {
+        "WORKTREE"
+    } else {
+        "WT"
+    }
+}
+
 fn open_entry_line(app: &App, entry: &Entry, row: usize, row_width: usize) -> Line<'static> {
     let node = entry.open_node.as_ref().expect("open topology entry");
     let searching = !app.query.trim().is_empty();
-    let (prefix, prefix_color, marker, marker_color, metadata) = match node {
-        OpenNode::Session {
-            name,
-            workspace_count,
-            ..
-        } => {
+    let is_session = matches!(node, OpenNode::Session { .. });
+    let session_banner = is_session && app.config.picker.detailed_rows;
+    let (prefix, prefix_color, marker, marker_color) = match node {
+        OpenNode::Session { name, .. } => {
             let expanded = searching
                 || app
                     .expanded_sessions
@@ -783,17 +825,16 @@ fn open_entry_line(app: &App, entry: &Entry, row: usize, row_width: usize) -> Li
             (
                 format!("  {} ", if expanded { '▾' } else { '▸' }),
                 app.theme.mauve,
-                "  ".to_string(),
+                if app.config.picker.detailed_rows {
+                    String::new()
+                } else {
+                    "  ".to_string()
+                },
                 app.theme.accent,
-                format!("session · {workspace_count} workspaces"),
             )
         }
         OpenNode::Workspace {
-            session,
-            focused,
-            tab_count,
-            pane_count,
-            ..
+            session, focused, ..
         } => {
             let expanded = searching
                 || entry.workspace_id.as_deref().is_some_and(|id| {
@@ -837,14 +878,9 @@ fn open_entry_line(app: &App, entry: &Entry, row: usize, row_width: usize) -> Li
                     "  ".to_string()
                 },
                 marker_color,
-                format!("workspace · {tab_count} tabs · {pane_count} panes"),
             )
         }
-        OpenNode::Tab {
-            focused,
-            pane_count,
-            ..
-        } => (
+        OpenNode::Tab { focused, .. } => (
             if searching {
                 topology_branch_prefix(app, entry, row)
             } else {
@@ -853,26 +889,17 @@ fn open_entry_line(app: &App, entry: &Entry, row: usize, row_width: usize) -> Li
             app.theme.overlay0,
             if *focused { "● " } else { "  " }.to_string(),
             app.theme.green,
-            format!(
-                "tab · {pane_count} {}",
-                if *pane_count == 1 { "pane" } else { "panes" }
-            ),
         ),
     };
 
-    let fixed_width = prefix.chars().count() + marker.chars().count();
-    let available = row_width.saturating_sub(fixed_width);
-    let metadata_budget = if available >= 36 {
-        metadata.chars().count().min((available / 3).max(14))
+    let layout = detailed_layout(app, row_width);
+    let raw_prefix_width = prefix.chars().count() + marker.chars().count();
+    let prefix_width = if app.config.picker.detailed_rows && !is_session {
+        layout.prefix_width
     } else {
-        0
+        raw_prefix_width
     };
-    let metadata = truncate_end(&metadata, metadata_budget);
-    let metadata_separator = usize::from(!metadata.is_empty());
-    let content_budget = available
-        .saturating_sub(metadata.chars().count())
-        .saturating_sub(metadata_separator);
-
+    let prefix_padding = " ".repeat(prefix_width.saturating_sub(raw_prefix_width));
     let is_workspace = matches!(node, OpenNode::Workspace { .. });
     let linked_worktree = matches!(
         node,
@@ -881,14 +908,16 @@ fn open_entry_line(app: &App, entry: &Entry, row: usize, row_width: usize) -> Li
             ..
         }
     );
-    let kind_column = if is_workspace {
+    let kind_column = if app.config.picker.detailed_rows {
         if linked_worktree {
-            "⎇ "
+            format!("  {}", worktree_label(row_width))
         } else {
-            "  "
+            " ".repeat(layout.marker_width)
         }
+    } else if linked_worktree {
+        "⎇ ".to_string()
     } else {
-        ""
+        String::new()
     };
     let kind_width = kind_column.chars().count();
     let raw_path = if app.config.picker.detailed_rows && is_workspace {
@@ -896,8 +925,24 @@ fn open_entry_line(app: &App, entry: &Entry, row: usize, row_width: usize) -> Li
     } else {
         String::new()
     };
-    let show_path = !raw_path.is_empty() && content_budget >= 24 + kind_width;
-    let title_budget = if show_path {
+    let fixed_width = prefix_width;
+    let content_budget =
+        row_width
+            .saturating_sub(fixed_width)
+            .saturating_sub(if app.config.picker.detailed_rows {
+                layout.right_width + usize::from(layout.right_width > 0)
+            } else {
+                0
+            });
+    let show_path = !raw_path.is_empty()
+        && content_budget
+            > layout
+                .title_width
+                .saturating_add(kind_width)
+                .saturating_add(2);
+    let title_budget = if app.config.picker.detailed_rows {
+        layout.title_width
+    } else if show_path {
         content_budget
             .saturating_sub(kind_width)
             .saturating_sub(2)
@@ -908,7 +953,7 @@ fn open_entry_line(app: &App, entry: &Entry, row: usize, row_width: usize) -> Li
     };
     let title = truncate_end(display_title(entry), title_budget);
     let title_len = title.chars().count();
-    let title_column_width = if is_workspace {
+    let title_column_width = if app.config.picker.detailed_rows || is_workspace {
         title_budget
     } else {
         title.chars().count()
@@ -922,37 +967,62 @@ fn open_entry_line(app: &App, entry: &Entry, row: usize, row_width: usize) -> Li
         .filter(|path| !path.is_empty())
         .map(|path| format!("  {path}"))
         .unwrap_or_default();
-    let occupied = fixed_width
-        + title_column_width
-        + kind_width
-        + path_text.chars().count()
-        + metadata_separator
-        + metadata.chars().count();
+    let occupied = fixed_width + title_column_width + kind_width + path_text.chars().count();
     let spacer = " ".repeat(row_width.saturating_sub(occupied));
     Line::from(vec![
-        Span::styled(prefix, Style::default().fg(prefix_color)),
+        Span::styled(
+            prefix,
+            Style::default()
+                .fg(if session_banner {
+                    app.theme.panel_bg
+                } else {
+                    prefix_color
+                })
+                .add_modifier(if session_banner {
+                    Modifier::BOLD
+                } else {
+                    Modifier::empty()
+                }),
+        ),
         Span::styled(marker, Style::default().fg(marker_color)),
-        Span::styled(title, Style::default().fg(app.theme.text)),
+        Span::raw(prefix_padding),
+        Span::styled(
+            title,
+            Style::default()
+                .fg(if session_banner {
+                    app.theme.panel_bg
+                } else {
+                    app.theme.text
+                })
+                .add_modifier(if session_banner {
+                    Modifier::BOLD
+                } else {
+                    Modifier::empty()
+                }),
+        ),
         Span::raw(" ".repeat(title_column_width.saturating_sub(title_len))),
         Span::styled(
             kind_column,
-            Style::default().fg(if linked_worktree {
-                app.theme.teal
-            } else {
-                app.theme.overlay0
-            }),
+            Style::default()
+                .fg(if linked_worktree {
+                    app.theme.teal
+                } else {
+                    app.theme.overlay0
+                })
+                .add_modifier(if linked_worktree && app.config.picker.detailed_rows {
+                    Modifier::BOLD
+                } else {
+                    Modifier::empty()
+                }),
         ),
         Span::styled(path_text, Style::default().fg(app.theme.subtext0)),
         Span::raw(spacer),
-        Span::styled(
-            if metadata.is_empty() {
-                String::new()
-            } else {
-                format!(" {metadata}")
-            },
-            Style::default().fg(app.theme.overlay0),
-        ),
     ])
+    .style(if session_banner {
+        Style::default().bg(app.theme.accent)
+    } else {
+        Style::default()
+    })
 }
 
 fn entry_branch(app: &App, entry: &Entry, group_end: bool) -> (&'static str, Color) {
@@ -980,6 +1050,7 @@ fn entry_branch(app: &App, entry: &Entry, group_end: bool) -> (&'static str, Col
 fn draw_list(f: &mut Frame, app: &App, area: Rect) -> ListHits {
     let show_scores = !app.query.trim().is_empty();
     let row_width = area.width.saturating_sub(3) as usize;
+    let detailed_layout = detailed_layout(app, row_width);
     let mut items = Vec::new();
     let mut item_entries = Vec::new();
     let mut selected_row = None;
@@ -1008,54 +1079,66 @@ fn draw_list(f: &mut Frame, app: &App, area: Rect) -> ListHits {
             .flatten();
 
         if e.open_node.is_some() {
-            items.push(ListItem::new(open_entry_line(app, e, row, row_width)));
+            let item = ListItem::new(open_entry_line(app, e, row, row_width));
+            items.push(
+                if app.config.picker.detailed_rows
+                    && matches!(e.open_node.as_ref(), Some(OpenNode::Session { .. }))
+                {
+                    item.style(Style::default().bg(app.theme.accent))
+                } else {
+                    item
+                },
+            );
         } else if app.config.picker.detailed_rows {
             let status = entry_status(e);
             let icon = status
-                .map(|status| format!("{} ", status_icon_at(&e.source, status, app.spinner_tick)))
-                .unwrap_or_else(|| "  ".into());
-            let status_label = status.filter(|status| *status != "unknown");
+                .map(|status| format!("{}  ", status_icon_at(&e.source, status, app.spinner_tick)))
+                .unwrap_or_else(|| "   ".into());
+            let status_label = status
+                .filter(|status| *status != "unknown")
+                .map(|status| truncate_end(status, detailed_layout.right_width));
             let raw_path = e.path.display().to_string();
-            let raw_metadata = entry_metadata(e);
-            let meta_width = metadata_width(area.width);
+            let raw_metadata = if e.source == Source::Agent {
+                String::new()
+            } else {
+                entry_metadata(e)
+            };
             let show_metadata = !matches!(e.source, Source::Zoxide | Source::Root)
-                && meta_width > 0
+                && detailed_layout.right_width > 0
                 && !raw_metadata.is_empty()
                 && raw_metadata != raw_path;
             let separator_width = usize::from(show_metadata && status_label.is_some()) * 3;
-            let metadata_budget = meta_width
-                .saturating_sub(
-                    status_label
-                        .map(str::chars)
-                        .map(Iterator::count)
-                        .unwrap_or(0),
-                )
+            let status_width = status_label
+                .as_deref()
+                .map(str::chars)
+                .map(Iterator::count)
+                .unwrap_or(0);
+            let metadata_budget = detailed_layout
+                .right_width
+                .saturating_sub(status_width)
                 .saturating_sub(separator_width);
             let metadata = if show_metadata {
                 truncate_end(&raw_metadata, metadata_budget)
             } else {
                 String::new()
             };
-            let right_width = metadata.chars().count()
-                + separator_width
-                + status_label
-                    .map(str::chars)
-                    .map(Iterator::count)
-                    .unwrap_or(0);
-            let right_column_width = if right_width > 0 {
-                meta_width.max(right_width)
-            } else {
-                0
-            };
-            let fixed_width = branch.chars().count() + icon.chars().count();
-            let content_width = row_width.saturating_sub(fixed_width);
-            let title_width = content_width.min(48) / 2;
-            let path_width = content_width
-                .saturating_sub(title_width)
-                .saturating_sub(1)
-                .saturating_sub(right_column_width)
-                .saturating_sub(usize::from(right_width > 0));
-            let title = truncate_end(display_title(e), title_width);
+            let right_width = status_width
+                + usize::from(!metadata.is_empty() && status_label.is_some()) * 3
+                + metadata.chars().count();
+            let raw_prefix_width = branch.chars().count() + icon.chars().count();
+            let prefix_padding = " ".repeat(
+                detailed_layout
+                    .prefix_width
+                    .saturating_sub(raw_prefix_width),
+            );
+            let path_width = row_width
+                .saturating_sub(detailed_layout.prefix_width)
+                .saturating_sub(detailed_layout.title_width)
+                .saturating_sub(detailed_layout.marker_width)
+                .saturating_sub(2)
+                .saturating_sub(detailed_layout.right_width)
+                .saturating_sub(usize::from(detailed_layout.right_width > 0));
+            let title = truncate_end(display_title(e), detailed_layout.title_width);
             let path = truncate_end(&display_path(e), path_width);
             let status_color = status
                 .map(|status| agent_status_color(&app.theme, status))
@@ -1063,13 +1146,21 @@ fn draw_list(f: &mut Frame, app: &App, area: Rect) -> ListHits {
             let mut title_spans = vec![
                 Span::styled(branch, Style::default().fg(branch_color)),
                 Span::styled(icon, Style::default().fg(status_color)),
+                Span::raw(prefix_padding),
                 Span::styled(title.clone(), Style::default().fg(app.theme.text)),
-                Span::raw(" ".repeat(title_width.saturating_sub(title.chars().count()))),
-                Span::raw(" "),
+                Span::raw(
+                    " ".repeat(
+                        detailed_layout
+                            .title_width
+                            .saturating_sub(title.chars().count()),
+                    ),
+                ),
+                Span::raw(" ".repeat(detailed_layout.marker_width)),
+                Span::raw("  "),
                 Span::styled(path.clone(), Style::default().fg(app.theme.subtext0)),
                 Span::raw(" ".repeat(path_width.saturating_sub(path.chars().count()))),
             ];
-            if right_width > 0 {
+            if detailed_layout.right_width > 0 {
                 title_spans.push(Span::raw(" "));
                 if let Some(status_label) = status_label {
                     title_spans.push(Span::styled(
@@ -1087,6 +1178,9 @@ fn draw_list(f: &mut Frame, app: &App, area: Rect) -> ListHits {
                         Style::default().fg(app.theme.overlay0),
                     ));
                 }
+                title_spans.push(Span::raw(
+                    " ".repeat(detailed_layout.right_width.saturating_sub(right_width)),
+                ));
             }
             items.push(ListItem::new(Line::from(title_spans)));
         } else {
@@ -1137,13 +1231,20 @@ fn draw_list(f: &mut Frame, app: &App, area: Rect) -> ListHits {
     state.select(selected_row);
     let block = Block::default().title(" Results ").borders(Borders::RIGHT);
     let list_area = block.inner(area);
+    let selected_session_banner = app.config.picker.detailed_rows
+        && app.selected_entry().is_some_and(|entry| {
+            matches!(entry.open_node.as_ref(), Some(OpenNode::Session { .. }))
+        });
+    let highlight_style = if selected_session_banner {
+        Style::default().add_modifier(Modifier::BOLD)
+    } else {
+        Style::default()
+            .bg(app.theme.surface0)
+            .add_modifier(Modifier::BOLD)
+    };
     let list = List::new(items)
         .block(block)
-        .highlight_style(
-            Style::default()
-                .bg(app.theme.surface0)
-                .add_modifier(Modifier::BOLD),
-        )
+        .highlight_style(highlight_style)
         .highlight_symbol("→ ");
     f.render_stateful_widget(list, area, &mut state);
 
@@ -1584,8 +1685,8 @@ mod tests {
         let text = buffer_text(&terminal);
         let buffer = terminal.backend().buffer();
 
-        assert!(text.contains("  ◆    Current"));
-        assert!(text.contains("  ◆    Previous"));
+        assert!(text.contains("  ◆     Current"));
+        assert!(text.contains("  ◆     Previous"));
         assert!(!text.contains("├─ ◆"));
         assert!(buffer
             .content()
@@ -1676,21 +1777,12 @@ mod tests {
     }
 
     #[test]
-    fn detailed_rows_align_paths_on_one_line() {
-        let mut app = App::new(Config::default(), Theme::load(false));
-        let mut workspace = entry(Source::Workspace, "dir: demo");
-        workspace.path = PathBuf::from("/work/demo");
-        workspace.subtitle = "agent:blocked · w1 tabs:2 panes:3".into();
-        let mut agent = entry(Source::Agent, "claude · demo");
-        agent.path = PathBuf::from("/work/agent-demo");
-        agent.subtitle = "working · w1:p2 · w1:t1".into();
-        let mut root = entry(Source::Root, "root-demo");
-        root.path = PathBuf::from("/projects/root-demo");
-        root.subtitle = "/projects/root-demo".into();
-        app.entries = vec![workspace, agent, root];
-        app.filtered = vec![0, 1, 2];
-        app.filtered_scores = vec![0, 0, 0];
-        app.selected = usize::MAX;
+    fn detailed_open_session_is_a_full_width_banner() {
+        let mut app = topology_app("");
+        app.entries[0].title = "imfusion".into();
+        app.expanded_workspaces.insert("work::w1".into());
+        app.apply_filter();
+        app.selected = 1;
 
         let backend = TestBackend::new(90, 10);
         let mut terminal = Terminal::new(backend).unwrap();
@@ -1699,25 +1791,191 @@ mod tests {
                 draw_list(f, &app, f.area());
             })
             .unwrap();
+
         let text = buffer_text(&terminal);
-        let workspace_line = text.lines().find(|line| line.contains("● demo")).unwrap();
-        let agent_line = text
+        let session_y = text
             .lines()
-            .find(|line| line.contains("⠋ claude · demo"))
-            .unwrap();
-        let root_line = text
-            .lines()
-            .find(|line| line.contains("root-demo"))
+            .position(|line| line.contains("imfusion"))
+            .unwrap() as u16;
+        let session_line = text.lines().nth(session_y as usize).unwrap();
+        let chevron_x = session_line[..session_line.find('▾').unwrap()]
+            .chars()
+            .count() as u16;
+        let session_x = session_line[..session_line.find("imfusion").unwrap()]
+            .chars()
+            .count() as u16;
+        let list_x = 0;
+        let content_right = 90 - 1;
+        let buffer = terminal.backend().buffer();
+
+        assert_eq!(session_x, chevron_x + 2);
+        assert_eq!(buffer[(chevron_x + 1, session_y)].symbol(), " ");
+        assert!((list_x..content_right).all(|x| buffer[(x, session_y)].bg == app.theme.accent));
+        assert!(
+            (std::iter::once(chevron_x).chain(session_x..session_x + 8)).all(|x| {
+                let cell = &buffer[(x, session_y)];
+                cell.fg == app.theme.panel_bg && cell.modifier.contains(Modifier::BOLD)
+            })
+        );
+    }
+
+    #[test]
+    fn selected_detailed_open_session_keeps_the_banner_and_arrow() {
+        let mut app = topology_app("");
+        app.entries[0].title = "imfusion".into();
+        app.expanded_workspaces.insert("work::w1".into());
+        app.apply_filter();
+        app.selected = 0;
+
+        let backend = TestBackend::new(90, 10);
+        let mut terminal = Terminal::new(backend).unwrap();
+        terminal
+            .draw(|f| {
+                draw_list(f, &app, f.area());
+            })
             .unwrap();
 
-        let column = |line: &str, path: &str| line[..line.find(path).unwrap()].chars().count();
-        let workspace_path = column(workspace_line, &display_path(&app.entries[0]));
-        let agent_path = column(agent_line, &display_path(&app.entries[1]));
-        let root_path = column(root_line, &display_path(&app.entries[2]));
-        assert_eq!(workspace_path, agent_path);
-        assert_eq!(workspace_path, root_path);
-        assert!(workspace_line.find("blocked · 2 tabs · 3 panes").unwrap() > workspace_path);
-        assert!(agent_line.find("working · w1:t1 · w1:p2").unwrap() > agent_path);
+        let text = buffer_text(&terminal);
+        let session_y = text
+            .lines()
+            .position(|line| line.contains("imfusion"))
+            .unwrap() as u16;
+        let session_line = text.lines().nth(session_y as usize).unwrap();
+        let arrow_x = session_line[..session_line.find('→').unwrap()]
+            .chars()
+            .count() as u16;
+        let chevron_x = session_line[..session_line.find('▾').unwrap()]
+            .chars()
+            .count() as u16;
+        let session_x = session_line[..session_line.find("imfusion").unwrap()]
+            .chars()
+            .count() as u16;
+        let list_x = 0;
+        let content_right = 90 - 1;
+        let buffer = terminal.backend().buffer();
+
+        assert_eq!(buffer[(arrow_x, session_y)].symbol(), "→");
+        assert_eq!(session_x, chevron_x + 2);
+        assert_eq!(buffer[(chevron_x + 1, session_y)].symbol(), " ");
+        assert!((list_x..content_right).all(|x| buffer[(x, session_y)].bg == app.theme.accent));
+        assert!(
+            (std::iter::once(chevron_x).chain(session_x..session_x + 8)).all(|x| {
+                let cell = &buffer[(x, session_y)];
+                cell.fg == app.theme.panel_bg && cell.modifier.contains(Modifier::BOLD)
+            })
+        );
+    }
+
+    #[test]
+    fn mixed_detailed_sections_share_columns_and_only_show_agent_state() {
+        let mut app = topology_app("");
+        if let Some(OpenNode::Workspace {
+            linked_worktree, ..
+        }) = app.entries[1].open_node.as_mut()
+        {
+            *linked_worktree = true;
+        }
+        app.entries[4].path = PathBuf::from("/tmp/agent");
+        app.entries[4].subtitle = "working · w1:p2 · w1:t1".into();
+        let mut root = entry(Source::Root, "Root project");
+        root.path = PathBuf::from("/tmp/root");
+        app.entries.push(root);
+        app.apply_filter();
+        app.selected = usize::MAX;
+
+        let backend = TestBackend::new(110, 12);
+        let mut terminal = Terminal::new(backend).unwrap();
+        terminal
+            .draw(|f| {
+                draw_list(f, &app, f.area());
+            })
+            .unwrap();
+        let text = buffer_text(&terminal);
+        let workspace_line = text.lines().find(|line| line.contains("Project")).unwrap();
+        let agent_line = text.lines().find(|line| line.contains("claude")).unwrap();
+        let root_line = text
+            .lines()
+            .find(|line| line.contains("Root project"))
+            .unwrap();
+
+        assert!(workspace_line.contains("WORKTREE  /tmp/project"));
+        assert!(agent_line.contains("working"));
+        assert!(!text.contains("session · 1 workspaces"));
+        assert!(!text.contains("workspace · 2 tabs · 3 panes"));
+        assert!(!text.contains("w1:p2"));
+        assert!(!text.contains("w1:t1"));
+
+        let column = |line: &str, value: &str| line[..line.find(value).unwrap()].chars().count();
+        assert_eq!(column(workspace_line, "Project"), 8);
+        assert_eq!(column(agent_line, "claude"), 8);
+        assert_eq!(column(root_line, "Root project"), 8);
+        let workspace_path = column(workspace_line, "/tmp/project");
+        assert_eq!(workspace_path, column(agent_line, "/tmp/agent"));
+        assert_eq!(workspace_path, column(root_line, "/tmp/root"));
+        assert_eq!(column(agent_line, "working"), 79);
+
+        let marker_x = workspace_line[..workspace_line.find("WORKTREE").unwrap()]
+            .chars()
+            .count() as u16;
+        let marker_y = text
+            .lines()
+            .position(|line| line.contains("WORKTREE"))
+            .unwrap() as u16;
+        let buffer = terminal.backend().buffer();
+        assert!((marker_x..marker_x + "WORKTREE".len() as u16)
+            .all(|x| buffer[(x, marker_y)].modifier.contains(Modifier::BOLD)));
+    }
+
+    #[test]
+    fn narrow_detailed_sections_use_bold_wt_and_keep_paths_aligned() {
+        let mut app = topology_app("");
+        if let Some(OpenNode::Workspace {
+            linked_worktree, ..
+        }) = app.entries[1].open_node.as_mut()
+        {
+            *linked_worktree = true;
+        }
+        app.entries[1].path = PathBuf::from("/a");
+        app.entries[4].title = "agent".into();
+        app.entries[4].path = PathBuf::from("/b");
+        app.entries[4].subtitle = "idle · w1:p1 · w1:t1".into();
+        let mut root = entry(Source::Root, "root");
+        root.path = PathBuf::from("/c");
+        app.entries.push(root);
+        app.apply_filter();
+        app.selected = usize::MAX;
+
+        let backend = TestBackend::new(50, 12);
+        let mut terminal = Terminal::new(backend).unwrap();
+        terminal
+            .draw(|f| {
+                draw_list(f, &app, f.area());
+            })
+            .unwrap();
+        let text = buffer_text(&terminal);
+        let workspace_line = text.lines().find(|line| line.contains("Project")).unwrap();
+        let agent_line = text.lines().find(|line| line.contains("/b")).unwrap();
+        let root_line = text.lines().find(|line| line.contains("/c")).unwrap();
+
+        assert!(workspace_line.contains("WT  /a"));
+        assert!(agent_line.contains("idle"));
+        assert!(!text.contains("WORKTREE"));
+        let column = |line: &str, value: &str| line[..line.find(value).unwrap()].chars().count();
+        assert_eq!(column(workspace_line, "Project"), 8);
+        assert_eq!(column(agent_line, "agent"), 8);
+        assert_eq!(column(root_line, "root"), 8);
+        let workspace_path = column(workspace_line, "/a");
+        assert_eq!(workspace_path, column(agent_line, "/b"));
+        assert_eq!(workspace_path, column(root_line, "/c"));
+        assert_eq!(column(agent_line, "idle"), 43);
+
+        let marker_x = workspace_line[..workspace_line.find("WT").unwrap()]
+            .chars()
+            .count() as u16;
+        let marker_y = text.lines().position(|line| line.contains("WT")).unwrap() as u16;
+        let buffer = terminal.backend().buffer();
+        assert!((marker_x..marker_x + 2)
+            .all(|x| buffer[(x, marker_y)].modifier.contains(Modifier::BOLD)));
     }
 
     #[test]
@@ -1739,8 +1997,8 @@ mod tests {
             .unwrap();
         let text = buffer_text(&terminal);
 
-        assert!(text.contains("very-long-dire…"));
-        assert!(text.contains("/projects/wit…"));
+        assert!(text.contains("very-long-d…"));
+        assert!(text.contains("/projects/…"));
     }
 
     #[test]
@@ -1763,8 +2021,8 @@ mod tests {
         assert!(workspace < agent);
         assert!(!text.contains("Code"));
         assert!(!text.contains("Server"));
-        assert!(text.contains("session · 1 workspaces"));
-        assert!(text.contains("workspace · 2 tabs · 3 panes"));
+        assert!(!text.contains("session · 1 workspaces"));
+        assert!(!text.contains("workspace · 2 tabs · 3 panes"));
         assert!(!text.contains("tab · 1 pane"));
     }
 
@@ -1798,14 +2056,20 @@ mod tests {
             .unwrap();
 
         let column = |line: &str, label: &str| line[..line.find(label).unwrap()].chars().count();
-        let path_column = |line: &str| line.find("/tmp/").unwrap();
+        let path_column = |line: &str| {
+            let byte = line.find("/tmp/").unwrap();
+            line[..byte].chars().count()
+        };
         assert_eq!(column(parent, "Project"), column(child_a, "Feature A"));
         assert_eq!(column(child_a, "Feature A"), column(child_b, "Feature B"));
         assert_eq!(path_column(parent), path_column(child_a));
         assert_eq!(path_column(child_a), path_column(child_b));
-        assert!(child_a.contains('⎇'));
-        assert!(child_b.contains('⎇'));
-        assert!(column(child_a_tab, "Child A Tab") > column(child_a, "Feature A"));
+        assert!(child_a.contains("WORKTREE"));
+        assert!(child_b.contains("WORKTREE"));
+        assert_eq!(
+            column(child_a_tab, "Child A Tab"),
+            column(child_a, "Feature A")
+        );
         assert_eq!(
             column(child_a_tab, "Child A Tab"),
             column(child_b_tab, "Child B Tab")
@@ -1856,9 +2120,15 @@ mod tests {
             .lines()
             .find(|line| line.contains("Extremely"))
             .unwrap();
-        assert!(child_line.contains('…'));
-        assert!(child_line.contains('⎇'));
+        assert!(child_line.contains("…⎇ "));
+        assert!(!child_line.contains("WT"));
         assert!(!child_line.contains("/tmp/feature-a"));
+
+        let marker_x = child_line[..child_line.find('⎇').unwrap()].chars().count() as u16;
+        let marker_y = text.lines().position(|line| line.contains('⎇')).unwrap() as u16;
+        let marker = &terminal.backend().buffer()[(marker_x, marker_y)];
+        assert_eq!(marker.fg, app.theme.teal);
+        assert!(!marker.modifier.contains(Modifier::BOLD));
     }
 
     #[test]
@@ -1880,7 +2150,7 @@ mod tests {
             .lines()
             .find(|line| line.contains("Extremely"))
             .unwrap();
-        assert!(workspace_line.contains('…'));
+        assert!(workspace_line.contains("Extremely-long-workspace-title"));
         assert!(!text.contains("/projects"));
     }
 
@@ -1900,7 +2170,7 @@ mod tests {
 
         assert!(open_entry_line(&app, &orphan, 0, 80)
             .to_string()
-            .contains("⎇"));
+            .contains("WORKTREE"));
     }
 
     #[test]
@@ -1991,11 +2261,14 @@ mod tests {
         assert_eq!(app.selected_entry().unwrap().title, "Project");
 
         let mut app = topology_app("");
+        assert!(!app.expanded_workspaces.contains("work::w1"));
         assert!(matches!(
             execute_command(&mut app, Command::Open, key(KeyCode::Enter)),
-            Action::Continue
+            Action::Open
         ));
-        assert_eq!(app.selected_entry().unwrap().title, "Code");
+        assert!(!app.expanded_workspaces.contains("work::w1"));
+        assert_eq!(app.filtered.len(), 3);
+        assert_eq!(app.selected_entry().unwrap().title, "Project");
     }
 
     #[test]
@@ -2020,15 +2293,15 @@ mod tests {
 
         assert!(text.contains(" ▾ agent "));
         assert!(text.contains(&format!(
-            "  ├─ {} Claude",
+            "  ├─ {}  Claude",
             status_icon_at(&Source::Agent, "", 0)
         )));
         assert!(text.contains(&format!(
-            "  └─ {} Codex",
+            "  └─ {}  Codex",
             status_icon_at(&Source::Agent, "", 0)
         )));
         assert!(text.contains(" ▾ root "));
-        assert!(text.contains("  └─   Dotfiles"));
+        assert!(text.contains("  └─    Dotfiles"));
     }
 
     #[test]
