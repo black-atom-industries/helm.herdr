@@ -70,16 +70,16 @@ Herdr's built-in navigation remains the simpler choice for a single entity type.
 
 ## What it can open
 
-| Source      | Data                              | Enter does                                                         |
-| ----------- | --------------------------------- | ------------------------------------------------------------------ |
-| `open`      | Current-session workspaces → tabs    | Focus the exact workspace or tab                                  |
-| `agent`     | `herdr agent list`                | Focus the agent pane                                               |
-| `project`   | Herdr Plus project TOML           | Reuse or create a project workspace and apply tabs and split panes |
-| `server`    | Configured remote targets         | Hand off to the remote Herdr server                                |
-| `zoxide`    | `zoxide query -l`                 | Enter opens normally; `Alt-Enter` applies the shared template      |
-| `root`      | Configured filesystem roots       | Enter opens normally; `Alt-Enter` applies the shared template      |
-| `quick`     | Herdr Plus Quick Actions          | Open the Quick Actions picker                                      |
-| `plugin`    | Command/JSON integrations         | Run the configured open command                                    |
+| Source    | Data                              | Enter does                                                         |
+| --------- | --------------------------------- | ------------------------------------------------------------------ |
+| `open`    | Current-session workspaces → tabs | Focus the exact workspace or tab                                   |
+| `agent`   | `herdr agent list`                | Focus the agent pane                                               |
+| `project` | Herdr Plus project TOML           | Reuse or create a project workspace and apply tabs and split panes |
+| `server`  | Configured remote targets         | Hand off to the remote Herdr server                                |
+| `zoxide`  | `zoxide query -l`                 | Enter opens normally; `Alt-Enter` applies the shared template      |
+| `root`    | Configured filesystem roots       | Enter opens normally; `Alt-Enter` applies the shared template      |
+| `quick`   | Herdr Plus Quick Actions          | Open the Quick Actions picker                                      |
+| `plugin`  | Command/JSON integrations         | Run the configured open command                                    |
 
 Every source can be disabled. Missing optional tools degrade quietly.
 
@@ -90,8 +90,8 @@ Every source can be disabled. Missing optional tools degrade quietly.
 | type             | Fuzzy search                                                            |
 | `Enter`          | Open selected item normally                                             |
 | `Alt-Enter`      | Apply `picker.directory_template` to the selected zoxide/root directory |
-| `Up` / `Down`    | Move across visible workspace, tab, and flat-source rows                  |
-| `Left` / `Right` | Collapse/expand Open workspaces                                           |
+| `Up` / `Down`    | Move across visible workspace, tab, and flat-source rows                |
+| `Left` / `Right` | Collapse/expand Open workspaces                                         |
 | `Tab`            | Cycle source filters                                                    |
 | `Ctrl-W`         | Open topology (workspaces and tabs)                                     |
 | `Ctrl-A` / `@`   | Agents, using configured status order                                   |
@@ -315,6 +315,7 @@ find ~/.config/herdr/plugins/config/cloudmanic.herdr-plus/projects -name '*.toml
 
 ## Project docs
 
+- [`ROADMAP.md`](ROADMAP.md) — planned todos
 - [`docs/architecture.md`](docs/architecture.md) — runtime flow and design
 - [`docs/integrations.md`](docs/integrations.md) — Herdr/plugin integration patterns
 - [`docs/plugin-integrations.md`](docs/plugin-integrations.md) — command/JSON contract
