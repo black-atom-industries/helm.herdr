@@ -42,7 +42,7 @@ Each picker row is an `Entry`:
 - optional `OpenNode` topology metadata for workspaces and tabs
 - action enum for focus/create/remote/integration behavior
 
-Open entries keep their exact workspace/tab identity within the current session. Other workspace/project/root/zoxide paths are collapsed by canonical path where applicable. Agent entries are appended separately because multiple agents can share cwd. Server entries dedupe by remote target.
+Open entries keep their exact workspace/tab identity within the current session. Other workspace/project/root/zoxide paths are collapsed by canonical path where applicable, with root entries winning path collisions. Agent entries are appended separately because multiple agents can share cwd. Server entries dedupe by remote target.
 
 ## Open behavior
 

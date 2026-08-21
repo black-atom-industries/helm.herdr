@@ -1,7 +1,7 @@
 # Roadmap
 
 - [x] [Flatten list more with with inline type indicators](plans/flatten-picker-source-rows-completed.html)
-- [ ] Deduplicate entries
+- [x] Deduplicate entries
 - [ ] Smaller window (See: https://github.com/thomasschafer/herdr-kiosk)
 - [ ] Avoid unnessary expansion of entries
 - [ ] Split up `src/tui.rs` file

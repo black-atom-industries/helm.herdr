@@ -1320,6 +1320,7 @@ fn pin_key(entry: &Entry) -> String {
 
 fn push_unique(entries: &mut Vec<Entry>, seen: &mut HashSet<String>, incoming: Vec<Entry>) {
     for e in incoming {
+        let path_key = e.key();
         let key = match &e.action {
             EntryAction::FocusWorkspace { session, id, .. } => {
                 format!("open:workspace:{}:{id}", session_key(session.as_deref()))
@@ -1329,10 +1330,22 @@ fn push_unique(entries: &mut Vec<Entry>, seen: &mut HashSet<String>, incoming: V
             }
             EntryAction::OpenRemote { target } => format!("remote:{target}"),
             EntryAction::RunCommand { command, .. } => format!("{}:{command}", e.source_name()),
-            _ => format!("{}:{}", e.source_name(), e.key()),
+            _ if matches!(e.source, Source::Project | Source::Zoxide | Source::Root) => {
+                format!("directory:{path_key}")
+            }
+            _ => format!("{}:{path_key}", e.source_name()),
         };
         if seen.insert(key) {
             entries.push(e);
+        } else if e.source == Source::Root {
+            if let Some(index) = entries.iter().position(|entry| {
+                matches!(
+                    entry.source,
+                    Source::Project | Source::Zoxide | Source::Root
+                ) && entry.key() == path_key
+            }) {
+                entries[index] = e;
+            }
         }
     }
 }
@@ -2219,6 +2232,25 @@ exit 0
         );
 
         assert_eq!(entries.len(), 2);
+    }
+
+    #[test]
+    fn path_entries_deduplicate_across_sources_and_root_wins() {
+        let mut entries = Vec::new();
+        let mut seen = HashSet::new();
+        push_unique(
+            &mut entries,
+            &mut seen,
+            vec![
+                entry(Source::Project, "/tmp/project", "project"),
+                entry(Source::Root, "/tmp/project", "root"),
+                entry(Source::Zoxide, "/tmp/project", "zoxide"),
+            ],
+        );
+
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].source, Source::Root);
+        assert_eq!(entries[0].title, "root");
     }
 
     #[test]
