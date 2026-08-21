@@ -13,9 +13,9 @@ Do not split into many specialized pickers unless the UX clearly needs it. The p
 
 ## Result rows
 
-`picker.detailed_rows = true` is the default: every entry stays on one line, with aligned name, path, and metadata columns. Status, focus, expansion, and selection use Herdr's `prefix+g` glyphs (`◉`, Braille spinner, `●`, `✓`, `○`, `◆`, `▾`, `▸`, `├─`, `└─`, `→`). Set it to `false` for compact rows.
+`picker.detailed_rows = true` is the default: every entry stays on one line, with an inline colored source label and aligned name, path, and metadata columns. Status, focus, expansion, and selection use Herdr's `prefix+g` glyphs (`◉`, Braille spinner, `●`, `✓`, `○`, `◆`, `▾`, `▸`, `→`). Set it to `false` for compact rows.
 
-Open is a live workspace → tab topology for the current session. Linked-worktree workspaces nest beneath the open non-linked workspace with the same repository identity. Search keeps the full ancestry of matching tabs.
+Open is a live workspace → tab topology for the current session. Workspace and tab rows repeat the `open` source label while retaining their topology glyphs and ancestry. Linked-worktree workspaces nest beneath the open non-linked workspace with the same repository identity. Search keeps the full ancestry of matching tabs.
 
 ## Notifications
 

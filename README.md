@@ -315,7 +315,6 @@ find ~/.config/herdr/plugins/config/cloudmanic.herdr-plus/projects -name '*.toml
 
 ## Project docs
 
-- [`docs/roadmap.md`](docs/roadmap.md) — roadmap and scope boundaries
 - [`docs/architecture.md`](docs/architecture.md) — runtime flow and design
 - [`docs/integrations.md`](docs/integrations.md) — Herdr/plugin integration patterns
 - [`docs/plugin-integrations.md`](docs/plugin-integrations.md) — command/JSON contract

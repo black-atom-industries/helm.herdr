@@ -1,0 +1,392 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Flatten picker source rows</title>
+  <style>
+    :root {
+      --background: oklch(0.97 0.005 260);
+      --foreground: oklch(0.18 0.02 260);
+      --card: oklch(1 0 0);
+      --card-foreground: oklch(0.18 0.02 260);
+      --primary: oklch(0.5 0.25 280);
+      --primary-foreground: oklch(1 0 0);
+      --secondary: oklch(0.5 0.18 180);
+      --secondary-foreground: oklch(1 0 0);
+      --muted: oklch(0.92 0.01 260);
+      --muted-foreground: oklch(0.4 0.02 260);
+      --accent: oklch(0.6 0.22 50);
+      --accent-foreground: oklch(0.18 0.02 260);
+      --destructive: oklch(0.5 0.25 25);
+      --destructive-foreground: oklch(1 0 0);
+      --success: oklch(0.45 0.2 150);
+      --success-foreground: oklch(1 0 0);
+      --warning: oklch(0.55 0.18 85);
+      --warning-foreground: oklch(0.18 0.02 260);
+      --border: oklch(0.88 0.01 260);
+      --input: oklch(0.92 0.01 260);
+      --ring: oklch(0.5 0.25 280);
+      --code-bg: oklch(0.92 0.01 260);
+      --font-sans: "Inter", system-ui, -apple-system, sans-serif;
+      --font-mono: "JetBrains Mono", "Fira Code", ui-monospace, monospace;
+      --font-display: ui-serif, Georgia, "Times New Roman", serif;
+      --radius: 0.625rem;
+      --open: oklch(0.48 0.17 150);
+      --root: oklch(0.5 0.13 190);
+      --agent: oklch(0.62 0.15 90);
+      --project: oklch(0.52 0.17 310);
+    }
+
+    *, *::before, *::after { margin: 0; padding: 0; box-sizing: border-box; }
+    body {
+      font-family: var(--font-sans);
+      background: var(--background);
+      color: var(--foreground);
+      line-height: 1.65;
+      font-size: 15px;
+      -webkit-font-smoothing: antialiased;
+    }
+    .container { max-width: 1080px; margin: 0 auto; padding: 64px 24px 96px; }
+    .eyebrow, .prompt-label, .stat-label, .section-number, .tag, .badge, .terminal-label,
+    .phase, .record th, .decision-owner { font-family: var(--font-mono); }
+    .eyebrow { font-size: .72rem; font-weight: 500; text-transform: uppercase; letter-spacing: .06em; color: var(--muted-foreground); }
+    h1, h2, h3 { font-family: var(--font-display); font-weight: 500; }
+    h1 { font-size: 2.2rem; line-height: 1.15; margin: 8px 0 18px; }
+    h2 { font-size: 1.4rem; }
+    h3 { font-size: 1.08rem; }
+    p { max-width: 68ch; }
+    .lede { color: var(--muted-foreground); font-size: 1.02rem; margin-bottom: 24px; }
+    .prompt-box { background: var(--muted); border: 1.5px solid var(--border); border-radius: var(--radius); padding: 16px 24px; }
+    .prompt-label { font-size: .7rem; font-weight: 600; text-transform: uppercase; letter-spacing: .06em; color: var(--muted-foreground); display: block; margin-bottom: 4px; }
+    .prompt-box p { font-size: .92rem; color: var(--muted-foreground); line-height: 1.55; }
+    .summary-strip { display: grid; grid-template-columns: repeat(4, 1fr); gap: 16px; margin: 32px 0 0; }
+    .stat-card { border: 1.5px solid var(--border); border-radius: var(--radius); padding: 16px 20px; text-align: center; background: var(--card); }
+    .stat-value { font-family: var(--font-display); font-size: 1.8rem; font-weight: 500; display: block; }
+    .stat-label { font-size: .68rem; font-weight: 500; text-transform: uppercase; letter-spacing: .06em; color: var(--muted-foreground); display: block; margin-top: 4px; }
+    section { margin-top: 72px; }
+    .section-header { display: flex; align-items: baseline; gap: 16px; margin-bottom: 28px; padding-bottom: 8px; border-bottom: 1.5px solid var(--border); }
+    .section-number { font-size: .75rem; font-weight: 600; color: var(--primary); }
+    .two-col { display: grid; grid-template-columns: 1fr 1fr; gap: 24px; }
+    .card { border: 1.5px solid var(--border); border-radius: var(--radius); background: var(--card); padding: 24px; }
+    .card h3 { margin-bottom: 8px; }
+    .card p, .card li { color: var(--muted-foreground); font-size: .92rem; }
+    ul { padding-left: 20px; }
+    li + li { margin-top: 6px; }
+    .tags { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 14px; }
+    .tag { font-size: .68rem; padding: 2px 8px; border-radius: calc(var(--radius) - 4px); background: var(--muted); color: var(--muted-foreground); }
+    .tag.highlight { background: color-mix(in oklab, var(--primary) 12%, transparent); color: var(--primary); }
+
+    .mock-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 24px; }
+    .mock-title { display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px; }
+    .mock-title span { font-family: var(--font-mono); font-size: .72rem; color: var(--muted-foreground); }
+    .terminal { background: oklch(0.17 0.02 260); color: oklch(0.9 0.01 260); border-radius: var(--radius); padding: 16px; overflow-x: auto; border: 1.5px solid color-mix(in oklab, var(--border) 45%, transparent); min-height: 272px; }
+    .terminal-label { color: oklch(0.62 0.03 260); font-size: .68rem; text-transform: uppercase; letter-spacing: .06em; margin-bottom: 10px; }
+    .row { white-space: pre; font-family: var(--font-mono); font-size: .77rem; line-height: 1.85; border-radius: 4px; padding: 0 5px; }
+    .row.selected { background: oklch(0.28 0.03 260); font-weight: 700; }
+    .src-open { color: oklch(0.72 0.16 150); }
+    .src-root { color: oklch(0.72 0.12 190); }
+    .src-agent { color: oklch(0.78 0.14 90); }
+    .src-project { color: oklch(0.72 0.16 310); }
+    .dim { color: oklch(0.58 0.03 260); }
+    .title { color: oklch(0.94 0.01 260); }
+    .accent { color: oklch(0.74 0.17 55); }
+    .worktree { color: oklch(0.72 0.12 190); font-weight: 700; }
+    .removed { color: oklch(0.65 0.12 25); }
+    .col-guide { display: grid; grid-template-columns: 72px 120px 1fr; gap: 8px; margin-top: 16px; font-family: var(--font-mono); font-size: .68rem; color: var(--muted-foreground); }
+    .col-guide span { border-top: 1px solid var(--border); padding-top: 5px; }
+
+    .state-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 24px; }
+    .state-card { border: 1.5px solid var(--border); border-radius: var(--radius); background: var(--card); overflow: hidden; }
+    .state-head { padding: 14px 18px; border-bottom: 1px solid var(--border); }
+    .state-head h3 { font-size: 1rem; }
+    .state-head p { color: var(--muted-foreground); font-size: .82rem; }
+    .state-card .terminal { border: 0; border-radius: 0; min-height: 175px; }
+
+    .milestones { display: flex; flex-direction: column; }
+    .milestone { display: grid; grid-template-columns: 90px 28px 1fr; gap: 0 18px; }
+    .phase { text-align: right; font-size: .75rem; color: var(--muted-foreground); padding-top: 3px; }
+    .dot-col { display: flex; flex-direction: column; align-items: center; }
+    .dot { width: 14px; height: 14px; border-radius: 50%; background: var(--card); border: 3px solid var(--primary); flex-shrink: 0; }
+    .line { width: 2px; flex: 1; background: var(--border); margin: 4px 0; }
+    .milestone:last-child .line { display: none; }
+    .milestone-body { padding-bottom: 38px; }
+    .milestone-body h3 { margin-bottom: 4px; }
+    .milestone-body p { color: var(--muted-foreground); font-size: .9rem; }
+
+    .contract { width: 100%; border-collapse: collapse; border: 1.5px solid var(--border); border-radius: var(--radius); overflow: hidden; display: table; background: var(--card); }
+    .contract th, .contract td { text-align: left; padding: 13px 16px; border-bottom: 1px solid var(--border); vertical-align: top; font-size: .86rem; }
+    .contract th { font-family: var(--font-mono); font-size: .68rem; text-transform: uppercase; letter-spacing: .05em; color: var(--muted-foreground); background: var(--muted); }
+    .contract tr:last-child td { border-bottom: 0; }
+    .badge { font-size: .65rem; font-weight: 600; padding: 2px 7px; border-radius: calc(var(--radius) - 4px); text-transform: uppercase; letter-spacing: .04em; white-space: nowrap; }
+    .badge.change { background: color-mix(in oklab, var(--primary) 13%, transparent); color: var(--primary); }
+    .badge.keep { background: color-mix(in oklab, var(--success) 13%, transparent); color: var(--success); }
+    .badge.na { background: var(--muted); color: var(--muted-foreground); }
+
+    .risk-grid { border: 1.5px solid var(--border); border-radius: var(--radius); overflow: hidden; }
+    .risk-row { display: grid; grid-template-columns: 1fr auto 1.6fr; gap: 20px; padding: 16px 20px; align-items: center; border-bottom: 1px solid var(--border); background: var(--card); }
+    .risk-row:last-child { border-bottom: none; }
+    .risk-name { font-weight: 500; }
+    .risk-mitigation { font-size: .88rem; color: var(--muted-foreground); }
+    .badge.med { background: color-mix(in oklab, var(--warning) 15%, transparent); color: var(--warning); }
+    .badge.low { background: color-mix(in oklab, var(--success) 15%, transparent); color: var(--success); }
+
+    details { border: 1.5px solid var(--border); border-radius: var(--radius); margin-top: 18px; background: var(--card); }
+    summary { font-weight: 500; padding: 16px 22px; cursor: pointer; list-style: none; }
+    summary::before { content: "▸"; display: inline-block; margin-right: 8px; transition: transform .2s; }
+    details[open] summary::before { transform: rotate(90deg); }
+    .details-body { padding: 0 22px 22px; overflow-x: auto; }
+    .record { width: 100%; border-collapse: collapse; min-width: 760px; }
+    .record th, .record td { text-align: left; padding: 10px 12px; border-top: 1px solid var(--border); vertical-align: top; font-size: .82rem; }
+    .record th { font-size: .66rem; text-transform: uppercase; letter-spacing: .05em; color: var(--muted-foreground); }
+    code { font-family: var(--font-mono); font-size: .84em; background: var(--code-bg); padding: 1px 5px; border-radius: 4px; }
+    .callout { border-left: 3px solid var(--primary); padding: 16px 22px; background: var(--card); border-radius: 0 var(--radius) var(--radius) 0; }
+    .callout p { font-size: .91rem; color: var(--muted-foreground); }
+    .decision-owner { font-size: .7rem; color: var(--primary); display: block; margin-top: 7px; }
+
+    @media (max-width: 800px) {
+      .summary-strip, .mock-grid, .two-col, .state-grid { grid-template-columns: 1fr; }
+      .terminal { min-height: auto; }
+      .risk-row { grid-template-columns: 1fr auto; }
+      .risk-mitigation { grid-column: 1 / -1; }
+    }
+    @media (max-width: 560px) {
+      .container { padding: 40px 16px 72px; }
+      h1 { font-size: 1.8rem; }
+      section { margin-top: 54px; }
+      .milestone { grid-template-columns: 64px 22px 1fr; gap: 0 10px; }
+      .row { font-size: .7rem; }
+    }
+  </style>
+</head>
+<body>
+  <main class="container">
+    <header>
+      <span class="eyebrow">Implementation plan · Helm for Herdr</span>
+      <h1>Flatten picker source rows</h1>
+      <p class="lede">Replace synthetic source sections with a stable inline source column. Filtering changes the result set, not the shape of the list.</p>
+      <div class="prompt-box">
+        <span class="prompt-label">Brief</span>
+        <p>Remove the outermost picker type sections such as <code>open</code> and <code>root</code>. Show the type on every result row in a dedicated left column, retain each source’s current color, and keep the Open workspace/tab topology inside the row.</p>
+      </div>
+      <div class="summary-strip">
+        <div class="stat-card"><span class="stat-value">0</span><span class="stat-label">Header rows</span></div>
+        <div class="stat-card"><span class="stat-value">1:1</span><span class="stat-label">Results to rows</span></div>
+        <div class="stat-card"><span class="stat-value">2</span><span class="stat-label">Files in scope</span></div>
+        <div class="stat-card"><span class="stat-value">1</span><span class="stat-label">Proposed commit</span></div>
+      </div>
+    </header>
+
+    <section>
+      <div class="section-header"><span class="section-number">01</span><h2>The visual change</h2></div>
+      <div class="mock-grid">
+        <div>
+          <div class="mock-title"><h3>Current</h3><span>synthetic sections</span></div>
+          <div class="terminal" aria-label="Current picker mockup">
+            <div class="terminal-label">Results</div>
+            <div class="row removed">▾ open  LIVE</div>
+            <div class="row selected">→   ▸ ◆ <span class="title">imfusion-portal-CP-89</span> <span class="worktree">WORKTREE</span> <span class="dim">~/repos/…</span></div>
+            <div class="row">    └─ ● <span class="title">UI</span>                               <span class="dim">working</span></div>
+            <div class="row removed">▾ root</div>
+            <div class="row">    ├─   <span class="title">helm.herdr</span>                       <span class="dim">~/repos/…</span></div>
+            <div class="row">    └─   <span class="title">qmk_firmware</span>                     <span class="dim">~/repos/…</span></div>
+            <div class="row removed">▾ agent</div>
+            <div class="row">    └─ ◉ <span class="title">Claude</span>                           <span class="dim">working</span></div>
+          </div>
+        </div>
+        <div>
+          <div class="mock-title"><h3>Proposed</h3><span>one row per result</span></div>
+          <div class="terminal" aria-label="Proposed picker mockup">
+            <div class="terminal-label">Results</div>
+            <div class="row selected">→ <span class="src-open">open</span>       ▸ ◆     <span class="title">imfusion-portal-CP-89</span> <span class="worktree">WORKTREE</span> <span class="dim">~/repos/…</span></div>
+            <div class="row">  <span class="src-open">open</span>          └─ ● <span class="title">UI</span>                             <span class="dim">working</span></div>
+            <div class="row">  <span class="src-root">root</span>               <span class="title">helm.herdr</span>                     <span class="dim">~/repos/…</span></div>
+            <div class="row">  <span class="src-root">root</span>               <span class="title">qmk_firmware</span>                   <span class="dim">~/repos/…</span></div>
+            <div class="row">  <span class="src-agent">agent</span>            ◉ <span class="title">Claude</span>                         <span class="dim">working</span></div>
+          </div>
+          <div class="col-guide"><span>source</span><span>topology + title</span><span>path / state</span></div>
+        </div>
+      </div>
+    </section>
+
+    <section>
+      <div class="section-header"><span class="section-number">02</span><h2>Layout contract</h2></div>
+      <div class="two-col">
+        <div class="card">
+          <h3>Source column</h3>
+          <ul>
+            <li>Render <code>Entry::source_name()</code> on every selectable row.</li>
+            <li>Use the existing <code>source_color(theme, source)</code> mapping.</li>
+            <li>Calculate width from all loaded entries, not <code>app.filtered</code>, so query changes cannot move later columns.</li>
+            <li>Cap label content at 10 terminal cells. Measure and truncate with ratatui’s <code>Span::width()</code>, then pad every row to the stable source-column width without adding a dependency.</li>
+          </ul>
+        </div>
+        <div class="card">
+          <h3>Row content</h3>
+          <ul>
+            <li>Remove source banners and the non-Open <code>├─</code>/<code>└─</code> branches they implied.</li>
+            <li>Repeat <code>open</code> on workspace and tab rows.</li>
+            <li>In detailed mode, derive the topology-prefix budget from every loaded Open entry and its ancestry depth, independent of query, source filter, or expansion state.</li>
+            <li>Derive the right-side status budget from all loaded entries instead of filtered rows. Together with the source and topology budgets, this keeps title and path columns fixed while filtering.</li>
+            <li>Keep Open expansion, tab ancestry, pin/focus glyphs, worktree marker, title, path, metadata, score, and selection styling.</li>
+            <li>Keep detailed and compact modes available under the existing configuration.</li>
+          </ul>
+        </div>
+      </div>
+      <div class="callout" style="margin-top:24px">
+        <h3>Scope boundary</h3>
+        <p>This is a rendering change. Filtering, fuzzy ranking, source shortcuts, source ordering, actions, preview content, refresh behavior, and exit codes keep their current contracts.</p>
+        <span class="decision-owner">Owner decision · existing source colors remain authoritative</span>
+      </div>
+    </section>
+
+    <section>
+      <div class="section-header"><span class="section-number">03</span><h2>Filtering stays still</h2></div>
+      <div class="state-grid">
+        <div class="state-card">
+          <div class="state-head"><h3>Unfiltered</h3><p>The width comes from every loaded entry.</p></div>
+          <div class="terminal">
+            <div class="row"><span class="src-open">open</span>     ▸ ◆ <span class="title">imfusion-portal-CP-89</span></div>
+            <div class="row"><span class="src-root">root</span>         <span class="title">helm.herdr</span></div>
+            <div class="row"><span class="src-agent">agent</span>      ◉ <span class="title">Claude</span></div>
+            <div class="row"><span class="src-project">project</span>      <span class="title">Livery</span></div>
+          </div>
+        </div>
+        <div class="state-card">
+          <div class="state-head"><h3>Filtered: “herdr”</h3><p>Rows disappear; title start remains fixed.</p></div>
+          <div class="terminal">
+            <div class="row"><span class="src-root">root</span>         <span class="title">helm.herdr</span>                  <span class="dim">score 91</span></div>
+            <div class="row"><span class="src-project">project</span>      <span class="title">Herdr Plus</span>                  <span class="dim">score 76</span></div>
+          </div>
+        </div>
+        <div class="state-card">
+          <div class="state-head"><h3>Open search result</h3><p>Retained ancestors repeat the source label.</p></div>
+          <div class="terminal">
+            <div class="row"><span class="src-open">open</span>       ▾ ◆     <span class="title">imfusion-portal-CP-89</span></div>
+            <div class="row"><span class="src-open">open</span>          └─ ● <span class="title">Labels REST API</span>          <span class="dim">score 88</span></div>
+          </div>
+        </div>
+        <div class="state-card">
+          <div class="state-head"><h3>Narrow / compact</h3><p>Source stays visible; content truncates first.</p></div>
+          <div class="terminal">
+            <div class="row"><span class="src-open">open</span>   ▸ ◆ <span class="title">imfusion-port…</span></div>
+            <div class="row"><span class="src-root">root</span>       <span class="title">helm.herdr</span></div>
+            <div class="row"><span class="src-agent">agent</span>    ◉ <span class="title">Claude</span></div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section>
+      <div class="section-header"><span class="section-number">04</span><h2>Behavior matrix</h2></div>
+      <table class="contract">
+        <thead><tr><th>Case</th><th>Status</th><th>Observable acceptance criterion</th></tr></thead>
+        <tbody>
+          <tr><td>Mixed unfiltered results</td><td><span class="badge change">Change</span></td><td>Every filtered entry produces exactly one list row; no <code>▾ source</code> or <code>LIVE</code> banner is present.</td></tr>
+          <tr><td>Fuzzy query with mixed sources</td><td><span class="badge change">Change</span></td><td>Query-independent source, topology, and right-side status budgets keep detailed-mode title/path columns at the same terminal cells as before the query.</td></tr>
+          <tr><td>Single-source filter</td><td><span class="badge change">Change</span></td><td>Each visible row still shows its source label; no redundant section banner appears.</td></tr>
+          <tr><td>Open workspace collapsed / expanded</td><td><span class="badge keep">Keep</span></td><td><code>Left</code>/<code>Right</code> and <code>Enter</code> retain current behavior; workspace and tab rows each show <code>open</code>.</td></tr>
+          <tr><td>Open search ancestry</td><td><span class="badge keep">Keep</span></td><td>A matching tab retains its workspace ancestry and topology glyphs; both rows show <code>open</code>, and the title column matches the unfiltered detailed view.</td></tr>
+          <tr><td>Pinned, focused, previous, worktree, agent status</td><td><span class="badge keep">Keep</span></td><td>Existing glyphs, marker colors, status colors, and <code>WORKTREE</code>/<code>WT</code> styling remain unchanged.</td></tr>
+          <tr><td>Custom integration label over 10 terminal cells, including wide Unicode</td><td><span class="badge change">Change</span></td><td>The source label is ellipsized to a width of at most 10 cells, then padded to the stable source-column width; later columns stay aligned.</td></tr>
+          <tr><td>Narrow terminal and compact rows</td><td><span class="badge change">Change</span></td><td>The source column remains visible; title/path content truncates without wrapping.</td></tr>
+          <tr><td>Empty result set</td><td><span class="badge keep">Keep</span></td><td>The list has no rows and the preview continues to show <code>No results</code>.</td></tr>
+          <tr><td>Loading, partial-success, permission, retry</td><td><span class="badge na">N/A</span></td><td>This renderer has no source-section-specific state or retry contract.</td></tr>
+          <tr><td>CLI streams, configuration, actions, exit behavior</td><td><span class="badge keep">Keep</span></td><td>No public caller, config key, <code>EntryAction</code>, stdout/stderr, or process result changes.</td></tr>
+        </tbody>
+      </table>
+    </section>
+
+    <section>
+      <div class="section-header"><span class="section-number">05</span><h2>Implementation sequence</h2></div>
+      <div class="milestones">
+        <div class="milestone">
+          <div class="phase">Phase 1</div><div class="dot-col"><span class="dot"></span><span class="line"></span></div>
+          <div class="milestone-body">
+            <h3>Lock the row contract in renderer tests</h3>
+            <p>Replace group-tree expectations with one-row-per-entry assertions. Add coverage for repeated Open labels, preserved source colors, terminal-cell coordinates for wide-Unicode labels, compact/narrow output, and mouse hit mapping without non-selectable header rows. At 50 columns, compare unfiltered mixed results with a deep Open-ancestry query that filters out agent status; title and path coordinates must remain unchanged.</p>
+            <div class="tags"><span class="tag">src/tui.rs tests</span><span class="tag highlight">cargo test tui::tests</span></div>
+          </div>
+        </div>
+        <div class="milestone">
+          <div class="phase">Phase 2</div><div class="dot-col"><span class="dot"></span><span class="line"></span></div>
+          <div class="milestone-body">
+            <h3>Render the stable source column</h3>
+            <p>Add a 10-cell source-width helper using <code>Span::width()</code>. Calculate detailed-mode topology and status widths from all loaded entries, prepend the colored label to both Open and ordinary row builders, remove synthetic list items, and fold the freed header-row bookkeeping out of selection and mouse-hit mapping.</p>
+            <div class="tags"><span class="tag">draw_list</span><span class="tag">open_entry_line</span><span class="tag">detailed_layout</span></div>
+          </div>
+        </div>
+        <div class="milestone">
+          <div class="phase">Phase 3</div><div class="dot-col"><span class="dot"></span></div>
+          <div class="milestone-body">
+            <h3>Record and verify the user-visible contract</h3>
+            <p>Update the result-row description, then run formatting, linting, the full test suite, and a local rendered comparison at wide and narrow terminal widths.</p>
+            <div class="tags"><span class="tag">.pi/docs/features.md</span><span class="tag highlight">cargo test</span></div>
+          </div>
+        </div>
+      </div>
+      <div class="callout">
+        <h3>Tracer slices</h3>
+        <p>Not applicable. The change is a small linear renderer refactor inside <code>src/tui.rs</code>; it does not cross persistence, IPC, backend, or frontend boundaries.</p>
+      </div>
+    </section>
+
+    <section>
+      <div class="section-header"><span class="section-number">06</span><h2>Files, tests, and commit</h2></div>
+      <div class="two-col">
+        <div class="card">
+          <h3>Affected files</h3>
+          <ul>
+            <li><code>src/tui.rs</code>: terminal-cell source measurement/truncation, query-independent Open prefix and right-side status budgets, row composition, list-to-entry mapping, and renderer tests.</li>
+            <li><code>.pi/docs/features.md</code>: durable description of inline source labels and retained Open topology.</li>
+          </ul>
+          <div class="tags"><span class="tag">No new files</span><span class="tag">No dependencies</span><span class="tag">No config migration</span></div>
+        </div>
+        <div class="card">
+          <h3>Verification</h3>
+          <ul>
+            <li><code>cargo test tui::tests</code></li>
+            <li><code>cargo fmt --check</code></li>
+            <li><code>cargo clippy --all-targets --all-features -- -D warnings</code></li>
+            <li><code>cargo test</code></li>
+            <li>Render mixed, filtered, Open-expanded, and 42–50 column fixtures with <code>TestBackend</code>.</li>
+          </ul>
+        </div>
+      </div>
+      <div class="card" style="margin-top:24px">
+        <h3>Proposed commit</h3>
+        <p><code>Flatten picker source rows</code></p>
+        <p style="color:var(--muted-foreground);font-size:.9rem;margin-top:6px">Scope: renderer, renderer tests, and result-row documentation. Land only after every verification command passes.</p>
+      </div>
+    </section>
+
+    <section>
+      <div class="section-header"><span class="section-number">07</span><h2>Risks and mitigations</h2></div>
+      <div class="risk-grid">
+        <div class="risk-row"><div class="risk-name">Fixed source, topology, and status columns reduce title/path space</div><div><span class="badge med">Medium</span></div><div class="risk-mitigation">Cap source content at 10 terminal cells and reuse saturating width budgets plus end truncation at 42–50 columns.</div></div>
+        <div class="risk-row"><div class="risk-name">Open topology loses readable ancestry</div><div><span class="badge med">Medium</span></div><div class="risk-mitigation">Remove only the outer source tree. Keep workspace expansion and tab ancestry glyphs inside a query-independent prefix budget.</div></div>
+        <div class="risk-row"><div class="risk-name">Selection or mouse rows drift after header removal</div><div><span class="badge med">Medium</span></div><div class="risk-mitigation">Assert a direct one-to-one mapping between rendered items and <code>app.filtered</code>, including scrolled mouse hits.</div></div>
+        <div class="risk-row"><div class="risk-name">Source identity loses its visual cue</div><div><span class="badge low">Low</span></div><div class="risk-mitigation">Apply the existing source-specific color to every inline label and test representative source cells.</div></div>
+      </div>
+      <div class="callout" style="margin-top:24px">
+        <h3>Owner decisions</h3>
+        <p>None remain open. Inline labels repeat on every row, source colors stay unchanged, ranking and interaction behavior remain outside the change.</p>
+      </div>
+    </section>
+
+    <details>
+      <summary>Implementation record</summary>
+      <div class="details-body">
+        <table class="record">
+          <thead><tr><th>Phase</th><th>What changed</th><th>Why</th><th>Fix</th><th>Landed in</th></tr></thead>
+          <tbody>
+            <tr><td>Planning</td><td>Plan drafted and approved</td><td>Picker source headers make filtered results shift vertically and visually.</td><td>Specify a stable inline source column and direct row mapping.</td><td><code>plans/flatten-picker-source-rows-completed.html</code></td></tr>
+            <tr><td>Implementation</td><td>Inline source rows, renderer tests, and feature docs completed</td><td>One row per entry keeps filtering stable while preserving source identity and Open topology.</td><td>Fixed deep topology budgeting and added rendered color, narrow-width, Unicode-width, and scrolled mouse-hit coverage.</td><td>Proposed commit: <code>Flatten picker source rows</code></td></tr>
+            <tr><td>Verification</td><td>Formatting, linting, tests, independent review, and visual review passed</td><td>The final tree needs executable and human review evidence.</td><td><code>cargo fmt --check</code>; strict clippy; 140 tests; no Critical or Important review findings.</td><td><code>plans/flatten-picker-source-rows-completed.html</code></td></tr>
+          </tbody>
+        </table>
+      </div>
+    </details>
+  </main>
+</body>
+</html>
