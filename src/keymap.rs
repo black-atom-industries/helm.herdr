@@ -101,9 +101,14 @@ impl Keybind {
         match &self.command {
             Command::StartSearch => app.input_mode == InputMode::Search,
             Command::CycleFilter => app.source_filter.is_some(),
-            Command::ToggleMark => app
-                .selected_entry()
-                .is_some_and(|entry| app.is_pinned(entry)),
+            Command::ToggleMark => {
+                let entry = if app.topology_view() {
+                    app.topology_selected_entry()
+                } else {
+                    app.selected_entry()
+                };
+                entry.is_some_and(|entry| app.is_pinned(entry))
+            }
             Command::TogglePreview => app.preview,
             Command::ToggleHelp => app.input_mode == InputMode::Help,
             Command::Filter(source) => app.source_filter.as_ref() == Some(source),

@@ -26,6 +26,12 @@ pub(crate) enum InputMode {
     Help,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum ProjectionKind {
+    Topology,
+    Results,
+}
+
 #[cfg(test)]
 pub(crate) trait HerdrControl {
     fn focus(&self, action: &EntryAction) -> Result<(), String>;
@@ -112,9 +118,6 @@ impl App {
             self.recent_state.save();
         }
 
-        if self.config.sources.open_workspaces {
-            push_unique(&mut entries, &mut seen, open_entries);
-        }
         if self.config.sources.herdr_plus_projects {
             push_unique(&mut entries, &mut seen, herdr_plus::collect_projects());
         }
@@ -146,6 +149,20 @@ impl App {
             command::collect(&self.config.integrations),
         );
 
+        self.topology_entries = topology::query_entries(&self.topology, self.config.sources.agents);
+        let topology_agent_targets = self
+            .topology_entries
+            .iter()
+            .filter_map(|entry| {
+                matches!(entry.action, EntryAction::FocusPane { .. })
+                    .then(|| entry.agent_target.as_deref())
+                    .flatten()
+            })
+            .collect::<HashSet<_>>();
+        entries.retain(|entry| {
+            !matches!(&entry.action, EntryAction::FocusAgent { target } if topology_agent_targets.contains(target.as_str()))
+        });
+        entries.extend(self.topology_entries.iter().cloned());
         self.entries = entries;
         self.pinned_entries =
             read_pinned_entries(&plugin_config_dir().join(PINNED_ENTRIES_STATE_FILE))
@@ -163,17 +180,25 @@ impl App {
                 None
             };
         self.sort_topology();
-        self.topology_entries = topology::query_entries(&self.topology, self.config.sources.agents);
         self.sync_topology_cursor();
         self.apply_filter();
     }
 
-    pub(crate) fn topology_view(&self) -> bool {
-        self.query.trim().is_empty()
+    pub(crate) fn projection_kind(&self) -> ProjectionKind {
+        if self.query.trim().is_empty()
             && self
                 .source_filter
                 .as_ref()
                 .is_none_or(|source| *source == Source::Workspace)
+        {
+            ProjectionKind::Topology
+        } else {
+            ProjectionKind::Results
+        }
+    }
+
+    pub(crate) fn topology_view(&self) -> bool {
+        self.projection_kind() == ProjectionKind::Topology
     }
 
     fn topology_workspace_key(workspace: &crate::topology::WorkspaceNode) -> String {
@@ -312,10 +337,23 @@ impl App {
             && !searching
             && self.source_filter.is_none();
 
+        for entry in &mut self.entries {
+            if entry.source_name() == "bookmark" {
+                entry.source_label = Some(ordinary_source_label(entry).into());
+            }
+            if self.pinned_entries.contains(&pin_key(entry)) {
+                entry.source_label = Some("bookmark".into());
+            }
+        }
+
         let mut scored = Vec::new();
         for (idx, entry) in self.entries.iter().enumerate() {
             if let Some(source) = &self.source_filter {
-                if &entry.source != source {
+                if *source == Source::Agent {
+                    if !is_agent_entry(entry) {
+                        continue;
+                    }
+                } else if &entry.source != source {
                     continue;
                 }
             }
@@ -475,7 +513,12 @@ impl App {
     }
 
     pub(crate) fn toggle_selected_pin(&mut self) -> Result<(), String> {
-        let entry = self.selected_entry().ok_or("nothing selected")?;
+        let entry = if self.topology_view() {
+            self.topology_selected_entry()
+        } else {
+            self.selected_entry()
+        }
+        .ok_or("nothing selected")?;
         let key = pin_key(entry);
         let legacy_key = legacy_current_workspace_pin_key(entry);
         let mut pinned = self.pinned_entries.clone();
@@ -869,6 +912,7 @@ fn is_focused_workspace_entry(entry: &Entry) -> bool {
 struct Query {
     plain: String,
     agent: Vec<String>,
+    agent_only: bool,
     workspace_or_status: Vec<String>,
     path: Vec<String>,
     status: Vec<String>,
@@ -880,6 +924,7 @@ impl Query {
         let mut query = Self {
             plain: String::new(),
             agent: vec![],
+            agent_only: false,
             workspace_or_status: vec![],
             path: vec![],
             status: vec![],
@@ -888,7 +933,9 @@ impl Query {
         let mut plain = Vec::new();
         for raw in input.split_whitespace() {
             let token = raw.to_lowercase();
-            if let Some(rest) = token.strip_prefix('!') {
+            if token == "agent" {
+                query.agent_only = true;
+            } else if let Some(rest) = token.strip_prefix('!') {
                 push_token(&mut query.agent, rest);
             } else if let Some(rest) = token.strip_prefix('@') {
                 if rest.is_empty() {
@@ -910,13 +957,15 @@ impl Query {
 
     fn filters_match(&self, entry: &Entry) -> bool {
         let agent_query = self.all_agents
+            || self.agent_only
             || !self.agent.is_empty()
             || !self.workspace_or_status.is_empty()
             || !self.status.is_empty();
-        if agent_query && entry.source != Source::Agent {
+        if agent_query && !is_agent_entry(entry) {
             return false;
         }
-        all_match(&self.agent, &agent_text(entry))
+        (!self.agent_only && self.agent.is_empty() || is_agent_entry(entry))
+            && all_match(&self.agent, &agent_text(entry))
             && all_match_either(
                 &self.workspace_or_status,
                 &workspace_text(entry),
@@ -954,6 +1003,19 @@ fn all_match_either(tokens: &[String], left: &str, right: &str) -> bool {
         .all(|token| left.contains(token) || right.contains(token))
 }
 
+fn is_agent_entry(entry: &Entry) -> bool {
+    entry.agent_target.is_some() || entry.source == Source::Agent
+}
+
+fn ordinary_source_label(entry: &Entry) -> &'static str {
+    match entry.action {
+        EntryAction::FocusWorkspace { .. } => "workspace",
+        EntryAction::FocusTab { .. } => "tab",
+        EntryAction::FocusPane { .. } | EntryAction::FocusAgent { .. } => "pane",
+        _ => entry.source.label(),
+    }
+}
+
 fn agent_status_bonus(entry: &Entry) -> i64 {
     let status = status_text(entry);
     if ["block", "fail", "error"]
@@ -977,12 +1039,19 @@ fn agent_status_bonus(entry: &Entry) -> i64 {
 
 fn status_text(entry: &Entry) -> String {
     entry
-        .subtitle
-        .split('·')
-        .next()
-        .unwrap_or(&entry.subtitle)
-        .trim()
-        .to_lowercase()
+        .search_terms
+        .iter()
+        .find_map(|term| term.strip_prefix("agent-status:"))
+        .map(str::to_string)
+        .unwrap_or_else(|| {
+            entry
+                .subtitle
+                .split('·')
+                .next()
+                .unwrap_or(&entry.subtitle)
+                .trim()
+                .to_lowercase()
+        })
 }
 
 fn agent_text(entry: &Entry) -> String {
@@ -1194,14 +1263,23 @@ fn legacy_current_workspace_pin_key(_entry: &Entry) -> Option<String> {
 
 fn migrate_legacy_topology_pins(entries: &[Entry], pins: &mut HashSet<String>) -> bool {
     let mut changed = false;
-    for entry in entries {
-        let Some(legacy) = legacy_current_workspace_pin_key(entry) else {
+    let legacy = pins
+        .iter()
+        .filter_map(|key| {
+            key.strip_prefix("agent:")
+                .map(|target| (key.clone(), target.to_string()))
+        })
+        .collect::<Vec<_>>();
+    for (legacy_key, target) in legacy {
+        let Some(entry) = entries.iter().find(|entry| {
+            entry.agent_target.as_deref() == Some(target.as_str())
+                && matches!(entry.action, EntryAction::FocusPane { .. })
+        }) else {
             continue;
         };
-        if pins.remove(&legacy) {
-            pins.insert(pin_key(entry));
-            changed = true;
-        }
+        pins.remove(&legacy_key);
+        pins.insert(pin_key(entry));
+        changed = true;
     }
     changed
 }
@@ -1223,7 +1301,7 @@ fn pin_key(entry: &Entry) -> String {
         EntryAction::InvokePluginAction { action } => {
             format!("plugin:{}:{action}", entry.source_name())
         }
-        EntryAction::FocusOrCreateDir => format!("{}:{}", entry.source_name(), entry.key()),
+        EntryAction::FocusOrCreateDir => format!("{}:{}", entry.source.label(), entry.key()),
         EntryAction::RunCommand { command, .. } => format!("{}:{command}", entry.source_name()),
     }
 }
@@ -1444,6 +1522,86 @@ exit 0
         app.entries = vec![entry];
         app.filtered = vec![0];
         app
+    }
+
+    #[test]
+    fn first_query_character_projects_flat_direct_destinations() {
+        let mut app = App::new(Config::default(), Theme::load(false));
+        app.topology = OpenTopology {
+            workspaces: vec![crate::topology::WorkspaceNode {
+                id: "w1".into(),
+                label: "web-ui".into(),
+                session: Some("dev".into()),
+                focused: true,
+                tabs: vec![crate::topology::TabNode {
+                    id: "t1".into(),
+                    label: "Code".into(),
+                    focused: true,
+                    panes: vec![crate::topology::PaneNode {
+                        id: "p1".into(),
+                        label: "Shell".into(),
+                        cwd: "/repo".into(),
+                        focused: true,
+                        title: None,
+                        agent: None,
+                    }],
+                }],
+                git: None,
+            }],
+        };
+        app.topology_entries = topology::query_entries(&app.topology, false);
+        app.entries = app.topology_entries.clone();
+        app.query = "s".into();
+        app.apply_filter();
+
+        assert!(!app.topology_view());
+        let selected = app.selected_entry().expect("flat result");
+        assert_eq!(selected.source_name(), "pane");
+        assert!(matches!(selected.action, EntryAction::FocusPane { .. }));
+    }
+
+    #[test]
+    fn exact_agent_token_is_a_trait_predicate_and_agents_is_plain_text() {
+        let mut app = App::new(Config::default(), Theme::load(false));
+        let mut agent = entry(Source::Agent, "/tmp", "Codex");
+        agent.agent_target = Some("p1".into());
+        let tab = entry(Source::Workspace, "/tmp", "Agents");
+        app.entries = vec![agent, tab];
+
+        app.query = "agent".into();
+        app.apply_filter();
+        assert_eq!(app.filtered.len(), 1);
+        assert_eq!(app.selected_entry().unwrap().title, "Codex");
+
+        app.query = "agents".into();
+        app.apply_filter();
+        assert_eq!(app.selected_entry().unwrap().title, "Agents");
+    }
+
+    #[test]
+    fn legacy_agent_marks_migrate_to_session_qualified_pane_keys() {
+        let mut pane = entry(Source::Agent, "/tmp", "Shell");
+        pane.agent_target = Some("p1".into());
+        pane.action = EntryAction::FocusPane {
+            session: Some("dev".into()),
+            id: "p1".into(),
+        };
+        let mut pins = HashSet::from(["agent:p1".to_string()]);
+
+        assert!(migrate_legacy_topology_pins(&[pane], &mut pins));
+        assert_eq!(pins, HashSet::from(["pane:dev:p1".to_string()]));
+    }
+
+    #[test]
+    fn marked_flat_destinations_use_bookmark_source_without_duplicates() {
+        let mut app = App::new(Config::default(), Theme::load(false));
+        app.entries = vec![entry(Source::Root, "/tmp/project", "Project")];
+        let key = pin_key(&app.entries[0]);
+        app.pinned_entries.insert(key);
+        app.apply_filter();
+
+        assert_eq!(app.filtered.len(), 1);
+        assert_eq!(app.selected_entry().unwrap().source_name(), "bookmark");
     }
 
     #[test]

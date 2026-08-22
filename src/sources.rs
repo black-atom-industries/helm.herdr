@@ -411,7 +411,7 @@ fn agents_from_json(
                 action: EntryAction::FocusAgent {
                     target: target.into(),
                 },
-                source_label: None,
+                source_label: Some("pane".into()),
                 search_terms,
             });
         }
@@ -435,7 +435,7 @@ pub(crate) fn status_icon_at(source: &Source, status: &str, tick: u32) -> &'stat
         if workspace {
             "●"
         } else {
-            "◉"
+            "!"
         }
     } else if status.contains("work") || status.contains("run") {
         if workspace {
@@ -444,17 +444,17 @@ pub(crate) fn status_icon_at(source: &Source, status: &str, tick: u32) -> &'stat
             AGENT_SPINNER[tick as usize % AGENT_SPINNER.len()]
         }
     } else if status.contains("done") || status.contains("complete") {
-        "●"
-    } else if status.contains("idle") {
         if workspace {
-            "○"
+            "●"
         } else {
             "✓"
         }
+    } else if status.contains("idle") {
+        "○"
     } else if workspace {
         "·"
     } else {
-        "○"
+        ""
     }
 }
 
@@ -637,11 +637,11 @@ mod tests {
         assert_eq!(status_icon_at(&Source::Workspace, "idle", 0), "○");
         assert_eq!(status_icon_at(&Source::Workspace, "unknown", 0), "·");
 
-        assert_eq!(status_icon_at(&Source::Agent, "blocked", 0), "◉");
+        assert_eq!(status_icon_at(&Source::Agent, "blocked", 0), "!");
         assert_eq!(status_icon_at(&Source::Agent, "working", 0), "⠋");
         assert_eq!(status_icon_at(&Source::Agent, "working", 1), "⠙");
-        assert_eq!(status_icon_at(&Source::Agent, "done", 0), "●");
-        assert_eq!(status_icon_at(&Source::Agent, "idle", 0), "✓");
-        assert_eq!(status_icon_at(&Source::Agent, "unknown", 0), "○");
+        assert_eq!(status_icon_at(&Source::Agent, "done", 0), "✓");
+        assert_eq!(status_icon_at(&Source::Agent, "idle", 0), "○");
+        assert_eq!(status_icon_at(&Source::Agent, "unknown", 0), "");
     }
 }

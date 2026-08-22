@@ -6,7 +6,10 @@ use std::{
     process::Command,
 };
 
-use ratatui::text::Span;
+use ratatui::{
+    style::{Color, Modifier, Style},
+    text::{Line, Span},
+};
 use serde_json::Value;
 
 use crate::{
@@ -927,7 +930,7 @@ pub(crate) fn render_workspace_block_selected(
             ),
         })
         .unwrap_or_else(|| "pane no panes".into());
-    let child_prefix = " ".repeat(1);
+    let child_prefix = " ".repeat(9);
     let child = |label: &str, value: &str, selected: Option<&str>| {
         let fixed = format!("{child_prefix}{label:<8}");
         format!(
@@ -998,29 +1001,94 @@ pub(crate) fn topology_rows_selected(
     rows
 }
 
+pub(crate) fn topology_lines_selected(
+    workspace: &WorkspaceNode,
+    width: usize,
+    selection: Option<ChildSelection>,
+    theme: &crate::theme::Theme,
+    repositories: &[String],
+) -> [Line<'static>; 4] {
+    let rows = topology_rows_selected(workspace, width, selection);
+    let base = Style::default().fg(theme.text);
+    let muted = Style::default().fg(theme.overlay0);
+    let mut lines = rows.clone().map(|row| Line::from(Span::styled(row, base)));
+
+    let first = &rows[0];
+    if let Some(git) = &workspace.git {
+        if let Some(start) = first.find(&git.label) {
+            let end = start + git.label.len();
+            lines[0] = Line::from(vec![
+                Span::styled(first[..start].to_string(), muted),
+                Span::styled(
+                    first[start..end].to_string(),
+                    Style::default()
+                        .fg(repository_color(&git.repo_key, repositories, theme))
+                        .add_modifier(Modifier::BOLD),
+                ),
+                Span::styled(first[end..].to_string(), base),
+            ]);
+        }
+    } else {
+        lines[0] = Line::from(vec![Span::styled(first.clone(), base)]);
+    }
+    for (index, row) in rows.iter().enumerate().skip(1) {
+        let prefix_end = 9.min(row.len());
+        let label_end = 17.min(row.len());
+        let value_style = if index == 3 { muted } else { base };
+        lines[index] = Line::from(vec![
+            Span::styled(row[..prefix_end].to_string(), muted),
+            Span::styled(row[prefix_end..label_end].to_string(), muted),
+            Span::styled(row[label_end..].to_string(), value_style),
+        ]);
+    }
+    lines
+}
+
 pub(crate) fn repository_color(
     repository: &str,
-    repositories: &[String],
-    panel_background: &str,
-) -> String {
-    const COLORS: [&str; 6] = ["mauve", "teal", "blue", "peach", "green", "red"];
-    if repository.is_empty() || COLORS.contains(&panel_background) {
-        return "text".into();
+    _repositories: &[String],
+    theme: &crate::theme::Theme,
+) -> Color {
+    let candidates = [
+        theme.mauve,
+        theme.teal,
+        theme.blue,
+        theme.peach,
+        theme.green,
+        theme.red,
+    ];
+    if repository.is_empty() {
+        return theme.text;
     }
-    let mut unique = repositories.to_vec();
-    unique.sort();
-    unique.dedup();
+    let mut unique_colors = Vec::new();
+    for color in candidates {
+        if !unique_colors.contains(&color) {
+            unique_colors.push(color);
+        }
+    }
+    unique_colors.retain(|color| *color != theme.panel_bg && *color != Color::Reset);
+    if unique_colors.is_empty() {
+        return theme.text;
+    }
     let hash = repository
         .bytes()
         .fold(0xcbf29ce484222325u64, |hash, byte| {
             (hash ^ u64::from(byte)).wrapping_mul(0x100000001b3)
         });
-    let color = COLORS[(hash as usize) % COLORS.len()];
-    if color == panel_background || color == "surface0" || color == "Reset" {
-        "text".into()
-    } else {
-        color.into()
-    }
+    unique_colors[(hash as usize) % unique_colors.len()]
+}
+
+fn workspace_breadcrumb(workspace: &WorkspaceNode) -> String {
+    workspace.git.as_ref().map_or_else(
+        || workspace.label.clone(),
+        |git| {
+            let head = match &git.head {
+                GitHead::Branch(branch) => branch,
+                GitHead::Detached(sha) => sha,
+            };
+            format!("{} › {}", git.label, head)
+        },
+    )
 }
 
 pub(crate) fn query_entries(topology: &OpenTopology, _include_agents: bool) -> Vec<Entry> {
@@ -1032,10 +1100,15 @@ pub(crate) fn query_entries(topology: &OpenTopology, _include_agents: bool) -> V
             .flat_map(|tab| tab.panes.iter())
             .find_map(|pane| (!pane.cwd.as_os_str().is_empty()).then(|| pane.cwd.clone()))
             .unwrap_or_else(|| PathBuf::from(&workspace.label));
+        let repository = workspace_breadcrumb(workspace);
+        let repository_key = workspace
+            .git
+            .as_ref()
+            .map(|git| format!("repo-key:{}", git.repo_key));
         entries.push(Entry {
             source: Source::Workspace,
             title: workspace.label.clone(),
-            subtitle: workspace.id.clone(),
+            subtitle: repository.clone(),
             path: workspace_path.clone(),
             workspace_id: Some(workspace.id.clone()),
             workspace_label: Some(workspace.label.clone()),
@@ -1045,16 +1118,19 @@ pub(crate) fn query_entries(topology: &OpenTopology, _include_agents: bool) -> V
                 session: workspace.session.clone(),
                 id: workspace.id.clone(),
             },
-            source_label: None,
-            search_terms: vec![workspace.id.clone(), workspace.label.clone()],
+            source_label: Some("workspace".into()),
+            search_terms: vec![workspace.id.clone(), workspace.label.clone(), repository]
+                .into_iter()
+                .chain(repository_key.clone())
+                .collect(),
         });
         for tab in &workspace.tabs {
-            let breadcrumb = format!("{} › {}", workspace.label, tab.label);
+            let breadcrumb = format!("{} › {}", workspace_breadcrumb(workspace), tab.label);
             entries.push(Entry {
                 source: Source::Workspace,
                 title: tab.label.clone(),
                 subtitle: breadcrumb.clone(),
-                path: PathBuf::from(&breadcrumb),
+                path: workspace_path.clone(),
                 workspace_id: Some(workspace.id.clone()),
                 workspace_label: Some(workspace.label.clone()),
                 agent_target: None,
@@ -1063,8 +1139,11 @@ pub(crate) fn query_entries(topology: &OpenTopology, _include_agents: bool) -> V
                     session: workspace.session.clone(),
                     id: tab.id.clone(),
                 },
-                source_label: None,
-                search_terms: vec![workspace.label.clone(), tab.id.clone(), tab.label.clone()],
+                source_label: Some("tab".into()),
+                search_terms: vec![workspace.label.clone(), tab.id.clone(), tab.label.clone()]
+                    .into_iter()
+                    .chain(repository_key.clone())
+                    .collect(),
             });
             for pane in &tab.panes {
                 let key = format!(
@@ -1072,23 +1151,38 @@ pub(crate) fn query_entries(topology: &OpenTopology, _include_agents: bool) -> V
                     workspace.session.as_deref().unwrap_or("<default>"),
                     pane.id
                 );
+                let label = if pane.label.is_empty() {
+                    "unnamed"
+                } else {
+                    pane.label.as_str()
+                };
                 let breadcrumb = format!(
                     "{} › {} › {}",
-                    workspace.label,
+                    workspace_breadcrumb(workspace),
                     tab.label,
-                    if pane.label.is_empty() {
-                        "unnamed"
-                    } else {
-                        pane.label.as_str()
-                    }
+                    label
                 );
+                let mut search_terms = vec![
+                    key,
+                    pane.id.clone(),
+                    pane.label.clone(),
+                    workspace.label.clone(),
+                    tab.label.clone(),
+                ];
+                if let Some(repository_key) = &repository_key {
+                    search_terms.push(repository_key.clone());
+                }
+                if let Some(agent) = &pane.agent {
+                    search_terms.push(agent.name.clone());
+                    search_terms.push(format!("agent-status:{}", agent.state.label()));
+                }
                 entries.push(Entry {
-                    source: Source::Workspace,
-                    title: if pane.label.is_empty() {
-                        "unnamed".into()
+                    source: if pane.agent.is_some() {
+                        Source::Agent
                     } else {
-                        pane.label.clone()
+                        Source::Workspace
                     },
+                    title: label.into(),
                     subtitle: breadcrumb,
                     path: pane.cwd.clone(),
                     workspace_id: Some(workspace.id.clone()),
@@ -1099,8 +1193,8 @@ pub(crate) fn query_entries(topology: &OpenTopology, _include_agents: bool) -> V
                         session: workspace.session.clone(),
                         id: pane.id.clone(),
                     },
-                    source_label: None,
-                    search_terms: vec![key, pane.id.clone(), pane.label.clone()],
+                    source_label: Some("pane".into()),
+                    search_terms,
                 });
             }
         }

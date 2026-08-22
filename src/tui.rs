@@ -28,7 +28,7 @@ use crate::{
     paths::home,
     sources::status_icon_at,
     theme::Theme,
-    topology::{topology_rows_selected, TopologyDepth, WorkspaceNode},
+    topology::{repository_color, topology_lines_selected, TopologyDepth, WorkspaceNode},
 };
 
 pub(crate) fn tui_loop(
@@ -258,6 +258,25 @@ fn handle_mouse(app: &mut App, mouse: MouseEvent, hits: &ListHits) -> Action {
 }
 
 fn handle_key(app: &mut App, key: KeyEvent) -> Action {
+    if app.input_mode != InputMode::Help && !app.topology_view() {
+        if matches!(key.code, KeyCode::Tab | KeyCode::BackTab) {
+            return Action::Continue;
+        }
+        if app.input_mode == InputMode::Normal {
+            match (key.code, key.modifiers) {
+                (KeyCode::Char('j'), KeyModifiers::NONE) => {
+                    app.next();
+                    return Action::Continue;
+                }
+                (KeyCode::Char('k'), KeyModifiers::NONE) => {
+                    app.prev();
+                    return Action::Continue;
+                }
+                _ => {}
+            }
+        }
+    }
+
     if app.input_mode == InputMode::Normal && app.topology_view() {
         match (key.code, key.modifiers) {
             (KeyCode::Char('['), KeyModifiers::NONE) => {
@@ -285,11 +304,7 @@ fn handle_key(app: &mut App, key: KeyEvent) -> Action {
                 return Action::Continue;
             }
             (KeyCode::Tab, KeyModifiers::NONE) => {
-                if app.topology_cursor.depth == TopologyDepth::Workspace {
-                    app.topology_move_horizontal(1);
-                } else {
-                    app.topology_move_horizontal(1);
-                }
+                app.topology_move_horizontal(1);
                 return Action::Continue;
             }
             (KeyCode::BackTab, KeyModifiers::SHIFT) | (KeyCode::Tab, KeyModifiers::SHIFT) => {
@@ -343,8 +358,24 @@ fn execute_command(app: &mut App, command: Command, key: KeyEvent) -> Action {
                 Action::Quit
             }
         }
-        Command::Open => Action::Open,
-        Command::OpenTemplate => Action::OpenTemplate,
+        Command::Open => {
+            if app.topology_view() {
+                Action::Open
+            } else {
+                app.selected_entry()
+                    .map(|_| Action::Open)
+                    .unwrap_or(Action::Continue)
+            }
+        }
+        Command::OpenTemplate => {
+            if app.topology_view() {
+                Action::OpenTemplate
+            } else {
+                app.selected_entry()
+                    .map(|_| Action::OpenTemplate)
+                    .unwrap_or(Action::Continue)
+            }
+        }
         Command::Update => Action::Update,
         Command::MoveUp => {
             app.topology_move_vertical(-1);
@@ -479,6 +510,7 @@ fn draw(f: &mut Frame, app: &App) -> ListHits {
     }
     let search = Paragraph::new(Line::from(search_spans)).block(
         Block::default()
+            .title(" Helm ")
             .style(Style::default().bg(app.theme.panel_bg))
             .borders(Borders::BOTTOM),
     );
@@ -650,22 +682,28 @@ fn display_title(entry: &Entry) -> &str {
 }
 
 fn entry_status(entry: &Entry) -> Option<&str> {
-    match entry.source {
-        Source::Agent => Some(
+    if let Some(status) = entry
+        .search_terms
+        .iter()
+        .find_map(|term| term.strip_prefix("agent-status:"))
+    {
+        return Some(status);
+    }
+    if entry.source == Source::Agent {
+        return Some(
             entry
                 .subtitle
                 .split_once(" · ")
                 .map(|(status, _)| status)
                 .filter(|status| !status.is_empty())
                 .unwrap_or("unknown"),
-        ),
-        Source::Workspace => entry.subtitle.strip_prefix("agent:").map(|rest| {
-            rest.split_once(" · ")
-                .map(|(status, _)| status)
-                .unwrap_or(rest)
-        }),
-        _ => None,
+        );
     }
+    entry.subtitle.strip_prefix("agent:").map(|rest| {
+        rest.split_once(" · ")
+            .map(|(status, _)| status)
+            .unwrap_or(rest)
+    })
 }
 
 fn entry_metadata(entry: &Entry) -> String {
@@ -718,6 +756,20 @@ fn metadata_width(width: u16) -> usize {
     }
 }
 
+fn truncate_breadcrumb(value: &str, max_chars: usize) -> String {
+    if value.chars().count() <= max_chars {
+        return value.into();
+    }
+    let parts = value.split(" › ").collect::<Vec<_>>();
+    if parts.len() >= 3 {
+        let endpoint = format!("{} › … › {}", parts[0], parts[parts.len() - 1]);
+        if endpoint.chars().count() <= max_chars {
+            return endpoint;
+        }
+    }
+    truncate_end(value, max_chars)
+}
+
 fn truncate_end(value: &str, max_chars: usize) -> String {
     if value.chars().count() <= max_chars {
         return value.into();
@@ -756,46 +808,81 @@ fn truncate_terminal(value: &str, max_width: usize) -> String {
     result
 }
 
-fn source_column_width(app: &App) -> usize {
-    app.entries
-        .iter()
-        .map(|entry| Span::raw(truncate_terminal(entry.source_name(), 10)).width())
-        .max()
-        .unwrap_or(0)
+fn source_column_width(_app: &App) -> usize {
+    9
 }
 
 fn source_spans(app: &App, entry: &Entry, width: usize) -> Vec<Span<'static>> {
-    let source = truncate_terminal(entry.source_name(), 10);
+    let source = truncate_terminal(entry.source_name(), width);
     let source_width = Span::raw(&source).width();
     vec![
+        Span::styled(source, Style::default().fg(app.theme.overlay0)),
+        Span::raw(" ".repeat(width.saturating_sub(source_width))),
+    ]
+}
+
+fn entry_repository_key(entry: &Entry) -> Option<&str> {
+    entry
+        .search_terms
+        .iter()
+        .find_map(|term| term.strip_prefix("repo-key:"))
+}
+
+fn repository_keys(app: &App, entry: &Entry) -> Vec<String> {
+    let mut keys = app
+        .topology
+        .workspaces
+        .iter()
+        .filter_map(|workspace| workspace.git.as_ref().map(|git| git.repo_key.clone()))
+        .collect::<Vec<_>>();
+    if let Some(key) = entry_repository_key(entry) {
+        keys.push(key.into());
+    }
+    keys.sort();
+    keys.dedup();
+    keys
+}
+
+fn breadcrumb_spans(app: &App, entry: &Entry, value: &str) -> Vec<Span<'static>> {
+    let Some(repository_key) = entry_repository_key(entry) else {
+        return vec![Span::styled(
+            value.to_string(),
+            Style::default().fg(app.theme.overlay0),
+        )];
+    };
+    let Some((parent, rest)) = value.split_once(" › ") else {
+        return vec![Span::styled(
+            value.to_string(),
+            Style::default().fg(app.theme.overlay0),
+        )];
+    };
+    vec![
         Span::styled(
-            source,
+            parent.to_string(),
             Style::default()
-                .fg(source_color(&app.theme, &entry.source))
+                .fg(repository_color(
+                    repository_key,
+                    &repository_keys(app, entry),
+                    &app.theme,
+                ))
                 .add_modifier(Modifier::BOLD),
         ),
-        Span::raw(" ".repeat(width.saturating_sub(source_width).saturating_add(1))),
+        Span::styled(
+            format!(" › {rest}"),
+            Style::default().fg(app.theme.overlay0),
+        ),
     ]
 }
 
 #[derive(Clone, Copy)]
 struct DetailedLayout {
-    prefix_width: usize,
+    status_width: usize,
     title_width: usize,
     marker_width: usize,
     right_width: usize,
 }
 
 fn detailed_layout(app: &App, row_width: usize, source_width: usize) -> DetailedLayout {
-    let minimum_prefix_width = 8;
-    let prefix_width = app
-        .entries
-        .iter()
-        .filter(|_| false)
-        .map(|_| 0usize)
-        .max()
-        .unwrap_or(minimum_prefix_width)
-        .max(minimum_prefix_width);
     let marker_width = if row_width >= 80 { 10 } else { 4 };
     let state_width = app
         .entries
@@ -807,27 +894,26 @@ fn detailed_layout(app: &App, row_width: usize, source_width: usize) -> Detailed
         })
         .max()
         .unwrap_or(0);
+    let status_width = state_width.saturating_add(2);
     let source_budget = source_width.saturating_add(1);
-    let right_width = metadata_width(row_width.saturating_add(3) as u16)
-        .max(state_width)
-        .min(
-            row_width.saturating_sub(
-                source_budget
-                    .saturating_add(prefix_width)
-                    .saturating_add(marker_width)
-                    .saturating_add(4),
-            ),
-        );
+    let right_width = metadata_width(row_width.saturating_add(3) as u16).min(
+        row_width.saturating_sub(
+            source_budget
+                .saturating_add(status_width)
+                .saturating_add(marker_width)
+                .saturating_add(4),
+        ),
+    );
     let right_separator = usize::from(right_width > 0);
     let content_width = row_width
         .saturating_sub(source_budget)
-        .saturating_sub(prefix_width)
+        .saturating_sub(status_width)
         .saturating_sub(marker_width)
         .saturating_sub(right_width)
         .saturating_sub(right_separator);
     let title_width = content_width.min(48) / 2;
     DetailedLayout {
-        prefix_width,
+        status_width,
         title_width,
         marker_width,
         right_width,
@@ -941,22 +1027,21 @@ fn draw_topology_list(f: &mut Frame, app: &App, area: Rect) -> ListHits {
     let width = list_area.width as usize;
     let mut lines = Vec::new();
     let selected_workspace = app.topology_cursor.workspace;
+    let repositories = app
+        .topology
+        .workspaces
+        .iter()
+        .filter_map(|workspace| workspace.git.as_ref().map(|git| git.repo_key.clone()))
+        .collect::<Vec<_>>();
     for (workspace_index, workspace) in app.topology.workspaces.iter().enumerate() {
         let selection = (workspace_index == selected_workspace)
             .then_some(app.topology_cursor.selection[workspace_index]);
-        let mut rows = topology_rows_selected(workspace, width, selection);
+        let mut rendered =
+            topology_lines_selected(workspace, width, selection, &app.theme, &repositories);
         if workspace.id == app.previous_workspace_id.as_deref().unwrap_or("") {
-            let mut marker = "  ←  ".chars();
-            let mut first = rows[0].chars();
-            let mut marked = String::new();
-            for _ in 0..5 {
-                marked.push(marker.next().unwrap_or(' '));
-                let _ = first.next();
-            }
-            marked.extend(first);
-            rows[0] = marked;
+            rendered[0].spans[0] = Span::styled("  ←  ", Style::default().fg(app.theme.red));
         }
-        for (line_index, row) in rows.into_iter().enumerate() {
+        for (line_index, mut line) in rendered.into_iter().enumerate() {
             let mut style = if workspace_index == selected_workspace {
                 Style::default().bg(app.theme.surface0).fg(app.theme.text)
             } else {
@@ -967,14 +1052,13 @@ fn draw_topology_list(f: &mut Frame, app: &App, area: Rect) -> ListHits {
                     || (app.topology_cursor.depth == TopologyDepth::Tab && line_index == 1)
                     || (app.topology_cursor.depth == TopologyDepth::Pane && line_index == 2))
             {
-                style = style.bg(app.theme.surface1);
+                style = Style::default()
+                    .bg(app.theme.surface1)
+                    .fg(app.theme.accent)
+                    .add_modifier(Modifier::BOLD);
             }
-            let row = truncate_terminal(&row, width);
-            let padding = " ".repeat(width.saturating_sub(Span::raw(&row).width()));
-            lines.push(ListItem::new(Line::styled(
-                format!("{row}{padding}"),
-                style,
-            )));
+            line = line.style(style);
+            lines.push(ListItem::new(line));
         }
     }
     if lines.is_empty() {
@@ -1085,19 +1169,24 @@ fn draw_list(f: &mut Frame, app: &App, area: Rect) -> ListHits {
         if row == app.selected {
             selected_row = Some(items.len());
         }
-        let (branch, branch_color) = entry_branch(app, e, false);
         let score = show_scores
             .then(|| app.filtered_scores.get(row).map(|s| format!("score {s}")))
             .flatten();
 
         if app.config.picker.detailed_rows {
-            let status = entry_status(e);
-            let icon = status
-                .map(|status| format!("{}  ", status_icon_at(&e.source, status, app.spinner_tick)))
-                .unwrap_or_else(|| "   ".into());
+            let status = entry_status(e).filter(|status| *status != "unknown");
             let status_label = status
-                .filter(|status| *status != "unknown")
-                .map(|status| truncate_end(status, detailed_layout.right_width));
+                .map(|status| truncate_end(status, detailed_layout.status_width.saturating_sub(2)));
+            let status_text = status_label
+                .as_deref()
+                .map(|status| {
+                    format!(
+                        "{} {status}",
+                        status_icon_at(&e.source, status, app.spinner_tick)
+                    )
+                })
+                .unwrap_or_default();
+            let status_text_width = Span::raw(&status_text).width();
             let raw_path = e.path.display().to_string();
             let raw_metadata = if e.source == Source::Agent {
                 String::new()
@@ -1108,33 +1197,15 @@ fn draw_list(f: &mut Frame, app: &App, area: Rect) -> ListHits {
                 && detailed_layout.right_width > 0
                 && !raw_metadata.is_empty()
                 && raw_metadata != raw_path;
-            let separator_width = usize::from(show_metadata && status_label.is_some()) * 3;
-            let status_width = status_label
-                .as_deref()
-                .map(str::chars)
-                .map(Iterator::count)
-                .unwrap_or(0);
-            let metadata_budget = detailed_layout
-                .right_width
-                .saturating_sub(status_width)
-                .saturating_sub(separator_width);
             let metadata = if show_metadata {
-                truncate_end(&raw_metadata, metadata_budget)
+                truncate_breadcrumb(&raw_metadata, detailed_layout.right_width)
             } else {
                 String::new()
             };
-            let right_width = status_width
-                + usize::from(!metadata.is_empty() && status_label.is_some()) * 3
-                + metadata.chars().count();
-            let raw_prefix_width = branch.chars().count() + icon.chars().count();
-            let prefix_padding = " ".repeat(
-                detailed_layout
-                    .prefix_width
-                    .saturating_sub(raw_prefix_width),
-            );
+            let metadata_width = Span::raw(&metadata).width();
             let path_width = row_width
                 .saturating_sub(source_width.saturating_add(1))
-                .saturating_sub(detailed_layout.prefix_width)
+                .saturating_sub(detailed_layout.status_width)
                 .saturating_sub(detailed_layout.title_width)
                 .saturating_sub(detailed_layout.marker_width)
                 .saturating_sub(2)
@@ -1147,9 +1218,14 @@ fn draw_list(f: &mut Frame, app: &App, area: Rect) -> ListHits {
                 .unwrap_or(color);
             let mut title_spans = source_spans(app, e, source_width);
             title_spans.extend([
-                Span::styled(branch, Style::default().fg(branch_color)),
-                Span::styled(icon, Style::default().fg(status_color)),
-                Span::raw(prefix_padding),
+                Span::styled(status_text, Style::default().fg(status_color)),
+                Span::raw(
+                    " ".repeat(
+                        detailed_layout
+                            .status_width
+                            .saturating_sub(status_text_width),
+                    ),
+                ),
                 Span::styled(title.clone(), Style::default().fg(app.theme.text)),
                 Span::raw(
                     " ".repeat(
@@ -1165,28 +1241,16 @@ fn draw_list(f: &mut Frame, app: &App, area: Rect) -> ListHits {
             ]);
             if detailed_layout.right_width > 0 {
                 title_spans.push(Span::raw(" "));
-                if let Some(status_label) = status_label {
-                    title_spans.push(Span::styled(
-                        status_label.to_string(),
-                        Style::default().fg(status_color),
-                    ));
-                    if !metadata.is_empty() {
-                        title_spans
-                            .push(Span::styled(" · ", Style::default().fg(app.theme.overlay0)));
-                    }
-                }
                 if !metadata.is_empty() {
-                    title_spans.push(Span::styled(
-                        metadata,
-                        Style::default().fg(app.theme.overlay0),
-                    ));
+                    title_spans.extend(breadcrumb_spans(app, e, &metadata));
                 }
                 title_spans.push(Span::raw(
-                    " ".repeat(detailed_layout.right_width.saturating_sub(right_width)),
+                    " ".repeat(detailed_layout.right_width.saturating_sub(metadata_width)),
                 ));
             }
             items.push(ListItem::new(Line::from(title_spans)));
         } else {
+            let (branch, branch_color) = entry_branch(app, e, false);
             let status_text = entry_status(e);
             let status = status_text
                 .map(|status| format!("{} ", status_icon_at(&e.source, status, app.spinner_tick)))
@@ -1221,8 +1285,11 @@ fn draw_list(f: &mut Frame, app: &App, area: Rect) -> ListHits {
                         .unwrap_or(color)),
                 ),
                 Span::styled(e.title.clone(), Style::default().fg(app.theme.text)),
-                Span::styled(subtitle, Style::default().fg(app.theme.subtext0)),
             ]);
+            if !subtitle.is_empty() {
+                spans.push(Span::raw("  "));
+                spans.extend(breadcrumb_spans(app, e, e.subtitle.as_str()));
+            }
             if let Some(score) = score {
                 spans.push(Span::raw(spacer));
                 spans.push(Span::styled(score, Style::default().fg(app.theme.overlay0)));
@@ -1231,10 +1298,19 @@ fn draw_list(f: &mut Frame, app: &App, area: Rect) -> ListHits {
         }
         item_entries.push(Some(row));
     }
+    if items.is_empty() {
+        items.push(ListItem::new(Line::styled(
+            "no destination matches that query",
+            Style::default().fg(app.theme.overlay0),
+        )));
+        item_entries.push(None);
+    }
     let item_heights: Vec<u16> = items.iter().map(|item| item.height() as u16).collect();
     let mut state = ListState::default();
     state.select(selected_row);
-    let block = Block::default().title(" Results ").borders(Borders::RIGHT);
+    let block = Block::default()
+        .title(format!(" RESULTS · {} ", app.filtered.len()))
+        .borders(Borders::RIGHT);
     let list_area = block.inner(area);
     let list = List::new(items)
         .block(block)
@@ -1442,6 +1518,66 @@ mod tests {
             source_label: None,
             search_terms: vec![],
         }
+    }
+
+    #[test]
+    fn detailed_rows_put_status_before_aligned_destinations() {
+        let mut app = App::new(Config::default(), Theme::load(false));
+        let mut idle = entry(Source::Agent, "first-destination");
+        idle.search_terms.push("agent-status:idle".into());
+        let mut blocked = entry(Source::Agent, "second-destination");
+        blocked.search_terms.push("agent-status:blocked".into());
+        let mut working = entry(Source::Agent, "third-destination");
+        working.search_terms.push("agent-status:working".into());
+        let mut ordinary = entry(Source::Workspace, "ordinary");
+        ordinary.subtitle = "remaining metadata".into();
+        app.entries = vec![idle, blocked, working, ordinary];
+        app.filtered = (0..app.entries.len()).collect();
+        app.filtered_scores = vec![0; app.entries.len()];
+        app.selected = usize::MAX;
+        app.query = "status".into();
+
+        let backend = TestBackend::new(100, 8);
+        let mut terminal = Terminal::new(backend).unwrap();
+        terminal
+            .draw(|f| {
+                draw_list(f, &app, f.area());
+            })
+            .unwrap();
+        let text = buffer_text(&terminal);
+        let buffer = terminal.backend().buffer();
+        let expected = [
+            ("first-destination", "○", "idle", app.theme.green),
+            ("second-destination", "!", "blocked", app.theme.red),
+            ("third-destination", "⠋", "working", app.theme.yellow),
+        ];
+
+        for (destination, symbol, status, color) in expected {
+            let (row, line) = text
+                .lines()
+                .enumerate()
+                .find(|(_, line)| line.contains(destination))
+                .unwrap();
+            assert_eq!(line.matches(status).count(), 1);
+            assert_eq!(line.chars().take(5).collect::<String>(), "agent");
+            assert_eq!(line.chars().nth(9), symbol.chars().next());
+            assert_eq!(
+                line.chars().skip(11).take(status.len()).collect::<String>(),
+                status
+            );
+            assert_eq!(line.chars().nth(18), destination.chars().next());
+            assert_eq!(buffer[(9, row as u16)].fg, color);
+            assert_eq!(buffer[(11, row as u16)].fg, color);
+        }
+
+        let (_row, ordinary_line) = text
+            .lines()
+            .enumerate()
+            .find(|(_, line)| line.contains("ordinary"))
+            .unwrap();
+        assert!(ordinary_line.chars().skip(9).take(9).all(|c| c == ' '));
+        assert_eq!(ordinary_line.chars().nth(18), Some('o'));
+        assert!(ordinary_line.contains("remaining metadata"));
     }
 
     fn topology_test_app() -> App {
@@ -1859,7 +1995,7 @@ mod tests {
     }
 
     #[test]
-    fn draw_uses_the_host_pane_chrome() {
+    fn draw_uses_the_picker_title() {
         let app = App::new(Config::default(), Theme::load(false));
         let backend = TestBackend::new(60, 10);
         let mut terminal = Terminal::new(backend).unwrap();
@@ -1869,7 +2005,99 @@ mod tests {
             })
             .unwrap();
 
-        assert!(!buffer_text(&terminal).contains("Helm"));
+        assert!(buffer_text(&terminal).contains("Helm"));
+    }
+
+    #[test]
+    fn topology_visual_columns_and_partial_styles_match_design() {
+        let mut app = topology_test_app();
+        app.topology.workspaces[0].git = Some(crate::topology::GitIdentity {
+            repo_key: "/repo/.git".into(),
+            label: "repo".into(),
+            head: crate::topology::GitHead::Branch("main".into()),
+        });
+        app.topology_cursor.depth = TopologyDepth::Tab;
+        let backend = TestBackend::new(80, 8);
+        let mut terminal = Terminal::new(backend).unwrap();
+        terminal
+            .draw(|f| {
+                draw_list(f, &app, f.area());
+            })
+            .unwrap();
+        let buffer = terminal.backend().buffer();
+        assert_eq!(buffer[(9, 2)].symbol(), "t");
+        assert_eq!(buffer[(9, 3)].symbol(), "p");
+        assert_eq!(buffer[(9, 4)].symbol(), "p");
+        let repository_x = buffer_text(&terminal)
+            .lines()
+            .nth(1)
+            .unwrap()
+            .find("repo")
+            .unwrap() as u16;
+        assert_eq!(buffer[(repository_x, 1)].fg, app.theme.teal);
+        assert!(buffer[(repository_x, 1)].modifier.contains(Modifier::BOLD));
+        assert!(!buffer[(repository_x + 6, 1)]
+            .modifier
+            .contains(Modifier::BOLD));
+
+        let mut flat = App::new(Config::default(), Theme::load(false));
+        flat.config.picker.detailed_rows = false;
+        let mut result = entry(Source::Workspace, "Destination");
+        result.source_label = Some("open".into());
+        result.subtitle = "repo › main › Tab".into();
+        result.search_terms.push("repo-key:/repo/.git".into());
+        flat.entries = vec![result];
+        flat.query = "repo".into();
+        flat.apply_filter();
+        flat.selected = usize::MAX;
+        let backend = TestBackend::new(80, 8);
+        let mut terminal = Terminal::new(backend).unwrap();
+        terminal
+            .draw(|f| {
+                draw_list(f, &flat, f.area());
+            })
+            .unwrap();
+        let buffer = terminal.backend().buffer();
+        let rendered = buffer_text(&terminal);
+        let (row, line) = rendered
+            .lines()
+            .enumerate()
+            .find(|(_, line)| line.contains("Destination"))
+            .unwrap();
+        let line = line.to_string();
+        let source_x = line.find("open").unwrap() as u16;
+        let parent_x = line.find("repo").unwrap() as u16;
+        assert_eq!(buffer[(source_x, row as u16)].fg, flat.theme.overlay0);
+        assert!(!buffer[(source_x, row as u16)]
+            .modifier
+            .contains(Modifier::BOLD));
+        assert_eq!(buffer[(parent_x, row as u16)].fg, flat.theme.teal);
+        assert!(buffer[(parent_x, row as u16)]
+            .modifier
+            .contains(Modifier::BOLD));
+        assert!(!buffer[(parent_x + 7, row as u16)]
+            .modifier
+            .contains(Modifier::BOLD));
+    }
+
+    #[test]
+    fn selected_depth_is_stronger_when_surface_colors_match() {
+        let mut app = topology_test_app();
+        app.theme.surface1 = app.theme.surface0;
+        app.topology_cursor.depth = TopologyDepth::Tab;
+        let backend = TestBackend::new(80, 8);
+        let mut terminal = Terminal::new(backend).unwrap();
+        terminal
+            .draw(|f| {
+                draw_list(f, &app, f.area());
+            })
+            .unwrap();
+        let buffer = terminal.backend().buffer();
+
+        assert_eq!(buffer[(0, 1)].bg, app.theme.surface0);
+        assert_eq!(buffer[(0, 2)].bg, app.theme.surface0);
+        assert!(buffer[(0, 2)].modifier.contains(Modifier::BOLD));
+        assert_eq!(buffer[(9, 2)].symbol(), "t");
     }
 
     #[cfg(any())]
