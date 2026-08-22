@@ -1319,6 +1319,7 @@ fn preview_text(app: &App, e: &Entry) -> String {
         EntryAction::FocusWorkspace { .. } => "focus existing workspace",
         EntryAction::FocusTab { .. } => "focus exact tab",
         EntryAction::FocusAgent { .. } => "focus agent pane",
+        EntryAction::FocusPane { .. } => "focus exact pane",
         EntryAction::OpenRemote { .. } => "open remote Herdr",
         EntryAction::InvokePluginAction { .. } => "invoke Herdr plugin action",
         EntryAction::RunCommand { .. } if e.source == Source::Session => "open session via plugin",

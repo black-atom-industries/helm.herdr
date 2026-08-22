@@ -14,6 +14,7 @@ mod paths;
 mod recent;
 mod sources;
 mod theme;
+mod topology;
 mod tui;
 mod update;
 

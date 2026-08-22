@@ -603,15 +603,8 @@ impl App {
     pub(crate) fn open_selected(&mut self, use_directory_template: bool) -> Result<(), String> {
         let e = self.selected_entry().cloned().ok_or("nothing selected")?;
         let action_destination = recent_destination_for_entry(&e);
-        let tracks_workspace_transition = self.config.jump_back.enabled
-            && matches!(
-                &e.action,
-                EntryAction::FocusAgent { .. }
-                    | EntryAction::FocusWorkspace { .. }
-                    | EntryAction::FocusTab { .. }
-                    | EntryAction::OpenProject
-                    | EntryAction::FocusOrCreateDir
-            );
+        let tracks_workspace_transition =
+            self.config.jump_back.enabled && tracks_workspace_transition(&e.action);
         let origin_workspace = if tracks_workspace_transition {
             launch_workspace_id().or_else(|| current_workspace_id().ok())
         } else {
@@ -621,6 +614,7 @@ impl App {
             EntryAction::FocusAgent { target } => {
                 (run_herdr(["agent", "focus", target]), true, true)
             }
+            EntryAction::FocusPane { id, .. } => (run_herdr(["pane", "focus", id]), true, true),
             EntryAction::FocusWorkspace { id, .. } => {
                 (run_herdr(["workspace", "focus", id]), true, true)
             }
@@ -903,6 +897,18 @@ fn current_session_name() -> Option<String> {
         .filter(|name| !name.trim().is_empty())
 }
 
+fn tracks_workspace_transition(action: &EntryAction) -> bool {
+    matches!(
+        action,
+        EntryAction::FocusAgent { .. }
+            | EntryAction::FocusPane { .. }
+            | EntryAction::FocusWorkspace { .. }
+            | EntryAction::FocusTab { .. }
+            | EntryAction::OpenProject
+            | EntryAction::FocusOrCreateDir
+    )
+}
+
 fn recent_destination_for_entry(e: &Entry) -> Option<(Option<String>, String)> {
     match &e.action {
         EntryAction::FocusWorkspace { session, id, .. } => Some((session.clone(), id.clone())),
@@ -914,6 +920,10 @@ fn recent_destination_for_entry(e: &Entry) -> Option<(Option<String>, String)> {
             .workspace_id
             .as_ref()
             .map(|workspace_id| (current_session_name(), workspace_id.clone())),
+        EntryAction::FocusPane { session, .. } => e
+            .workspace_id
+            .as_ref()
+            .map(|workspace_id| (session.clone(), workspace_id.clone())),
         _ => None,
     }
 }
@@ -1306,6 +1316,9 @@ fn pin_key(entry: &Entry) -> String {
             format!("tab:{}:{id}", session_key(session.as_deref()))
         }
         EntryAction::FocusAgent { target } => format!("agent:{target}"),
+        EntryAction::FocusPane { session, id } => {
+            format!("pane:{}:{id}", session_key(session.as_deref()))
+        }
         EntryAction::OpenProject => format!("project:{}", entry.key()),
         EntryAction::OpenRemote { target } => format!("remote:{target}"),
         EntryAction::InvokePluginAction { action } => {
@@ -2403,6 +2416,18 @@ exit 0
             recent_destination_for_entry(&agent).map(|(_, workspace_id)| workspace_id),
             Some("w3".into())
         );
+
+        let mut pane = entry(Source::Workspace, "/tmp/pane", "Shell");
+        pane.workspace_id = Some("w4".into());
+        pane.action = EntryAction::FocusPane {
+            session: Some("work".into()),
+            id: "w4:p1".into(),
+        };
+        assert_eq!(
+            recent_destination_for_entry(&pane),
+            Some((Some("work".into()), "w4".into()))
+        );
+        assert!(tracks_workspace_transition(&pane.action));
     }
 
     #[test]

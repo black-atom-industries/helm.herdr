@@ -77,6 +77,11 @@ pub(crate) enum EntryAction {
     FocusAgent {
         target: String,
     },
+    #[allow(dead_code)]
+    FocusPane {
+        session: Option<String>,
+        id: String,
+    },
     OpenProject,
     OpenRemote {
         target: String,
@@ -160,6 +165,9 @@ pub(crate) struct Entry {
 
 impl Entry {
     pub(crate) fn key(&self) -> String {
+        if let EntryAction::FocusPane { session, id } = &self.action {
+            return format!("pane:{}:{id}", session.as_deref().unwrap_or("<default>"));
+        }
         canonical_str(&self.path).unwrap_or_else(|| self.path.display().to_string())
     }
 
