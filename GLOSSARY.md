@@ -25,13 +25,12 @@
 | Term | Definition | Aliases to avoid |
 | --- | --- | --- |
 | **Picker** | Helm's interactive interface for finding and opening destinations. | Navigator, menu |
-| **Popup** | A temporary Picker shown by Herdr over the current workspace. | Modal, overlay |
-| **Side pane** | A persistent Picker shown beside the current workspace. | Sidebar, split view |
-| **Query** | The text entered by the User to narrow the result list. | Search term, filter |
-| **Source filter** | A restriction that limits the result list to one Source category. | Filter, search mode |
+| **Popup** | A temporary Picker shown by Herdr over the current workspace. | Modal |
+| **Side pane** | A persistent Picker shown beside the current workspace. | Split view |
+| **Query** | The text entered by the User to narrow the result list. | Search term |
+| **Source filter** | A restriction that limits the result list to one Source category. | Filter |
 | **Result list** | The ordered visible collection of Entries matching the Query and Source filter. | Results, menu items |
-| **Preview** | An optional panel showing details and the action for the Selected entry. | Details view, inspector |
-| **Help overlay** | The panel listing the active Keybindings. | Help screen, shortcuts menu |
+| **Help** | The panel listing the active Keybindings. | Help screen, shortcuts menu |
 | **Keybinding** | A key or key combination mapped to a Picker command. | Shortcut, hotkey |
 
 ### Entries
@@ -39,7 +38,7 @@
 | Term | Definition | Aliases to avoid |
 | --- | --- | --- |
 | **Entry** | A navigable destination represented in the Result list. | Result, item |
-| **Entry row** | The visual line that renders one Entry and its title, path, and metadata. | Result row, list item |
+| **Entry row** | The one-line rendering of an Entry as `Source | symbol+word status | destination`. | Result row, list item |
 | **Selected entry** | The Entry currently targeted by keyboard or mouse actions. | Highlighted row, active item |
 | **Marked entry** | An Entry explicitly kept ahead of normal source ordering. | Pinned item, favorite |
 | **Entry action** | The operation performed when the User opens the Selected entry. | Result behavior, command |
@@ -51,7 +50,7 @@
 | **Workspace** | A Herdr container for related Tabs and their Panes. | Project, session |
 | **Tab** | A named view within a Workspace containing one or more Panes. | Workspace tab, window |
 | **Pane** | A terminal area within a Tab. | Panel, split |
-| **Topology** | The hierarchical view of open Workspaces and their Tabs. | Tree view, workspace list |
+| **Topology** | The live Workspace → Tab → Pane structure shown as fixed four-line Workspace blocks. | Workspace list |
 | **Current workspace** | The local Workspace that currently owns the focused Herdr surface. | Active project, current project |
 | **Previous workspace** | The local Workspace visited immediately before the Current workspace. | Last workspace, previous project |
 
@@ -76,8 +75,7 @@
 | --- | --- | --- |
 | **Status glyph** | A symbol that communicates the current state of an agent or Workspace. | Status icon, indicator |
 | **Selection marker** | The `→` symbol identifying the Selected entry. | Cursor, pointer |
-| **Topology marker** | A tree symbol showing hierarchy or expansion in the Topology. | Branch icon, tree glyph |
-| **Metadata** | Supporting information shown beside an Entry's title and path. | Description, details |
+| **Topology depth** | The selected level in a Topology block: Workspace, Tab, or Pane. | Navigation level |
 
 ## Relationships
 
@@ -97,8 +95,8 @@
 > **Agent:** "The **Entry** is the destination. The **Entry row** is its visual representation in the Result list."
 > **User:** "What happens when I press Enter?"
 > **Agent:** "The Picker applies the **Entry action** for the **Selected entry**, such as focusing a Workspace or opening a remote target."
-> **User:** "And the tree of tabs?"
-> **Agent:** "That is the **Topology**. It shows Workspaces, their Tabs, and the Panes inside each Tab."
+> **User:** "How do I reach a Pane?"
+> **Agent:** "The **Topology** shows the Workspace, its Tabs, the selected Tab's Panes, and the selected Pane detail. Enter focuses the exact Pane ID."
 
 ## Flagged ambiguities
 

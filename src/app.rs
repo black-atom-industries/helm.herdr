@@ -486,10 +486,6 @@ impl App {
             .and_then(|idx| self.entries.get(*idx))
     }
 
-    pub(crate) fn expand_selected(&mut self) {}
-
-    pub(crate) fn collapse_selected(&mut self) {}
-
     pub(crate) fn is_pinned(&self, entry: &Entry) -> bool {
         self.pinned_entries.contains(&pin_key(entry))
             || legacy_current_workspace_pin_key(entry)
@@ -1834,23 +1830,6 @@ exit 0
         assert_eq!(entries[0].title, "root");
     }
 
-    #[cfg(any())]
-    #[test]
-    fn open_selected_records_and_persists_a_successful_workspace_focus() {
-        let _env = command_test_env();
-        let mut app = app_with_selected_entry(
-            command_test_config(),
-            open_workspace("work", "w1", "Workspace", false),
-        );
-
-        app.open_selected(false).unwrap();
-
-        assert_eq!(app.recent_state.recent_ids(Some("work")), &["w1"]);
-        assert_eq!(RecentState::load().recent_ids(Some("work")), &["w1"]);
-        let calls = fs::read_to_string(env::var("HERDR_TEST_LOG").unwrap()).unwrap();
-        assert!(calls.lines().any(|line| line == "workspace focus w1"));
-    }
-
     #[test]
     fn open_selected_failure_leaves_recent_state_and_persistence_unchanged() {
         let _env = command_test_env();
@@ -2010,12 +1989,15 @@ exit 0
             Some("w4")
         );
 
+        let destination_session = destination
+            .as_ref()
+            .and_then(|(session, _)| session.clone());
         let mut state = RecentState::default();
         if let Some((session, workspace_id)) = destination {
             state.record(session.as_deref(), &workspace_id);
         }
         assert_eq!(state.sessions.len(), 1);
-        assert_eq!(state.recent_ids(current_session_name().as_deref()), &["w4"]);
+        assert_eq!(state.recent_ids(destination_session.as_deref()), &["w4"]);
         let unchanged = state.clone();
         assert!(recent_destination_after_indirect_success(&action, None).is_none());
         assert_eq!(state, unchanged);

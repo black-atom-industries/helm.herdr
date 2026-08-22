@@ -1,98 +1,52 @@
 # Feature Intent
 
-## Picker goal
+Helm is one Picker for Herdr destinations and actions. The common flow is `prefix+t -> type -> Enter`.
 
-One picker center that answers: “where do I want to work next, or what Herdr action do I need now?”
+## Presentation
 
-Do not split into many specialized pickers unless the UX clearly needs it. The product direction is “kinda like tv, but deeply integrated with Herdr.”
+- `open` requests a session-modal Herdr popup. It defaults to 90% × 90%, controlled by `picker.popup_width` and `picker.popup_height` as integer percentages from 1 through 100.
+- `open-side` opens a persistent right split, focuses it when it exists elsewhere in the Workspace, and closes it when already focused. Enter leaves the Side pane open.
 
-## Open modes
+## Result projections
 
-- `open`: session-modal Herdr popup, closes after `ui` exits (the default, quick-jump flow), sized by `picker.popup_width` and `picker.popup_height`.
-- `open-side`: persistent right split (`picker-side` pane entry), mirroring herdr-file-viewer UX — launch-or-focus, toggle closed when already focused, stays open after `Enter`. The toggle decision lives in `side_pane_decision()` in `src/main.rs` and matches panes by the `Helm Side` title.
+An empty Query with no Source filter or the Workspace Source filter renders the live Topology as fixed four-line blocks for each Workspace. The four lines contain the Workspace identity, its `tabs`, the selected Tab's `panes`, and the selected Pane detail.
 
-## Result rows
+A typed Query or any non-Workspace Source filter renders a flat Result list. Every row is one terminal line: `Source | symbol+word status | destination`. Topology and flat projections never mix. Marked Entries display Source `bookmark` without duplicate rows.
 
-Result rows use one flat layout: Source, status symbol and word, destination, then remaining metadata. Query results stay one terminal line.
-
-Open is a live workspace → tab topology for the current session. Workspace and tab rows repeat the `open` source label while retaining their topology glyphs and ancestry. Linked-worktree workspaces nest beneath the open non-linked workspace with the same repository identity. Search keeps the full ancestry of matching tabs.
-
-## Notifications
-
-`[notifications] enabled = false` disables Navigator success/error notifications. When enabled, `sound = "default"` uses Herdr's `done`/`request` sounds, `sound = "none"` keeps notifications silent, and `sound = "custom"` plays `custom_sound` asynchronously with the first available native player (`afplay` on macOS; `pw-play`, `paplay`, or `aplay` on Linux). Custom paths are passed directly as command arguments, never through a shell.
-
-## Update notice
-
-`picker.check_updates = true` starts a non-blocking `git ls-remote` check when the UI opens. The latest stable semver tag is cached in `update-check` under the plugin config directory for 24 hours. A newer release renders as `↑ vX.Y.Z available` on the right side of the Navigator header. Network and parsing failures stay silent.
+Topology navigation has Workspace, Tab, and Pane depth. Arrow keys and `h`/`j`/`k`/`l` move through the active depth; `Right` enters or advances children, `Left`/`h` returns to the parent depth, `Tab`/`Shift-Tab` advances or moves back within the active child depth, and `[`/`]` changes Workspace. Enter focuses the exact selected Workspace, Tab, or Pane ID. The standalone Query token `agent` scopes results to agent Entries; `!name`, `@workspace-or-status`, `/path`, and `#status` narrow them further.
 
 ## Sources
 
-Default source order:
-
 ```toml
-["agent", "server", "workspace", "project", "session", "zoxide", "root", "quick", "plugin"]
+["workspace", "agent", "project", "session", "zoxide", "root", "server", "quick", "plugin"]
 ```
 
-Source priority is intentional: existing/open things first, creation sources later, quick actions available but not dominant.
+Visible flat Sources include `workspace`, `tab`, `pane`, `agent`, `project`, `server`, `session`, `zoxide`, `root`, `quick`, `plugin`, and `bookmark`.
 
-## Keybindings
+## Enter actions
 
-- `Ctrl-W`: Open topology
-- `Ctrl-P`: Herdr Plus projects
-- `Ctrl-Q`: Herdr Plus Quick Actions
-- `Ctrl-Z`: zoxide
-- `Ctrl-R`: roots
-- `Ctrl-S`: servers/remotes
-- `Ctrl-A`: agents
-- `Ctrl-U`: clear query/filter
+- Workspaces, Tabs, and Panes focus their exact Herdr IDs. Pane actions use Pane IDs directly.
+- Agent Entries focus the Herdr agent target.
+- Project, zoxide, and root Entries reuse or create Workspaces. `Alt-Enter` applies the configured directory template to zoxide/root Entries.
+- Server Entries hand off through Herdr's remote flow.
+- Quick Actions invoke Herdr Plus; plugin Entries run their configured command; session Entries run their configured session command.
 
-Keep keybindings mnemonic and few.
+## Other behavior
+
+`picker.check_updates` performs a non-blocking daily release check and shows a release notice when one is available. Jump Back records successful local Workspace transitions when enabled. Source shortcuts are configurable through `[picker.filter_keys]`, and optional sources degrade quietly when their dependencies are absent.
 
 ## Remote handoff
 
-Navigator owns remote handoff, not SSH terminal wrapping. `Ctrl-S` filters Herdr remote targets. Manual remote rows come from `[sessions.entries]` and run `herdr --remote TARGET --handoff`.
-
-Open reads the current local session. Do not add `.herdr-server.toml`, SSH config parsing, configured session aliases, or terminal attach listing unless terminal-level search becomes an explicit UX goal.
+Helm hands remote targets to Herdr rather than wrapping an SSH terminal. Open reads the current local session.
 
 ## Herdr Plus
 
-Project should be usable from this picker directly:
-- already open -> focus existing workspace
-- not open -> create workspace and apply project tabs
-
-Quick Actions should be accessible here, but the real Quick Actions UI remains owned by Herdr Plus.
-This plugin only launches it.
+Project Entries reuse or create a Workspace and apply project tabs and panes. Quick Actions remain owned by Herdr Plus.
 
 ## Theme
 
-User cares that the picker visually belongs inside Herdr. “Inherit theme” means practical visual matching, not perfect API-level inheritance, because Herdr does not expose palette to plugin v1.
-
-Prefer adding only palettes users actually need.
+Helm maps Herdr theme names locally and applies `[theme.custom]` overrides because Herdr plugin APIs do not expose the active palette.
 
 ## Command/JSON plugin integrations
 
-Users can add external tools without Rust changes:
-
-```toml
-[[integrations]]
-id = "my-plugin"
-label = "My Plugin"
-collect = "my-plugin list --json"
-open = "my-plugin open {{id}}"
-```
-
-Collect JSON minimum: `id`, `title`. Optional: `subtitle`, `path`, `kind`.
-
-## Agent search keys
-
-Agent rows are searchable by agent name, workspace/session label, cwd, status, pane id, tab id, terminal id, and optional user aliases.
-
-Token filters:
-
-- `@`: all agents, same as Ctrl-A, sorted by `picker.agent_sort` (`herdr`, `priority`, or `spaces`).
-- `!claude`: agent name.
-- `@Dotfiles`: agent-only workspace/session label or id.
-- `@idle`: agent status text.
-- `/chatbot`: cwd/path.
-
-Aliases live in `[[agent_aliases]]` and only add search terms; they do not rename panes or workspaces.
+Users add external tools with `[[integrations]]` entries containing `collect` and `open` commands. Collect JSON requires `id` and `title`; `subtitle`, `path`, and `kind` are optional.

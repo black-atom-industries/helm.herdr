@@ -1,116 +1,93 @@
 # Architecture
 
-Helm for Herdr is a picker center for Herdr: one session-modal popup for choosing where to go or what Herdr-adjacent action to run.
-
-It is similar in spirit to `tv`, but deeper integrated with Herdr. Instead of only returning a selected path/item, it can focus existing Herdr state, create Herdr workspaces, apply Herdr Plus project tabs, focus agents, or launch Herdr Plus Quick Actions.
+Helm for Herdr is a picker center for choosing a destination or Herdr action. Herdr owns the presentation: `helm-herdr.open` opens a session-modal popup, while `helm-herdr.open-side` opens the persistent Side pane.
 
 ## Runtime shape
 
 ```text
 Herdr keybinding
   -> plugin action: helm-herdr.open
-  -> Herdr opens session-modal popup: picker
+  -> Herdr opens a 90% × 90% popup
   -> binary runs: helm-herdr ui
-  -> collect sources
-  -> fuzzy filter/rank
-  -> Enter dispatches Herdr action
+  -> collect live sources
+  -> project Query into Topology or flat Result list
+  -> Enter applies the selected Entry action
 ```
 
-The plugin is intentionally a terminal TUI running inside a Herdr-managed popup. Herdr plugin v1 does not expose a native custom UI surface.
+The default popup dimensions are configurable with integer `picker.popup_width` and `picker.popup_height` values from 1 through 100. The Side pane uses a Herdr split and does not use popup dimensions.
 
 ## Entry points
 
 | Command | Purpose |
 | --- | --- |
-| `helm-herdr open` | Ask Herdr to open the picker popup |
-| `helm-herdr ui` | Run the interactive TUI inside the popup |
-| `helm-herdr list` | Debug: print collected entries without opening TUI |
+| `helm-herdr open` | Ask Herdr to open the configured popup |
+| `helm-herdr open-side` | Launch, focus, or close the Side pane according to its toggle state |
+| `helm-herdr ui` | Run the interactive Picker |
+| `helm-herdr list` | Print collected Entries without opening the Picker |
 
 ## Code layout
 
 ```text
-src/main.rs      CLI entrypoints
-src/app.rs       picker state, filtering, open dispatch
+src/main.rs      CLI entrypoints and popup/Side requests
+src/app.rs       Picker state, Query projection, filtering, and Entry actions
 src/tui.rs       terminal UI and command execution
-src/keymap.rs    shared key registry, labels, groups, and active states
+src/keymap.rs    key registry, labels, groups, and active states
 src/config.rs    plugin config loading and defaults
-src/model.rs     shared Source/Entry/Project models
-src/sources.rs   workspace/project/zoxide/root/agent/quick collectors
-src/herdr.rs     small Herdr CLI wrapper
-src/theme.rs     theme mapping and custom overrides
-src/matcher.rs   fuzzy scoring engines
-src/paths.rs     path/config helpers
+src/model.rs     Source/Entry/EntryAction models
+src/sources.rs   source collectors
+src/topology.rs  live Workspace/Tab/Pane model and four-line blocks
+src/herdr.rs     Herdr CLI and socket calls
 ```
 
-Keep new integrations in `sources.rs` unless they grow enough to deserve their own module. Keep Herdr CLI calls behind `herdr.rs` where practical.
+## Query projections
 
-Picker input is an exclusive `InputMode` state machine (`Normal`, `Search`, `Help`); key scopes, footer hints, and transitions are defined through `keymap.rs`.
+The projections are exclusive:
 
-## Sources
+- An empty Query with no Source filter or the Workspace Source filter shows the live Topology. Each Workspace is one fixed four-line block: Workspace identity, `tabs`, the selected Tab's `panes`, and selected Pane detail.
+- A typed Query, or any non-Workspace Source filter, shows a flat Result list. Each row is one terminal line in the order `Source | symbol+word status | destination`.
 
-| Source | Input | Enter behavior |
-| --- | --- | --- |
-| `workspace` | `herdr workspace list` + pane cwd | focus existing workspace |
-| `project` | Herdr Plus project TOML files | focus existing cwd or create workspace + tabs |
-| `quick` | Herdr Plus Quick Actions | open Herdr Plus Quick Actions picker |
-| `zoxide` | `zoxide query -l` | focus existing cwd or create workspace |
-| `root` | configured filesystem roots | focus existing cwd or create workspace |
-| `agent` | `herdr pane list` agent metadata | focus agent pane |
+The exact `agent` Query token scopes results to agent Entries. `!name` narrows agent names, `@text` matches agent workspace or status text, `/path` matches paths, and `#status` matches status text. Marked Entries use the visible `bookmark` Source while keeping one destination row.
 
-## Core open rule
+## Sources and Enter actions
 
-The picker should prefer reuse over duplication:
+| Source | Enter action |
+| --- | --- |
+| `workspace` | Focus the exact Workspace ID |
+| `tab` | Focus the exact Tab ID |
+| `pane` | Call Herdr `pane.focus` with the exact `pane_id` |
+| `agent` | Focus the agent target through Herdr |
+| `project` | Reuse or create a Workspace and apply the project tabs and splits |
+| `server` | Hand off to the configured remote Herdr target |
+| `zoxide` / `root` | Reuse or create a directory Workspace; `Alt-Enter` applies the directory template |
+| `session` | Run the configured session command |
+| `quick` | Invoke the Herdr Plus Quick Actions picker |
+| `plugin` | Run the integration's configured open command |
+| `bookmark` | Apply the marked Entry's underlying action |
 
-```text
-selected item path already open -> focus existing workspace
-not open + creation allowed -> create workspace
-project template selected -> create workspace, then apply tabs
-agent selected -> focus agent pane
-quick selected -> delegate to Herdr Plus Quick Actions
-```
+Topology navigation uses Workspace, Tab, and Pane depth. `Up`/`Down` move through Workspaces and return from child depth; `Right` enters or advances child selections; `Left` returns to the parent depth; `Tab`/`Shift-Tab` advance or move back within the active child depth. `[` and `]` move between Workspaces from any depth. Enter always applies the action for the exact selected Workspace, Tab, or Pane.
 
-This keeps the picker useful as a navigation center, not only a launcher.
+## Side behavior
+
+The Side pane is a persistent Herdr split. `helm-herdr.open-side` opens it when absent, focuses it when present but unfocused, and closes it when already focused. Enter does not close the Side pane, so it remains available after a successful action.
 
 ## Herdr Plus boundary
 
-Helm integrates with Herdr Plus but does not copy all Herdr Plus behavior.
+Helm integrates with Herdr Plus without copying its UI:
 
-Current integration:
+- project Entries read project TOML and create or reuse Workspaces, tabs, and splits;
+- the Quick Action Entry delegates to Herdr Plus.
 
-- reads project templates from Herdr Plus config
-- creates/focuses workspaces for projects
-- applies project tabs and startup commands
-- launches the Herdr Plus Quick Actions picker
+## Configuration boundary
 
-Boundary:
-
-- Herdr Plus remains the owner of full Quick Actions UI and action execution
-- this plugin only surfaces Quick Actions as one source inside the picker center
+Current Picker keys are `reuse_existing`, `create_missing`, `engine`, `source_order`, `source_priority_boost`, `agent_sort`, `popup_width`, `popup_height`, `check_updates`, `directory_template`, `directory_template_key`, and `[picker.filter_keys]`. Other current sections are `[notifications]`, `[jump_back]`, `[sources]`, `[theme]`, `[[roots]]`, `[[agent_aliases]]`, `[[sessions.entries]]`, and `[[integrations]]`.
 
 ## Theme boundary
 
-Herdr plugin v1 does not expose the active theme palette directly to external plugins.
-
-Current behavior:
-
-1. read `~/.config/herdr/config.toml`
-2. map supported `theme.name` values locally
-3. apply `[theme.custom]` overrides last
-4. fall back to One Light
-
-This is practical theme inheritance, not native palette access.
+Herdr plugin APIs do not expose the active palette directly. Helm reads the Herdr config, maps supported theme names locally, applies custom tokens, and falls back to One Light.
 
 ## Design goals
 
-- One fast popup for "where next?"
-- Deep Herdr actions on selection, not just printing paths
-- Optional integrations degrade quietly
-- Small Rust binary, no external picker UI dependency
-- Keep source model simple enough to add more Herdr-aware sources later
-
-## Non-goals
-
-- Replacing Herdr Plus
-- Replacing Herdr's built-in `prefix+g`
-- Building a generic plugin framework
-- Perfect theme parity until Herdr exposes plugin palette data
+- One Picker for Herdr destinations and actions.
+- Exact Herdr identity for Workspace, Tab, and Pane actions.
+- Optional sources degrade quietly.
+- Small Rust binary with no external Picker dependency.

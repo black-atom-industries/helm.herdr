@@ -4,6 +4,15 @@ All notable changes to this project are documented here.
 
 ## [Unreleased]
 
+### Changed
+- Empty Query views with no filter or the Workspace filter now show fixed four-line Workspace → Tab → Pane topology blocks.
+- Typed Query views and non-Workspace filters now show flat one-line rows with Source, status symbol and word, and destination; topology Pane rows focus exact Pane IDs.
+- The default `open` action now uses a configurable 90% × 90% Herdr popup, while `open-side` keeps its persistent split, focus, close, and post-Enter behavior.
+- Agent Query filtering recognizes the exact `agent` token, and marked Entries display the `bookmark` Source.
+
+### Removed
+- Preview panes, detailed-row mode, overlay placement, conditional Vim mode, and Tab Source cycling are no longer part of the Picker contract.
+
 ## [0.5.0] - 2026-08-07
 
 ### Changed

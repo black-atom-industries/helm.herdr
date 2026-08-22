@@ -54,7 +54,7 @@ A single result list can move between live Herdr state and things that are not o
 | **One index across Herdr**  | Search workspaces, agents, projects, sessions, remotes, directories, Quick Actions, and integrations together.                        |
 | **Action-aware Enter**      | Results do not just return paths; they focus, create, attach, hand off, invoke, or run.                                               |
 | **Reuse first**             | Existing workspaces are focused before new ones are created. Project and directory workspaces sharing a cwd keep separate identities. |
-| **Agents are first-class**  | Search agent name, status, workspace, cwd, pane/tab/terminal IDs, session ID, and your own aliases.                                   |
+| **Agents are first-class**  | Search agent names and status, with agent-only Query tokens and aliases.                                                             |
 | **Extensible without Rust** | Add another tool with a command that returns JSON and a command that opens the selected item.                                         |
 | **No picker dependency**    | The Rust/ratatui interface runs in a Herdr-managed pane; `fzf` and `tv` are not runtime requirements.                                 |
 
@@ -70,16 +70,19 @@ Herdr's built-in navigation remains the simpler choice for a single entity type.
 
 ## What it can open
 
-| Source    | Data                              | Enter does                                                         |
-| --------- | --------------------------------- | ------------------------------------------------------------------ |
-| `open`    | Current-session workspaces → tabs | Focus the exact workspace or tab                                   |
-| `agent`   | `herdr agent list`                | Focus the agent pane                                               |
-| `project` | Herdr Plus project TOML           | Reuse or create a project workspace and apply tabs and split panes |
-| `server`  | Configured remote targets         | Hand off to the remote Herdr server                                |
-| `zoxide`  | `zoxide query -l`                 | Enter opens normally; `Alt-Enter` applies the shared template      |
-| `root`    | Configured filesystem roots       | Enter opens normally; `Alt-Enter` applies the shared template      |
-| `quick`   | Herdr Plus Quick Actions          | Open the Quick Actions picker                                      |
-| `plugin`  | Command/JSON integrations         | Run the configured open command                                    |
+| Source     | Data                                | Enter does                                                         |
+| ---------- | ----------------------------------- | ------------------------------------------------------------------ |
+| `workspace`| Current-session Workspaces         | Focus the exact Workspace                                         |
+| `tab`      | Tabs in the current-session Topology | Focus the exact Tab                                             |
+| `pane`     | Panes in the current-session Topology | Focus the exact Pane ID                                        |
+| `agent`    | Agent destinations                 | Focus the agent through Herdr                                     |
+| `project`  | Herdr Plus project TOML            | Reuse or create a project Workspace and apply tabs and splits     |
+| `server`   | Configured remote targets           | Hand off to the remote Herdr server                               |
+| `zoxide`   | `zoxide query -l`                   | Enter opens normally; `Alt-Enter` applies the shared template     |
+| `root`     | Configured filesystem roots        | Enter opens normally; `Alt-Enter` applies the shared template     |
+| `quick`    | Herdr Plus Quick Actions           | Open the Quick Actions picker                                     |
+| `plugin`   | Command/JSON integrations          | Run the configured open command                                   |
+| `bookmark` | Marked Entries                      | Apply the marked Entry's action                                   |
 
 Every source can be disabled. Missing optional tools degrade quietly.
 
@@ -90,9 +93,9 @@ Every source can be disabled. Missing optional tools degrade quietly.
 | type             | Fuzzy search                                                            |
 | `Enter`          | Open selected item normally                                             |
 | `Alt-Enter`      | Apply `picker.directory_template` to the selected zoxide/root directory |
-| `Up` / `Down`    | Move across visible workspace, tab, and flat-source rows                |
-| `Left` / `Right` | Collapse/expand Open workspaces                                         |
-| `Ctrl-W`         | Open topology (workspaces and tabs)                                     |
+| `Up` / `Down`    | Move through Workspace, Tab, Pane, and flat Result selections        |
+| `Left` / `Right` | Move through Topology depth and child selections                      |
+| `Ctrl-W`         | Workspaces / Tabs / Panes                                               |
 | `Ctrl-A`         | Agents, using configured status order                                   |
 | `Ctrl-P`         | Herdr Plus projects                                                     |
 | `Ctrl-Q`         | Herdr Plus Quick Actions                                                |
@@ -107,22 +110,13 @@ Every source can be disabled. Missing optional tools degrade quietly.
 | `?`              | Show active keybindings                                                 |
 | `Esc` / `Ctrl-C` | Back or close                                                           |
 
-Open is a live topology for the current session: workspaces are top-level rows and contain tabs. Linked-worktree workspaces are nested beneath the open non-linked workspace for the same repository, with their own tabs one level deeper; orphaned worktrees remain top-level. Workspaces start collapsed, with the focused workspace selected; `Left`/`Right` collapse or expand them. Search retains matching tabs' workspace and linked-worktree ancestry so repeated names such as `Code`, `Agents`, or `Server` remain distinguishable.
+The empty Query with no Source filter, or with the Workspace Source filter, shows one fixed four-line block per open Workspace. The lines are the Workspace identity, its `tabs`, the selected Tab's `panes`, and the selected Pane detail. The block is a projection of the live Workspace → Tab → Pane Topology; it does not mix with the flat Result list.
 
-Status glyphs follow Herdr's `prefix+g` visual language. Agent rows use `◉` for blocked/attention, an animated Braille spinner for working, `●` for done, `✓` for idle, and `○` for unknown. Workspace status dots use `●` for blocked/working/done, `○` for idle, and `·` for unknown. Diamond color priority is marked yellow, current accent/blue, then previous red. The active tab uses a green dot. Selection uses `→`, and topology/source trees use `▾`, `▸`, `├─`, and `└─` markers.
+A typed Query or any non-Workspace Source filter shows a flat one-line Result list. Each row is `Source | symbol+word status | destination`. Agent rows use the exact `agent` Query token for agent-only results. `!claude` matches an agent name, `@idle` matches workspace or status text, `@Dotfiles` matches an agent workspace label or status, and `/dotfiles` matches a path. Marking an Entry changes its visible Source to `bookmark` without duplicating the destination.
 
-Within flat sources, the previous workspace stays first on the initial unfiltered view, followed by marked items and then the normal source order.
+At Workspace depth, `Up`/`Down` move between Workspaces. `Right` or `Tab` enters the selected Workspace's Tabs; `Left` or `h` returns to Workspace depth. At Tab depth, `Left`/`Right` or `Shift-Tab`/`Tab` selects Tabs and `Down` enters the selected Tab's Panes; `Up` returns to Workspace depth. At Pane depth, `Left`/`Right` or `Shift-Tab`/`Tab` selects Panes and `Up` returns to Tab depth. `[` and `]` move between Workspaces from any depth. `Enter` focuses the exact Workspace, Tab, or Pane represented by the current selection. Pane focus uses the exact Pane ID, not an agent target.
 
-Structured search narrows large result sets:
-
-```text
-!claude          # agent name
-@idle            # agent workspace/status
-@Dotfiles        # agent workspace label or id
-/dotfiles        # cwd/path
-```
-
-In Normal mode, `h`/`j`/`k`/`l` mirror the arrow navigation keys. Query editing keeps those characters as text. Source shortcuts can be remapped through `[picker.filter_keys]`.
+`h`/`j`/`k`/`l` mirror the arrow navigation keys in Normal mode. Source shortcuts can be remapped through `[picker.filter_keys]`.
 
 ## Power moves
 
@@ -191,7 +185,7 @@ See [`examples/default-config.toml`](examples/default-config.toml) for every opt
 reuse_existing = true
 create_missing = true
 engine = "nucleo" # nucleo | skim | simple
-source_order = ["workspace", "agent", "project", "zoxide", "root", "server", "quick", "plugin"]
+source_order = ["workspace", "agent", "project", "session", "zoxide", "root", "server", "quick", "plugin"]
 source_priority_boost = 5
 agent_sort = "herdr" # herdr | priority | spaces
 popup_width = 90

@@ -56,12 +56,12 @@ Fields:
 | `id` | yes | stable identifier passed to `open` |
 | `title` | yes | picker row title |
 | `subtitle` | no | extra detail shown beside the title |
-| `path` | no | optional path for matching/search/preview |
-| `kind` | no | free-form type chosen by the integration; Navigator does not interpret it |
+| `path` | no | optional path for matching and search |
+| `kind` | no | free-form type chosen by the integration; Helm does not interpret it |
 
 ## Open command templates
 
-Navigator replaces these variables in `open`:
+Helm replaces these variables in `open`:
 
 ```text
 {{id}}
@@ -81,7 +81,7 @@ open = "bookmarks open {{id}} --path {{path}}"
 
 ## Notifications
 
-Navigator owns default notifications:
+Helm owns default notifications:
 
 - collect failure: skip quietly
 - open success: show success notification

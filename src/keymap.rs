@@ -336,7 +336,7 @@ pub(crate) fn keybindings(app: &App) -> Vec<Keybind> {
 
 fn source_help_label(source: &Source) -> &'static str {
     match source {
-        Source::Workspace => "open topology",
+        Source::Workspace => "Workspaces / Tabs / Panes",
         Source::Project => "projects",
         Source::Zoxide => "zoxide",
         Source::Root => "roots",
@@ -350,7 +350,7 @@ fn source_help_label(source: &Source) -> &'static str {
 
 fn source_compact_label(source: &Source) -> &'static str {
     match source {
-        Source::Workspace => "open",
+        Source::Workspace => "Workspaces / Tabs / Panes",
         Source::Project => "project",
         Source::Zoxide => "zoxide",
         Source::Root => "root",

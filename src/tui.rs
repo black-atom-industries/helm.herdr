@@ -24,7 +24,7 @@ use ratatui::{
 use crate::{
     app::{App, InputMode},
     keymap::{keybindings, Command},
-    model::{Entry, Source},
+    model::{Entry, EntryAction, Source},
     paths::home,
     sources::status_icon_at,
     theme::Theme,
@@ -385,16 +385,12 @@ fn execute_command(app: &mut App, command: Command, key: KeyEvent) -> Action {
                     TopologyDepth::Tab => app.topology_cursor.leave_to_workspace(),
                     TopologyDepth::Pane => app.topology_cursor.leave_to_tab(),
                 }
-            } else {
-                app.collapse_selected();
             }
             Action::Continue
         }
         Command::Expand => {
             if app.topology_view() {
                 app.topology_move_horizontal(1);
-            } else {
-                app.expand_selected();
             }
             Action::Continue
         }
@@ -633,6 +629,15 @@ fn agent_status_color(theme: &Theme, status: &str) -> Color {
     } else {
         theme.overlay0
     }
+}
+
+fn is_topology_entry(entry: &Entry) -> bool {
+    matches!(
+        &entry.action,
+        EntryAction::FocusWorkspace { .. }
+            | EntryAction::FocusTab { .. }
+            | EntryAction::FocusPane { .. }
+    )
 }
 
 fn display_title(entry: &Entry) -> &str {
@@ -1119,8 +1124,9 @@ fn draw_list(f: &mut Frame, app: &App, area: Rect) -> ListHits {
                 })
                 .unwrap_or_default();
             let status_text_width = Span::raw(&status_text).width();
+            let topology_entry = is_topology_entry(e);
             let raw_path = e.path.display().to_string();
-            let raw_metadata = if e.source == Source::Agent {
+            let raw_metadata = if topology_entry || e.source == Source::Agent {
                 String::new()
             } else {
                 entry_metadata(e)
@@ -1142,8 +1148,17 @@ fn draw_list(f: &mut Frame, app: &App, area: Rect) -> ListHits {
                 .saturating_sub(2)
                 .saturating_sub(detailed_layout.right_width)
                 .saturating_sub(usize::from(detailed_layout.right_width > 0));
+            let destination_width = detailed_layout
+                .title_width
+                .saturating_add(2)
+                .saturating_add(path_width);
             let title = truncate_end(display_title(e), detailed_layout.title_width);
             let path = truncate_end(&display_path(e), path_width);
+            let destination = if topology_entry {
+                truncate_breadcrumb(&e.subtitle, destination_width)
+            } else {
+                title.clone()
+            };
             let status_color = status
                 .map(|status| agent_status_color(&app.theme, status))
                 .unwrap_or(color);
@@ -1157,18 +1172,28 @@ fn draw_list(f: &mut Frame, app: &App, area: Rect) -> ListHits {
                             .saturating_sub(status_text_width),
                     ),
                 ),
-                Span::styled(title.clone(), Style::default().fg(app.theme.text)),
-                Span::raw(
-                    " ".repeat(
-                        detailed_layout
-                            .title_width
-                            .saturating_sub(title.chars().count()),
-                    ),
-                ),
-                Span::raw("  "),
-                Span::styled(path.clone(), Style::default().fg(app.theme.subtext0)),
-                Span::raw(" ".repeat(path_width.saturating_sub(path.chars().count()))),
             ]);
+            if topology_entry {
+                let destination_width_used = Span::raw(&destination).width();
+                title_spans.extend(breadcrumb_spans(app, e, &destination));
+                title_spans.push(Span::raw(
+                    " ".repeat(destination_width.saturating_sub(destination_width_used)),
+                ));
+            } else {
+                title_spans.extend([
+                    Span::styled(title.clone(), Style::default().fg(app.theme.text)),
+                    Span::raw(
+                        " ".repeat(
+                            detailed_layout
+                                .title_width
+                                .saturating_sub(title.chars().count()),
+                        ),
+                    ),
+                    Span::raw("  "),
+                    Span::styled(path.clone(), Style::default().fg(app.theme.subtext0)),
+                    Span::raw(" ".repeat(path_width.saturating_sub(path.chars().count()))),
+                ]);
+            }
             if detailed_layout.right_width > 0 {
                 title_spans.push(Span::raw(" "));
                 if !metadata.is_empty() {
@@ -1271,6 +1296,133 @@ mod tests {
             error.to_string(),
             "Herdr API error (ui_busy): popup already open"
         );
+    }
+
+    #[test]
+    fn projected_topology_rows_use_breadcrumb_destinations_without_cwd_columns() {
+        let mut app = App::new(Config::default(), Theme::load(false));
+        let mut workspace = entry(Source::Workspace, "old-workspace");
+        workspace.source_label = Some("workspace".into());
+        workspace.subtitle = "repo › main".into();
+        workspace.path = PathBuf::from("/old/workspace-cwd");
+        workspace.action = EntryAction::FocusWorkspace {
+            session: Some("session".into()),
+            id: "w1".into(),
+        };
+        workspace.search_terms.push("repo-key:/repo/.git".into());
+
+        let mut tab = entry(Source::Workspace, "old-tab");
+        tab.source_label = Some("tab".into());
+        tab.subtitle = "repo › main › Tab".into();
+        tab.path = PathBuf::from("/old/tab-cwd");
+        tab.action = EntryAction::FocusTab {
+            session: Some("session".into()),
+            id: "w1:t1".into(),
+        };
+        tab.search_terms.push("repo-key:/repo/.git".into());
+
+        let mut pane = entry(Source::Agent, "old-pane");
+        pane.source_label = Some("pane".into());
+        pane.subtitle = "repo › main › Tab › Pane".into();
+        pane.path = PathBuf::from("/old/pane-cwd");
+        pane.action = EntryAction::FocusPane {
+            session: Some("session".into()),
+            id: "w1:p1".into(),
+        };
+        pane.search_terms.push("repo-key:/repo/.git".into());
+        pane.search_terms.push("agent-status:done".into());
+
+        app.entries = vec![workspace, tab, pane];
+        app.filtered = (0..app.entries.len()).collect();
+        app.filtered_scores = vec![0; app.entries.len()];
+        app.selected = usize::MAX;
+        app.query = "repo".into();
+
+        let backend = TestBackend::new(120, 8);
+        let mut terminal = Terminal::new(backend).unwrap();
+        terminal
+            .draw(|f| {
+                draw_list(f, &app, f.area());
+            })
+            .unwrap();
+        let text = buffer_text(&terminal);
+        let buffer = terminal.backend().buffer();
+        let repository_color = repository_color("/repo/.git", &["/repo/.git".into()], &app.theme);
+        let rows = [
+            ("workspace", "repo › main"),
+            ("tab", "repo › main › Tab"),
+            ("pane", "repo › main › Tab › Pane"),
+        ];
+        let mut destination_column = None;
+        for (source, destination) in rows {
+            let (row_index, line) = text
+                .lines()
+                .enumerate()
+                .find(|(_, line)| line.contains(destination))
+                .unwrap();
+            assert!(!line.contains("old-"));
+            assert!(!line.contains("/old/"));
+            assert_eq!(line.find(source), Some(0));
+            let destination_start = line.find(destination).unwrap();
+            let column = Span::raw(&line[..destination_start]).width();
+            if let Some(expected) = destination_column {
+                assert_eq!(column, expected);
+            } else {
+                destination_column = Some(column);
+            }
+            let repository_start = line.find("repo").unwrap() as u16;
+            let repository_cell = &buffer[(repository_start, row_index as u16)];
+            assert_eq!(repository_cell.fg, repository_color);
+            assert!(repository_cell.modifier.contains(Modifier::BOLD));
+            assert!(!buffer[(repository_start + 5, row_index as u16)]
+                .modifier
+                .contains(Modifier::BOLD));
+        }
+        assert!(text.contains("✓ done"));
+    }
+
+    #[test]
+    fn ctrl_w_filters_to_workspaces_tabs_and_panes() {
+        let mut app = App::new(Config::default(), Theme::load(false));
+
+        assert!(matches!(
+            handle_key(
+                &mut app,
+                KeyEvent::new(KeyCode::Char('w'), KeyModifiers::CONTROL)
+            ),
+            Action::Continue
+        ));
+        assert_eq!(app.source_filter, Some(Source::Workspace));
+        assert!(app.topology_view());
+    }
+
+    #[test]
+    fn topology_help_names_workspaces_tabs_and_panes() {
+        let app = App::new(Config::default(), Theme::load(false));
+        let binding = keybindings(&app)
+            .into_iter()
+            .find(|binding| binding.command == Command::Filter(Source::Workspace))
+            .unwrap();
+
+        assert_eq!(binding.label, "Workspaces / Tabs / Panes");
+        assert_eq!(
+            binding.compact_hint(&app).unwrap().1,
+            "Workspaces / Tabs / Panes"
+        );
+        assert!(!binding.label.contains("open"));
+        assert!(!binding.label.contains("topology"));
+    }
+
+    #[test]
+    fn collapse_and_expand_keep_topology_depth_navigation() {
+        let mut app = topology_test_app();
+        app.topology_cursor.enter_tab(&app.topology);
+        assert_eq!(app.topology_cursor.depth, TopologyDepth::Tab);
+
+        execute_command(&mut app, Command::Collapse, key(KeyCode::Left));
+        assert_eq!(app.topology_cursor.depth, TopologyDepth::Workspace);
+        execute_command(&mut app, Command::Expand, key(KeyCode::Right));
+        assert_eq!(app.topology_cursor.depth, TopologyDepth::Tab);
     }
 
     #[test]
@@ -1694,82 +1846,6 @@ mod tests {
         assert_eq!(agent_status_color(&theme, "unknown"), theme.overlay0);
     }
 
-    #[cfg(any())]
-    #[test]
-    fn open_and_pinned_workspaces_replace_tree_branches_with_diamonds() {
-        let mut app = App::new(Config::default(), Theme::load(false));
-        let mut current = entry(Source::Workspace, "Current");
-        current.workspace_id = Some("w1".into());
-        current.search_terms.push("focused".into());
-        let mut previous = entry(Source::Workspace, "Previous");
-        previous.workspace_id = Some("w2".into());
-        app.entries = vec![current, previous];
-        app.filtered = vec![0, 1];
-        app.filtered_scores = vec![0; 2];
-        app.previous_workspace_id = Some("w2".into());
-        app.selected = 1;
-
-        let backend = TestBackend::new(40, 10);
-        let mut terminal = Terminal::new(backend).unwrap();
-        terminal
-            .draw(|f| {
-                draw_list(f, &app, f.area());
-            })
-            .unwrap();
-        let text = buffer_text(&terminal);
-        let buffer = terminal.backend().buffer();
-
-        assert!(text.contains("  ◆     Current"));
-        assert!(text.contains("  ◆     Previous"));
-        assert!(!text.contains("├─ ◆"));
-        assert!(buffer
-            .content()
-            .iter()
-            .any(|cell| cell.symbol() == "◆" && cell.fg == app.theme.accent));
-        assert!(buffer
-            .content()
-            .iter()
-            .any(|cell| cell.symbol() == "◆" && cell.fg == app.theme.red));
-    }
-
-    #[cfg(any())]
-    #[test]
-    fn mark_marker_wins_over_previous_workspace() {
-        let mut app = App::new(Config::default(), Theme::load(false));
-        let mut previous = entry(Source::Workspace, "Previous");
-        previous.workspace_id = Some("w2".into());
-        previous.action = EntryAction::FocusWorkspace {
-            session: None,
-            id: "w2".into(),
-        };
-        app.previous_workspace_id = Some("w2".into());
-        app.pinned_entries.insert("workspace:w2".into());
-
-        assert_eq!(
-            entry_branch(&app, &previous, false),
-            ("  ◆  ", app.theme.yellow)
-        );
-    }
-
-    #[cfg(any())]
-    #[test]
-    fn mark_marker_wins_over_current_workspace() {
-        let mut app = App::new(Config::default(), Theme::load(false));
-        let mut current = entry(Source::Workspace, "Current");
-        current.workspace_id = Some("w1".into());
-        current.action = EntryAction::FocusWorkspace {
-            session: None,
-            id: "w1".into(),
-        };
-        current.search_terms.push("focused".into());
-        app.pinned_entries.insert("workspace:w1".into());
-
-        assert_eq!(
-            entry_branch(&app, &current, false),
-            ("  ◆  ", app.theme.yellow)
-        );
-    }
-
     #[test]
     fn draw_uses_the_picker_title() {
         let app = App::new(Config::default(), Theme::load(false));
@@ -1873,129 +1949,6 @@ mod tests {
         assert_eq!(buffer[(0, 2)].bg, app.theme.surface0);
         assert!(buffer[(0, 2)].modifier.contains(Modifier::BOLD));
         assert_eq!(buffer[(9, 2)].symbol(), "t");
-    }
-
-    #[cfg(any())]
-    #[test]
-    fn flat_rows_truncate_long_names_and_paths_without_wrapping() {
-        let mut app = App::new(Config::default(), Theme::load(false));
-        let mut root = entry(Source::Root, "very-long-directory-name");
-        root.path = PathBuf::from("/projects/with/a/very/long/path");
-        app.entries = vec![root];
-        app.filtered = vec![0];
-        app.filtered_scores = vec![0];
-        app.selected = usize::MAX;
-
-        let backend = TestBackend::new(40, 6);
-        let mut terminal = Terminal::new(backend).unwrap();
-        terminal
-            .draw(|f| {
-                draw_list(f, &app, f.area());
-            })
-            .unwrap();
-        let text = buffer_text(&terminal);
-
-        let row = text.lines().find(|line| line.contains("very")).unwrap();
-        assert!(row.matches('…').count() >= 2);
-    }
-
-    #[cfg(any())]
-    #[test]
-    fn list_renders_inline_source_rows_without_banners_or_outer_branches() {
-        let mut app = App::new(Config::default(), Theme::load(false));
-        app.entries = vec![
-            entry(Source::Agent, "Claude"),
-            entry(Source::Agent, "Codex"),
-            entry(Source::Root, "Dotfiles"),
-        ];
-        app.filtered = vec![0, 1, 2];
-        app.filtered_scores = vec![0; 3];
-        app.selected = usize::MAX;
-
-        let backend = TestBackend::new(40, 12);
-        let mut terminal = Terminal::new(backend).unwrap();
-        terminal
-            .draw(|f| {
-                draw_list(f, &app, f.area());
-            })
-            .unwrap();
-        let text = buffer_text(&terminal);
-
-        assert_eq!(
-            text.lines().filter(|line| line.contains("Claude")).count(),
-            1
-        );
-        assert_eq!(
-            text.lines().filter(|line| line.contains("Codex")).count(),
-            1
-        );
-        assert_eq!(
-            text.lines()
-                .filter(|line| line.contains("Dotfiles"))
-                .count(),
-            1
-        );
-        assert_eq!(
-            text.lines().filter(|line| line.contains("agent")).count(),
-            2
-        );
-        assert_eq!(text.lines().filter(|line| line.contains("root")).count(), 1);
-        assert!(!text.contains("LIVE"));
-        assert!(!text.contains(" ▾ agent "));
-        assert!(!text.contains("├─"));
-        assert!(!text.contains("└─"));
-
-        let buffer = terminal.backend().buffer();
-        for (source, title) in [(Source::Agent, "Claude"), (Source::Root, "Dotfiles")] {
-            let y = text.lines().position(|line| line.contains(title)).unwrap() as u16;
-            let line = text.lines().nth(y as usize).unwrap();
-            let x = line.find(source.label()).unwrap() as u16;
-            for offset in 0..source.label().len() as u16 {
-                assert_eq!(
-                    buffer[(x + offset, y)].fg,
-                    source_color(&app.theme, &source)
-                );
-            }
-        }
-    }
-
-    #[cfg(any())]
-    #[test]
-    fn source_labels_use_terminal_width_and_keep_later_columns_aligned() {
-        let mut app = App::new(Config::default(), Theme::load(false));
-        let mut integration = entry(Source::Integration, "Plugin item");
-        integration.source_label = Some("整合性プラグイン".into());
-        let root = entry(Source::Root, "Root item");
-        app.entries = vec![integration, root];
-        app.filtered = vec![0, 1];
-        app.filtered_scores = vec![0; 2];
-        app.selected = usize::MAX;
-
-        let backend = TestBackend::new(70, 8);
-        let mut terminal = Terminal::new(backend).unwrap();
-        terminal
-            .draw(|f| {
-                draw_list(f, &app, f.area());
-            })
-            .unwrap();
-        let text = buffer_text(&terminal);
-        let integration_line = text
-            .lines()
-            .find(|line| line.contains("Plugin item"))
-            .unwrap();
-        let root_line = text
-            .lines()
-            .find(|line| line.contains("Root item"))
-            .unwrap();
-        let title_column =
-            |line: &str, title: &str| line[..line.find(title).unwrap()].chars().count();
-
-        assert!(integration_line.contains('…'));
-        assert!(Span::raw(truncate_terminal("整合性プラグイン", 10)).width() <= 10);
-        assert_eq!(
-            title_column(integration_line, "Plugin item"),
-            title_column(root_line, "Root item")
-        );
     }
 
     #[test]
@@ -2173,151 +2126,6 @@ mod tests {
         assert!(text.contains("⌃A agent"));
         assert!(text.contains("⌃Z zoxide"));
         assert!(!text.contains("k move up"));
-    }
-
-    #[cfg(any())]
-    #[test]
-    fn rendered_mouse_hit_matches_the_visible_compact_row() {
-        let mut app = App::new(Config::default(), Theme::load(false));
-        app.entries = vec![
-            entry(Source::Workspace, "one"),
-            entry(Source::Workspace, "two"),
-        ];
-        app.filtered = vec![0, 1];
-        app.selected = 1;
-
-        let backend = TestBackend::new(50, 12);
-        let mut terminal = Terminal::new(backend).unwrap();
-        let mut hits = ListHits::default();
-        terminal.draw(|f| hits = draw(f, &app)).unwrap();
-        let visible_row = buffer_text(&terminal)
-            .lines()
-            .position(|line| line.contains("one"))
-            .expect("first result should be visible") as u16;
-
-        assert!(matches!(
-            handle_mouse(
-                &mut app,
-                MouseEvent {
-                    kind: MouseEventKind::Down(MouseButton::Left),
-                    column: hits.area.x,
-                    row: visible_row,
-                    modifiers: KeyModifiers::NONE,
-                },
-                &hits,
-            ),
-            Action::Continue
-        ));
-        assert_eq!(app.selected, 0);
-    }
-
-    #[cfg(any())]
-    #[test]
-    fn rendered_mouse_hits_follow_flat_rows_after_scroll() {
-        let mut app = App::new(Config::default(), Theme::load(false));
-        app.entries = (0..8)
-            .map(|index| entry(Source::Zoxide, &format!("/{index}")))
-            .collect();
-        app.filtered = vec![7, 2, 5, 0, 4, 1, 6, 3];
-        app.selected = 7;
-
-        let backend = TestBackend::new(50, 6);
-        let mut terminal = Terminal::new(backend).unwrap();
-        let mut hits = ListHits::default();
-        terminal
-            .draw(|f| hits = draw_list(f, &app, f.area()))
-            .unwrap();
-        let text = buffer_text(&terminal);
-        assert_eq!(hits.rows.first().map(|(_, row)| *row), Some(3));
-        assert!(!text.contains("/7"));
-        let detail_row =
-            text.lines()
-                .position(|line| line.contains("/1"))
-                .expect("filtered row should remain visible after scrolling") as u16;
-
-        assert!(matches!(
-            handle_mouse(
-                &mut app,
-                MouseEvent {
-                    kind: MouseEventKind::Down(MouseButton::Left),
-                    column: 1,
-                    row: detail_row,
-                    modifiers: KeyModifiers::NONE,
-                },
-                &hits,
-            ),
-            Action::Continue
-        ));
-        assert_eq!(app.selected, 5);
-    }
-
-    #[cfg(any())]
-    #[test]
-    fn mouse_scroll_moves_selection_inside_results() {
-        let mut app = App::new(Config::default(), Theme::load(false));
-        app.entries = vec![
-            entry(Source::Workspace, "one"),
-            entry(Source::Workspace, "two"),
-        ];
-        app.filtered = vec![0, 1];
-        let hits = ListHits {
-            area: Rect::new(0, 3, 40, 10),
-            rows: vec![(4..5, 0), (5..6, 1)],
-            topology: Vec::new(),
-        };
-
-        handle_mouse(
-            &mut app,
-            MouseEvent {
-                kind: MouseEventKind::ScrollDown,
-                column: 1,
-                row: 4,
-                modifiers: KeyModifiers::NONE,
-            },
-            &hits,
-        );
-        assert_eq!(app.selected, 1);
-
-        handle_mouse(
-            &mut app,
-            MouseEvent {
-                kind: MouseEventKind::ScrollUp,
-                column: 1,
-                row: 4,
-                modifiers: KeyModifiers::NONE,
-            },
-            &hits,
-        );
-        assert_eq!(app.selected, 0);
-    }
-
-    #[cfg(any())]
-    #[test]
-    fn mouse_click_selects_then_opens_result() {
-        let mut app = App::new(Config::default(), Theme::load(false));
-        app.entries = vec![
-            entry(Source::Workspace, "one"),
-            entry(Source::Workspace, "two"),
-        ];
-        app.filtered = vec![0, 1];
-        let hits = ListHits {
-            area: Rect::new(0, 3, 40, 10),
-            rows: vec![(4..5, 0), (5..6, 1)],
-            topology: Vec::new(),
-        };
-        let click = MouseEvent {
-            kind: MouseEventKind::Down(MouseButton::Left),
-            column: 1,
-            row: 5,
-            modifiers: KeyModifiers::NONE,
-        };
-
-        assert!(matches!(
-            handle_mouse(&mut app, click, &hits),
-            Action::Continue
-        ));
-        assert_eq!(app.selected, 1);
-        assert!(matches!(handle_mouse(&mut app, click, &hits), Action::Open));
     }
 
     #[test]

@@ -36,7 +36,7 @@ popup_width = 90
 popup_height = 90
 
 # Check GitHub releases in the background at most once per day. Network errors
-# are ignored; a newer version appears as a badge in the Navigator header.
+# are ignored; a newer version appears as a badge in the Helm header.
 check_updates = true
 
 # Optional Herdr Plus project filename. Alt-Enter applies its tabs/panes to the
@@ -51,14 +51,14 @@ check_updates = true
 # server = "ctrl-g"
 
 [notifications]
-# Show Navigator success/error notifications.
+# Show Helm success/error notifications.
 enabled = true
 # Enable notification audio. Notifications remain visible when this is false.
 audio = false
 # Audio mode when enabled: "default" uses Herdr's done/request sounds;
 # "custom" plays custom_sound with afplay (macOS) or pw-play/paplay/aplay (Linux).
 sound = "default"
-custom_sound = "" # Example: "~/sounds/navigator.wav"
+custom_sound = "" # Example: "~/sounds/helm.wav"
 
 [jump_back]
 # Master switch for Jump Back.

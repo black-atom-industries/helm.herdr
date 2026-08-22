@@ -18,7 +18,7 @@ It should unify:
 - configured root scans
 - agent panes
 
-Core UX: the default action opens a session-modal popup; if something is already open, focus it; otherwise create/open the smallest useful Herdr workspace.
+Core UX: the default action opens a session-modal popup sized at 90% × 90%; the Side action keeps a persistent split available after Enter.
 
 ## Current public identity
 

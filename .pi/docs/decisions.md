@@ -2,7 +2,7 @@
 
 ## Public name
 
-Use `helm-herdr` for the plugin id, Cargo package/binary, config directory, and action prefix. The repository is `black-atom-industries/helm.herdr`. First run copies missing files from the legacy `herdr-navigator` and `herdr-picker-plus` config directories.
+Use `helm-herdr` for the plugin id, Cargo package/binary, config directory, and action prefix. The repository is `black-atom-industries/helm.herdr`. First run copies missing files from the legacy Helm config directories.
 
 ## Minimum release quality
 
@@ -45,12 +45,10 @@ Treat a remote server as a Herdr remote target, not a remote session. `Ctrl-S` f
 
 Use a command/JSON list-open contract before building a plugin SDK. This keeps contributor burden low and avoids a speculative framework. Herdr Plus remains built in because it needs Herdr-specific workspace/tab bootstrap behavior.
 
-Navigator owns notifications for integration open success/failure so plugin authors only implement list/open.
+Helm owns notifications for integration open success/failure so plugin authors only implement list/open.
 
 ## Agent search feature shape
 
-Use visible Herdr state first: agent name, workspace label/id, cwd, pane/tab/terminal ids, status. Add token filters for precision and aliases for user memory. Do not invent session names inside Navigator; aliases are search-only.
+The standalone Query token `agent` scopes the flat Result list to agent Entries. `!name` matches an agent name, `@text` matches agent workspace or status text, `/path` matches a path, and `#status` matches status text. `@` without text shows all agent Entries, equivalent to Ctrl-A, using `picker.agent_sort`. Aliases add search terms without changing the visible destination.
 
-For now, `@` without text is the only agent-view shortcut. It is equivalent to Ctrl-A: main agent view, using `picker.agent_sort`. Default `herdr` reads Herdr `agent_panel_sort`; `priority` forces block first/done second/rest; `spaces` keeps Herdr/pane order. `@text` stays agent-only and matches workspace/session label/id or status text for fast navigation.
-
-Agent display identity is the pane `cwd` where the agent was opened. `foreground_cwd` is searchable only; do not let a later `cd` rename/move the agent row.
+Agent rows use Source `pane` or `bookmark`, a status symbol and word, and the destination. Enter focuses the exact Pane ID represented by a pane-backed agent Entry.
