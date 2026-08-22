@@ -10,7 +10,7 @@ use serde_json::Value;
 use crate::{
     config::Config,
     herdr::{herdr_json, herdr_json_args},
-    model::{Entry, EntryAction, OpenNode, Source, WorkspaceKind, WorkspaceRef},
+    model::{Entry, EntryAction, Source, WorkspaceKind, WorkspaceRef},
     paths::{basename, canonical_str, expand_path, home},
 };
 
@@ -241,14 +241,6 @@ fn topology_from_json(
             },
             source_label: None,
             search_terms,
-            open_node: Some(OpenNode::Workspace {
-                session: session.name.clone(),
-                parent_workspace_id: parent_workspace_id.clone(),
-                linked_worktree,
-                focused,
-                tab_count,
-                pane_count,
-            }),
         };
         if let Some(key) = canonical_str(&path) {
             map.entry(key).or_insert_with(Vec::new).push(WorkspaceRef {
@@ -276,7 +268,6 @@ fn topology_from_json(
             .map(|tab| {
                 let tab_id = tab.get("tab_id").and_then(Value::as_str).unwrap_or("");
                 let tab_label = tab.get("label").and_then(Value::as_str).unwrap_or(tab_id);
-                let tab_focused = tab.get("focused").and_then(Value::as_bool).unwrap_or(false);
                 let tab_panes = tab.get("pane_count").and_then(Value::as_i64).unwrap_or(0);
                 Entry {
                     source: Source::Workspace,
@@ -299,12 +290,6 @@ fn topology_from_json(
                         session.label().into(),
                         "tab".into(),
                     ],
-                    open_node: Some(OpenNode::Tab {
-                        session: session.name.clone(),
-                        workspace_id: id.into(),
-                        focused: tab_focused,
-                        pane_count: tab_panes,
-                    }),
                 }
             })
             .collect();
@@ -428,7 +413,6 @@ fn agents_from_json(
                 },
                 source_label: None,
                 search_terms,
-                open_node: None,
             });
         }
     }
@@ -498,7 +482,6 @@ pub(crate) fn collect_zoxide() -> Vec<Entry> {
                 action: EntryAction::FocusOrCreateDir,
                 source_label: None,
                 search_terms: vec![],
-                open_node: None,
             }
         })
         .collect()
@@ -531,7 +514,6 @@ fn walk_dirs(path: &Path, depth: usize, out: &mut Vec<Entry>) {
             action: EntryAction::FocusOrCreateDir,
             source_label: None,
             search_terms: vec![],
-            open_node: None,
         });
     }
     if let Ok(read) = fs::read_dir(path) {
@@ -549,57 +531,6 @@ mod tests {
     use super::*;
 
     // ponytail: fixtures captured from Herdr's workspace/tab/pane/agent list commands.
-    #[test]
-    fn parses_open_topology_and_agent_list_json() {
-        let session = SessionSpec {
-            name: Some("work".into()),
-        };
-        let ws_json = serde_json::json!({"id":"cli:workspace:list","result":{"type":"workspace_list","workspaces":[
-            {"active_tab_id":"w41:t1","agent_status":"unknown","focused":false,"label":"~","number":1,"pane_count":1,"tab_count":1,"workspace_id":"w41"},
-            {"active_tab_id":"w43:t1","agent_status":"working","focused":true,"label":"dir: picker","number":3,"pane_count":1,"tab_count":1,"workspace_id":"w43"}]}});
-        let tab_json = serde_json::json!({"result":{"tabs":[
-            {"focused":false,"label":"Shell","pane_count":1,"tab_id":"w41:t1","workspace_id":"w41"},
-            {"focused":true,"label":"Code","pane_count":1,"tab_id":"w43:t1","workspace_id":"w43"}]}});
-        let pane_json = serde_json::json!({"result":{"panes":[
-            {"workspace_id":"w41","cwd":"/tmp"},
-            {"workspace_id":"w43","foreground_cwd":"/tmp"}]}});
-        let (topology, entries, map) =
-            topology_from_json(&session, &ws_json, &tab_json, &pane_json);
-        assert_eq!(topology.len(), 4);
-        assert!(matches!(
-            topology[0].open_node,
-            Some(OpenNode::Workspace { focused: false, .. })
-        ));
-        assert!(matches!(
-            topology[1].open_node,
-            Some(OpenNode::Tab { focused: false, .. })
-        ));
-        assert!(matches!(
-            topology[3].open_node,
-            Some(OpenNode::Tab { focused: true, .. })
-        ));
-        assert_eq!(entries.len(), 2);
-        assert_eq!(entries[0].subtitle, "agent:unknown · w41 tabs:1 panes:1");
-        assert_eq!(entries[1].path, PathBuf::from("/tmp"));
-        assert!(entries[1].search_terms.contains(&"focused".to_string()));
-        assert_eq!(map.len(), 1);
-        assert_eq!(map.values().next().unwrap().len(), 2);
-
-        let agent_json = serde_json::json!({"id":"cli:agent:list","result":{"type":"agent_list","agents":[
-            {"agent":"claude","agent_session":{"agent":"claude","kind":"id","source":"herdr:claude","value":"58f4-session"},
-             "agent_status":"working","cwd":"/tmp","focused":true,"foreground_cwd":"/tmp","pane_id":"w43:p1",
-             "revision":0,"tab_id":"w43:t1","terminal_id":"term_1","workspace_id":"w43"}]}});
-        let agents = agents_from_json(&agent_json, &entries, &[]);
-        assert_eq!(agents.len(), 1);
-        assert_eq!(agents[0].agent_target.as_deref(), Some("w43:p1"));
-        assert!(matches!(
-            &agents[0].action,
-            EntryAction::FocusAgent { target } if target == "w43:p1"
-        ));
-        assert!(agents[0].search_terms.contains(&"term_1".to_string()));
-        assert!(agents[0].search_terms.contains(&"58f4-session".to_string()));
-        assert!(agents[0].subtitle.starts_with("working"));
-    }
 
     #[test]
     fn snapshot_supplies_workspace_tab_and_pane_topology_in_one_read() {
@@ -696,126 +627,6 @@ mod tests {
         });
         assert_eq!(calls.len(), 1);
         assert!(tabs.is_null());
-    }
-
-    #[test]
-    fn linked_worktree_workspaces_follow_their_repo_parent_in_preorder() {
-        let session = SessionSpec {
-            name: Some("work".into()),
-        };
-        let workspaces = serde_json::json!({"result":{"workspaces":[
-            {"workspace_id":"parent","label":"Web UI","number":1,"tab_count":1,"pane_count":1,
-             "worktree":{"repo_key":"/repos/web-ui/.git","is_linked_worktree":false}},
-            {"workspace_id":"other","label":"Web UI","number":2,"tab_count":0,"pane_count":1,
-             "worktree":{"repo_key":"/repos/other/.git","is_linked_worktree":false}},
-            {"workspace_id":"child-b","label":"feature-b","number":3,"tab_count":1,"pane_count":1,
-             "worktree":{"repo_key":"/repos/web-ui/.git","is_linked_worktree":true}},
-            {"workspace_id":"child-a","label":"feature-a","number":4,"tab_count":1,"pane_count":1,
-             "worktree":{"repo_key":"/repos/web-ui/.git","is_linked_worktree":true}},
-            {"workspace_id":"orphan","label":"orphan","number":5,"tab_count":0,"pane_count":1,
-             "worktree":{"repo_key":"/repos/missing/.git","is_linked_worktree":true}},
-            {"workspace_id":"plain","label":"Plain","number":6,"tab_count":0,"pane_count":1}
-        ]}});
-        let tabs = serde_json::json!({"result":{"tabs":[
-            {"workspace_id":"parent","tab_id":"parent:t1","label":"Main","number":1},
-            {"workspace_id":"child-b","tab_id":"child-b:t1","label":"Child B","number":1},
-            {"workspace_id":"child-a","tab_id":"child-a:t1","label":"Child A","number":1}
-        ]}});
-        let panes = serde_json::json!({"result":{"panes":[]}});
-
-        let (topology, current, _) = topology_from_json(&session, &workspaces, &tabs, &panes);
-        let titles = topology
-            .iter()
-            .map(|entry| entry.title.as_str())
-            .collect::<Vec<_>>();
-        assert_eq!(
-            titles,
-            vec![
-                "Web UI",
-                "Main",
-                "feature-b",
-                "Child B",
-                "feature-a",
-                "Child A",
-                "Web UI",
-                "orphan",
-                "Plain"
-            ]
-        );
-        assert_eq!(current.len(), 6);
-        let child_parents = topology
-            .iter()
-            .filter_map(|entry| match entry.open_node.as_ref()? {
-                OpenNode::Workspace {
-                    parent_workspace_id,
-                    ..
-                } => Some((entry.title.as_str(), parent_workspace_id.as_deref())),
-                _ => None,
-            })
-            .collect::<Vec<_>>();
-        assert_eq!(
-            child_parents,
-            vec![
-                ("Web UI", None),
-                ("feature-b", Some("parent")),
-                ("feature-a", Some("parent")),
-                ("Web UI", None),
-                ("orphan", None),
-                ("Plain", None),
-            ]
-        );
-    }
-
-    #[test]
-    fn linked_worktree_parent_is_repo_scoped_and_deterministic() {
-        let session = SessionSpec {
-            name: Some("work".into()),
-        };
-        let workspaces = serde_json::json!({"result":{"workspaces":[
-            {"workspace_id":"first","label":"Parent","worktree":{"repo_key":"repo-a","is_linked_worktree":false}},
-            {"workspace_id":"second","label":"Parent","worktree":{"repo_key":"repo-a","is_linked_worktree":false}},
-            {"workspace_id":"same-name-other-repo","label":"Child","worktree":{"repo_key":"repo-b","is_linked_worktree":false}},
-            {"workspace_id":"child","label":"Child","worktree":{"repo_key":"repo-a","is_linked_worktree":true}}
-        ]}});
-        let empty = serde_json::json!({"result":{"tabs":[],"panes":[]}});
-        let (topology, _, _) = topology_from_json(&session, &workspaces, &empty, &empty);
-        let child = topology
-            .iter()
-            .find(|entry| entry.workspace_id.as_deref() == Some("child"))
-            .unwrap();
-        assert!(matches!(
-            child.open_node.as_ref(),
-            Some(OpenNode::Workspace {
-                parent_workspace_id: Some(parent),
-                ..
-            }) if parent == "first"
-        ));
-    }
-
-    #[test]
-    fn tabs_are_sorted_by_number_within_their_workspace() {
-        let session = SessionSpec {
-            name: Some("work".into()),
-        };
-        let workspaces = serde_json::json!({"result":{"workspaces":[
-            {"workspace_id":"w1","label":"Project","tab_count":3,"pane_count":3}
-        ]}});
-        let tabs = serde_json::json!({"result":{"tabs":[
-            {"workspace_id":"w1","tab_id":"w1:t3","label":"Third","number":30},
-            {"workspace_id":"w1","tab_id":"w1:t1","label":"First","number":10},
-            {"workspace_id":"w1","tab_id":"w1:t2","label":"Second","number":20}
-        ]}});
-        let panes = serde_json::json!({"result":{"panes":[]}});
-
-        let (topology, _, _) = topology_from_json(&session, &workspaces, &tabs, &panes);
-        let titles = topology
-            .iter()
-            .filter_map(|entry| {
-                matches!(entry.open_node, Some(OpenNode::Tab { .. }))
-                    .then_some(entry.title.as_str())
-            })
-            .collect::<Vec<_>>();
-        assert_eq!(titles, vec!["First", "Second", "Third"]);
     }
 
     #[test]

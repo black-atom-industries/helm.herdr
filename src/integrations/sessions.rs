@@ -31,7 +31,6 @@ fn remote_entry(config: &SessionEntryConfig) -> Option<Entry> {
         action: EntryAction::OpenRemote { target },
         source_label: None,
         search_terms,
-        open_node: None,
     })
 }
 

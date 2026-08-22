@@ -6,6 +6,7 @@ use std::{
     process::Command,
 };
 
+use ratatui::text::Span;
 use serde_json::Value;
 
 use crate::{
@@ -43,7 +44,7 @@ impl AgentState {
         }
     }
 
-    fn glyph(self) -> &'static str {
+    pub(crate) fn glyph(self) -> &'static str {
         match self {
             Self::Blocked => "!",
             Self::Working => "⠋",
@@ -146,6 +147,86 @@ impl TopologyCursor {
         };
         cursor.clamp(topology);
         cursor
+    }
+
+    pub(crate) fn enter_tab(&mut self, topology: &OpenTopology) {
+        self.clamp(topology);
+        if !topology.workspaces.is_empty() && !topology.workspaces[self.workspace].tabs.is_empty() {
+            self.depth = TopologyDepth::Tab;
+        }
+    }
+
+    pub(crate) fn enter_pane(&mut self, topology: &OpenTopology) {
+        self.clamp(topology);
+        let Some(tab) = topology.workspaces[self.workspace]
+            .tabs
+            .get(self.selection[self.workspace].tab)
+        else {
+            return;
+        };
+        if !tab.panes.is_empty() {
+            self.depth = TopologyDepth::Pane;
+        }
+    }
+
+    pub(crate) fn leave_to_workspace(&mut self) {
+        self.depth = TopologyDepth::Workspace;
+    }
+
+    pub(crate) fn leave_to_tab(&mut self) {
+        self.depth = TopologyDepth::Tab;
+    }
+
+    pub(crate) fn move_workspace(&mut self, topology: &OpenTopology, delta: isize) {
+        if topology.workspaces.is_empty() {
+            return;
+        }
+        let last = topology.workspaces.len() - 1;
+        self.workspace = if delta.is_negative() {
+            self.workspace.saturating_sub(delta.unsigned_abs())
+        } else {
+            self.workspace.saturating_add(delta as usize).min(last)
+        };
+        self.clamp(topology);
+    }
+
+    pub(crate) fn move_tab(&mut self, topology: &OpenTopology, delta: isize) {
+        self.clamp(topology);
+        let tabs = &topology.workspaces[self.workspace].tabs;
+        if tabs.is_empty() {
+            return;
+        }
+        let selected = &mut self.selection[self.workspace].tab;
+        *selected = if delta.is_negative() {
+            selected.saturating_sub(delta.unsigned_abs())
+        } else {
+            selected.saturating_add(delta as usize).min(tabs.len() - 1)
+        };
+        self.selection[self.workspace].pane = 0;
+        self.clamp(topology);
+    }
+
+    pub(crate) fn move_pane(&mut self, topology: &OpenTopology, delta: isize) {
+        self.clamp(topology);
+        let selected = &mut self.selection[self.workspace];
+        let Some(panes) = topology.workspaces[self.workspace]
+            .tabs
+            .get(selected.tab)
+            .map(|tab| &tab.panes)
+        else {
+            return;
+        };
+        if panes.is_empty() {
+            return;
+        }
+        selected.pane = if delta.is_negative() {
+            selected.pane.saturating_sub(delta.unsigned_abs())
+        } else {
+            selected
+                .pane
+                .saturating_add(delta as usize)
+                .min(panes.len() - 1)
+        };
     }
 
     pub(crate) fn clamp(&mut self, topology: &OpenTopology) {
@@ -669,8 +750,31 @@ pub(crate) fn enrich_git<P: GitProbe>(topology: &mut OpenTopology, probe: &P) {
     }
 }
 
+pub(crate) fn clip_selected_for_hits(value: &str, width: usize, selected: Option<&str>) -> String {
+    if Span::raw(value).width() <= width {
+        return value.into();
+    }
+    if let Some(selected) = selected {
+        if let Some(start) = value.find(selected) {
+            let suffix = &value[start..];
+            return clip(suffix, width);
+        }
+    }
+    clip(value, width)
+}
+
 fn clip(value: &str, width: usize) -> String {
-    value.chars().take(width).collect()
+    let mut output = String::new();
+    let mut used: usize = 0;
+    for character in value.chars() {
+        let char_width = Span::raw(character.to_string()).width();
+        if used.saturating_add(char_width) > width {
+            break;
+        }
+        output.push(character);
+        used += char_width;
+    }
+    output
 }
 
 fn aggregate(workspace: &WorkspaceNode) -> String {
@@ -717,6 +821,14 @@ fn pane_value(pane: &PaneNode) -> String {
 }
 
 pub(crate) fn render_workspace_block(workspace: &WorkspaceNode, width: usize) -> String {
+    render_workspace_block_selected(workspace, width, None)
+}
+
+pub(crate) fn render_workspace_block_selected(
+    workspace: &WorkspaceNode,
+    width: usize,
+    selection: Option<ChildSelection>,
+) -> String {
     let identity = workspace.git.as_ref().map_or_else(
         || workspace.label.clone(),
         |git| {
@@ -736,24 +848,31 @@ pub(crate) fn render_workspace_block(workspace: &WorkspaceNode, width: usize) ->
     let identity = clip(&identity, identity_width);
     let mut first = format!("{state:^5}{identity}");
     let aggregate = aggregate(workspace);
-    let available = width.saturating_sub(first.chars().count());
+    let available = width.saturating_sub(Span::raw(&first).width());
     first.push_str(&clip(&aggregate, available));
-    let selected_tab = workspace
-        .tabs
-        .iter()
-        .find(|tab| tab.focused)
-        .or_else(|| workspace.tabs.first());
+    let selected_tab_index = selection
+        .map(|selection| selection.tab)
+        .filter(|index| *index < workspace.tabs.len())
+        .or_else(|| workspace.tabs.iter().position(|tab| tab.focused))
+        .or_else(|| (!workspace.tabs.is_empty()).then_some(0));
+    let selected_tab = selected_tab_index.and_then(|index| workspace.tabs.get(index));
     let tabs = if workspace.tabs.is_empty() {
         "no tabs".into()
     } else {
         workspace
             .tabs
             .iter()
-            .map(|tab| {
-                if tab.label.is_empty() {
+            .enumerate()
+            .map(|(index, tab)| {
+                let label = if tab.label.is_empty() {
                     "unnamed"
                 } else {
                     tab.label.as_str()
+                };
+                if selection.is_some_and(|selection| selection.tab == index) {
+                    format!("[{label}]")
+                } else {
+                    label.into()
                 }
             })
             .collect::<Vec<_>>()
@@ -766,7 +885,15 @@ pub(crate) fn render_workspace_block(workspace: &WorkspaceNode, width: usize) ->
             } else {
                 tab.panes
                     .iter()
-                    .map(pane_value)
+                    .enumerate()
+                    .map(|(index, pane)| {
+                        let value = pane_value(pane);
+                        if selection.is_some_and(|selection| selection.pane == index) {
+                            format!("[{value}]")
+                        } else {
+                            value
+                        }
+                    })
                     .collect::<Vec<_>>()
                     .join(" ")
             }
@@ -774,9 +901,11 @@ pub(crate) fn render_workspace_block(workspace: &WorkspaceNode, width: usize) ->
         .unwrap_or_else(|| "no panes".into());
     let detail = selected_tab
         .and_then(|tab| {
-            tab.panes
-                .iter()
-                .find(|pane| pane.focused)
+            let selected_pane = selection
+                .map(|selection| selection.pane)
+                .and_then(|index| tab.panes.get(index));
+            selected_pane
+                .or_else(|| tab.panes.iter().find(|pane| pane.focused))
                 .or_else(|| tab.panes.first())
         })
         .map(|pane| match &pane.agent {
@@ -798,34 +927,75 @@ pub(crate) fn render_workspace_block(workspace: &WorkspaceNode, width: usize) ->
             ),
         })
         .unwrap_or_else(|| "pane no panes".into());
-    let child_prefix = " ".repeat(9);
-    let child = |label: &str, value: &str| {
+    let child_prefix = " ".repeat(1);
+    let child = |label: &str, value: &str, selected: Option<&str>| {
         let fixed = format!("{child_prefix}{label:<8}");
         format!(
             "{fixed}{}",
-            clip(value, width.saturating_sub(fixed.chars().count()))
+            clip_selected_for_hits(
+                value,
+                width.saturating_sub(Span::raw(&fixed).width()),
+                selected
+            )
         )
     };
+    let selected_tab_value = selection.and_then(|selection| {
+        workspace.tabs.get(selection.tab).map(|tab| {
+            let value = if tab.label.is_empty() {
+                "unnamed"
+            } else {
+                tab.label.as_str()
+            };
+            format!("[{value}]")
+        })
+    });
+    let selected_pane_value = selection.and_then(|selection| {
+        selected_tab.and_then(|tab| {
+            tab.panes
+                .get(selection.pane)
+                .map(|pane| format!("[{}]", pane_value(pane)))
+        })
+    });
     format!(
         "{first}\n{}\n{}\n{}",
-        child("tabs", &tabs),
-        child("panes", &panes),
+        child("tabs", &tabs, selected_tab_value.as_deref()),
+        child("panes", &panes, selected_pane_value.as_deref()),
         child(
             detail.split_once(' ').map_or("pane", |(label, _)| label),
-            detail.split_once(' ').map_or("unnamed", |(_, value)| value)
+            detail.split_once(' ').map_or("unnamed", |(_, value)| value),
+            None,
         )
     )
 }
 
 pub(crate) fn topology_rows(workspace: &WorkspaceNode, width: usize) -> [String; 4] {
-    let block = render_workspace_block(workspace, width);
+    topology_rows_selected(workspace, width, None)
+}
+
+pub(crate) fn topology_rows_selected(
+    workspace: &WorkspaceNode,
+    width: usize,
+    selection: Option<ChildSelection>,
+) -> [String; 4] {
+    let block = render_workspace_block_selected(workspace, width, selection);
     let mut lines = block.lines().map(str::to_string);
-    [
+    let mut rows = [
         lines.next().unwrap_or_default(),
         lines.next().unwrap_or_default(),
         lines.next().unwrap_or_default(),
         lines.next().unwrap_or_default(),
-    ]
+    ];
+    for row in &mut rows {
+        let current = Span::raw(row.as_str()).width();
+        if current < width {
+            row.push_str(&" ".repeat(width - current));
+        } else if current > width {
+            *row = clip(row, width);
+            let used = Span::raw(row.as_str()).width();
+            row.push_str(&" ".repeat(width - used));
+        }
+    }
+    rows
 }
 
 pub(crate) fn repository_color(
@@ -877,7 +1047,6 @@ pub(crate) fn query_entries(topology: &OpenTopology, _include_agents: bool) -> V
             },
             source_label: None,
             search_terms: vec![workspace.id.clone(), workspace.label.clone()],
-            open_node: None,
         });
         for tab in &workspace.tabs {
             let breadcrumb = format!("{} › {}", workspace.label, tab.label);
@@ -896,7 +1065,6 @@ pub(crate) fn query_entries(topology: &OpenTopology, _include_agents: bool) -> V
                 },
                 source_label: None,
                 search_terms: vec![workspace.label.clone(), tab.id.clone(), tab.label.clone()],
-                open_node: None,
             });
             for pane in &tab.panes {
                 let key = format!(
@@ -933,7 +1101,6 @@ pub(crate) fn query_entries(topology: &OpenTopology, _include_agents: bool) -> V
                     },
                     source_label: None,
                     search_terms: vec![key, pane.id.clone(), pane.label.clone()],
-                    open_node: None,
                 });
             }
         }

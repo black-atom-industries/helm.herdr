@@ -256,7 +256,7 @@ pub(crate) fn keybindings(app: &App) -> Vec<Keybind> {
         ),
         binding(
             Command::StartSearch,
-            vec![vim_key(KeyCode::Char('/'), "/")],
+            vec![key(KeyCode::Char('/'), KeyModifiers::NONE, "/")],
             "search",
             "Actions",
             Some("search"),
