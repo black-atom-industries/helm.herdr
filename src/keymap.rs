@@ -16,13 +16,11 @@ pub(crate) enum Command {
     Collapse,
     Expand,
     StartSearch,
-    CycleFilter,
     DeleteChar,
     DeleteWord,
     Clear,
     CloseWorkspace,
     ToggleMark,
-    TogglePreview,
     ToggleHelp,
     Update,
     Filter(Source),
@@ -31,7 +29,7 @@ pub(crate) enum Command {
 #[derive(Clone, Copy)]
 enum Scope {
     Always,
-    VimNormal,
+    Normal,
 }
 
 #[derive(Clone)]
@@ -60,10 +58,9 @@ impl KeySpec {
         self.scope.enabled(app) && self.code == key.code && modifiers_match
     }
 
-    fn visible(&self, app: &App) -> bool {
+    fn visible(&self, _app: &App) -> bool {
         match self.scope {
-            Scope::Always => true,
-            Scope::VimNormal => app.config.picker.vim_mode,
+            Scope::Always | Scope::Normal => true,
         }
     }
 }
@@ -72,7 +69,7 @@ impl Scope {
     fn enabled(self, app: &App) -> bool {
         match self {
             Self::Always => true,
-            Self::VimNormal => app.config.picker.vim_mode && app.input_mode == InputMode::Normal,
+            Self::Normal => app.input_mode == InputMode::Normal,
         }
     }
 }
@@ -100,7 +97,6 @@ impl Keybind {
     pub(crate) fn is_active(&self, app: &App) -> bool {
         match &self.command {
             Command::StartSearch => app.input_mode == InputMode::Search,
-            Command::CycleFilter => app.source_filter.is_some(),
             Command::ToggleMark => {
                 let entry = if app.topology_view() {
                     app.topology_selected_entry()
@@ -109,7 +105,6 @@ impl Keybind {
                 };
                 entry.is_some_and(|entry| app.is_pinned(entry))
             }
-            Command::TogglePreview => app.preview,
             Command::ToggleHelp => app.input_mode == InputMode::Help,
             Command::Filter(source) => app.source_filter.as_ref() == Some(source),
             _ => false,
@@ -119,14 +114,7 @@ impl Keybind {
     pub(crate) fn compact_hint(&self, app: &App) -> Option<(String, &'static str)> {
         let label = self.compact_label?;
         let key = match &self.command {
-            Command::MoveDown if app.config.picker.vim_mode => "j/k".into(),
-            Command::MoveDown => "↑/↓".into(),
-            Command::Filter(_) if app.config.picker.vim_mode => self
-                .keys
-                .iter()
-                .find(|spec| matches!(spec.scope, Scope::VimNormal))
-                .map(|spec| spec.label.clone())
-                .unwrap_or_else(|| self.key_label(app)),
+            Command::MoveDown => "↓/j".into(),
             _ => self.key_label(app),
         };
         Some((key, label))
@@ -158,12 +146,12 @@ fn directory_template_key(value: &str) -> Option<KeySpec> {
     }
 }
 
-fn vim_key(code: KeyCode, label: impl Into<String>) -> KeySpec {
+fn normal_key(code: KeyCode, label: impl Into<String>) -> KeySpec {
     KeySpec {
         code,
         modifiers: KeyModifiers::NONE,
         label: label.into(),
-        scope: Scope::VimNormal,
+        scope: Scope::Normal,
     }
 }
 
@@ -199,7 +187,7 @@ pub(crate) fn keybindings(app: &App) -> Vec<Keybind> {
             Command::MoveUp,
             vec![
                 key(KeyCode::Up, KeyModifiers::NONE, "↑"),
-                vim_key(KeyCode::Char('k'), "k"),
+                normal_key(KeyCode::Char('k'), "k"),
             ],
             "move up",
             "Navigation",
@@ -209,7 +197,7 @@ pub(crate) fn keybindings(app: &App) -> Vec<Keybind> {
             Command::MoveDown,
             vec![
                 key(KeyCode::Down, KeyModifiers::NONE, "↓"),
-                vim_key(KeyCode::Char('j'), "j"),
+                normal_key(KeyCode::Char('j'), "j"),
             ],
             "move down",
             "Navigation",
@@ -217,14 +205,20 @@ pub(crate) fn keybindings(app: &App) -> Vec<Keybind> {
         ),
         binding(
             Command::Collapse,
-            vec![key(KeyCode::Left, KeyModifiers::NONE, "←")],
+            vec![
+                key(KeyCode::Left, KeyModifiers::NONE, "←"),
+                normal_key(KeyCode::Char('h'), "h"),
+            ],
             "collapse / parent",
             "Navigation",
             Some("collapse"),
         ),
         binding(
             Command::Expand,
-            vec![key(KeyCode::Right, KeyModifiers::NONE, "→")],
+            vec![
+                key(KeyCode::Right, KeyModifiers::NONE, "→"),
+                normal_key(KeyCode::Char('l'), "l"),
+            ],
             "expand",
             "Navigation",
             Some("expand"),
@@ -237,14 +231,11 @@ pub(crate) fn keybindings(app: &App) -> Vec<Keybind> {
         };
         bindings.push(binding(
             Command::Filter(source.clone()),
-            vec![
-                key(
-                    KeyCode::Char(filter_key),
-                    KeyModifiers::CONTROL,
-                    format!("⌃{}", filter_key.to_ascii_uppercase()),
-                ),
-                vim_key(KeyCode::Char(filter_key), filter_key.to_string()),
-            ],
+            vec![key(
+                KeyCode::Char(filter_key),
+                KeyModifiers::CONTROL,
+                format!("⌃{}", filter_key.to_ascii_uppercase()),
+            )],
             source_help_label(&source),
             "Filters",
             Some(source_compact_label(&source)),
@@ -265,13 +256,6 @@ pub(crate) fn keybindings(app: &App) -> Vec<Keybind> {
             "search",
             "Actions",
             Some("search"),
-        ),
-        binding(
-            Command::CycleFilter,
-            vec![key(KeyCode::Tab, KeyModifiers::NONE, "Tab")],
-            "cycle filters",
-            "Filters",
-            None,
         ),
         binding(
             Command::DeleteChar,
@@ -313,13 +297,6 @@ pub(crate) fn keybindings(app: &App) -> Vec<Keybind> {
             "mark / unmark selected",
             "Actions",
             Some("mark"),
-        ),
-        binding(
-            Command::TogglePreview,
-            vec![key(KeyCode::Char('o'), KeyModifiers::CONTROL, "⌃O")],
-            "toggle preview",
-            "View",
-            Some("preview"),
         ),
         binding(
             Command::ToggleHelp,

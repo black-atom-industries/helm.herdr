@@ -8,12 +8,12 @@ Do not split into many specialized pickers unless the UX clearly needs it. The p
 
 ## Open modes
 
-- `open`: overlay pane, closes after `Enter` (the default, quick-jump flow); re-invoking focuses the existing overlay in the current workspace instead of opening a duplicate.
-- `open-side`: persistent right split (`picker-side` pane entry), mirroring herdr-file-viewer UX — launch-or-focus, toggle closed when already focused, stays open after `Enter`. The toggle decision lives in `side_pane_decision()` in `src/main.rs` and matches panes by the `Navigator Side` title.
+- `open`: session-modal Herdr popup, closes after `ui` exits (the default, quick-jump flow), sized by `picker.popup_width` and `picker.popup_height`.
+- `open-side`: persistent right split (`picker-side` pane entry), mirroring herdr-file-viewer UX — launch-or-focus, toggle closed when already focused, stays open after `Enter`. The toggle decision lives in `side_pane_decision()` in `src/main.rs` and matches panes by the `Helm Side` title.
 
 ## Result rows
 
-`picker.detailed_rows = true` is the default: every entry stays on one line, with an inline colored source label and aligned name, path, and metadata columns. Status, focus, expansion, and selection use Herdr's `prefix+g` glyphs (`◉`, Braille spinner, `●`, `✓`, `○`, `◆`, `▾`, `▸`, `→`). Set it to `false` for compact rows.
+Result rows use one flat layout: Source, status symbol and word, destination, then remaining metadata. Query results stay one terminal line.
 
 Open is a live workspace → tab topology for the current session. Workspace and tab rows repeat the `open` source label while retaining their topology glyphs and ancestry. Linked-worktree workspaces nest beneath the open non-linked workspace with the same repository identity. Search keeps the full ancestry of matching tabs.
 
@@ -37,7 +37,6 @@ Source priority is intentional: existing/open things first, creation sources lat
 
 ## Keybindings
 
-- `Tab`: cycle source filters
 - `Ctrl-W`: Open topology
 - `Ctrl-P`: Herdr Plus projects
 - `Ctrl-Q`: Herdr Plus Quick Actions
@@ -45,7 +44,6 @@ Source priority is intentional: existing/open things first, creation sources lat
 - `Ctrl-R`: roots
 - `Ctrl-S`: servers/remotes
 - `Ctrl-A`: agents
-- `Ctrl-O`: preview
 - `Ctrl-U`: clear query/filter
 
 Keep keybindings mnemonic and few.

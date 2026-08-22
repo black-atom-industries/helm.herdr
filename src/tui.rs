@@ -17,19 +17,29 @@ use ratatui::{
     layout::{Constraint, Direction, Layout, Rect},
     style::{Color, Modifier, Style},
     text::{Line, Span, Text},
-    widgets::{Block, Borders, Clear, List, ListItem, ListState, Paragraph, Wrap},
+    widgets::{Block, Borders, Clear, List, ListItem, ListState, Paragraph},
     Frame, Terminal,
 };
 
 use crate::{
     app::{App, InputMode},
     keymap::{keybindings, Command},
-    model::{Entry, EntryAction, Source},
+    model::{Entry, Source},
     paths::home,
     sources::status_icon_at,
     theme::Theme,
     topology::{repository_color, topology_lines_selected, TopologyDepth, WorkspaceNode},
 };
+
+fn open_action_error(error: String, persist: bool) -> io::Result<()> {
+    eprintln!("{error}");
+    if persist {
+        wait_for_key();
+        Ok(())
+    } else {
+        Err(io::Error::other(error))
+    }
+}
 
 pub(crate) fn tui_loop(
     app: &mut App,
@@ -74,8 +84,7 @@ pub(crate) fn tui_loop(
                 cleanup_terminal(&mut terminal)?;
                 let outcome = app.open_selected(matches!(action, Action::OpenTemplate));
                 if let Err(e) = outcome {
-                    eprintln!("{e}");
-                    wait_for_key();
+                    open_action_error(e, persist)?;
                 }
                 if !persist {
                     return Ok(());
@@ -258,23 +267,11 @@ fn handle_mouse(app: &mut App, mouse: MouseEvent, hits: &ListHits) -> Action {
 }
 
 fn handle_key(app: &mut App, key: KeyEvent) -> Action {
-    if app.input_mode != InputMode::Help && !app.topology_view() {
-        if matches!(key.code, KeyCode::Tab | KeyCode::BackTab) {
-            return Action::Continue;
-        }
-        if app.input_mode == InputMode::Normal {
-            match (key.code, key.modifiers) {
-                (KeyCode::Char('j'), KeyModifiers::NONE) => {
-                    app.next();
-                    return Action::Continue;
-                }
-                (KeyCode::Char('k'), KeyModifiers::NONE) => {
-                    app.prev();
-                    return Action::Continue;
-                }
-                _ => {}
-            }
-        }
+    if app.input_mode != InputMode::Help
+        && !app.topology_view()
+        && matches!(key.code, KeyCode::Tab | KeyCode::BackTab)
+    {
+        return Action::Continue;
     }
 
     if app.input_mode == InputMode::Normal && app.topology_view() {
@@ -330,10 +327,6 @@ fn handle_key(app: &mut App, key: KeyEvent) -> Action {
 
     if let Some(command) = command {
         return execute_command(app, command, key);
-    }
-
-    if app.config.picker.vim_mode && app.input_mode == InputMode::Normal {
-        return Action::Continue;
     }
 
     // Only plain and shifted characters are text. Without this guard every
@@ -409,10 +402,6 @@ fn execute_command(app: &mut App, command: Command, key: KeyEvent) -> Action {
             app.input_mode = InputMode::Search;
             Action::Continue
         }
-        Command::CycleFilter => {
-            app.cycle_filter();
-            Action::Continue
-        }
         Command::DeleteChar => {
             app.query.pop();
             app.apply_filter();
@@ -440,10 +429,6 @@ fn execute_command(app: &mut App, command: Command, key: KeyEvent) -> Action {
             }
             Action::Continue
         }
-        Command::TogglePreview => {
-            app.preview = !app.preview;
-            Action::Continue
-        }
         Command::ToggleHelp => {
             app.input_mode = InputMode::Help;
             Action::Continue
@@ -454,11 +439,7 @@ fn execute_command(app: &mut App, command: Command, key: KeyEvent) -> Action {
                 .contains(crossterm::event::KeyModifiers::CONTROL)
             {
                 app.query.clear();
-                app.input_mode = if app.config.picker.vim_filter_search {
-                    InputMode::Search
-                } else {
-                    InputMode::Normal
-                };
+                app.input_mode = InputMode::Normal;
             }
             app.set_filter(Some(source));
             app.apply_filter();
@@ -516,22 +497,7 @@ fn draw(f: &mut Frame, app: &App) -> ListHits {
     );
     f.render_widget(search, rows[0]);
 
-    let body = if app.preview && !app.topology_view() {
-        Layout::default()
-            .direction(Direction::Horizontal)
-            .constraints([Constraint::Percentage(48), Constraint::Percentage(52)])
-            .split(rows[1])
-    } else {
-        Layout::default()
-            .direction(Direction::Horizontal)
-            .constraints([Constraint::Percentage(100)])
-            .split(rows[1])
-    };
-
-    let list_hits = draw_list(f, app, body[0]);
-    if app.preview && !app.topology_view() {
-        draw_preview(f, app, body[1]);
-    }
+    let list_hits = draw_list(f, app, rows[1]);
 
     draw_key_hints(f, app, rows[2]);
     if app.input_mode == InputMode::Help {
@@ -878,12 +844,10 @@ fn breadcrumb_spans(app: &App, entry: &Entry, value: &str) -> Vec<Span<'static>>
 struct DetailedLayout {
     status_width: usize,
     title_width: usize,
-    marker_width: usize,
     right_width: usize,
 }
 
 fn detailed_layout(app: &App, row_width: usize, source_width: usize) -> DetailedLayout {
-    let marker_width = if row_width >= 80 { 10 } else { 4 };
     let state_width = app
         .entries
         .iter()
@@ -897,46 +861,19 @@ fn detailed_layout(app: &App, row_width: usize, source_width: usize) -> Detailed
     let status_width = state_width.saturating_add(2);
     let source_budget = source_width.saturating_add(1);
     let right_width = metadata_width(row_width.saturating_add(3) as u16).min(
-        row_width.saturating_sub(
-            source_budget
-                .saturating_add(status_width)
-                .saturating_add(marker_width)
-                .saturating_add(4),
-        ),
+        row_width.saturating_sub(source_budget.saturating_add(status_width).saturating_add(4)),
     );
     let right_separator = usize::from(right_width > 0);
     let content_width = row_width
         .saturating_sub(source_budget)
         .saturating_sub(status_width)
-        .saturating_sub(marker_width)
         .saturating_sub(right_width)
         .saturating_sub(right_separator);
     let title_width = content_width.min(48) / 2;
     DetailedLayout {
         status_width,
         title_width,
-        marker_width,
         right_width,
-    }
-}
-
-fn entry_branch(app: &App, entry: &Entry, _group_end: bool) -> (&'static str, Color) {
-    let is_workspace = entry.source == Source::Workspace;
-    let is_current = is_workspace && entry.search_terms.iter().any(|term| term == "focused");
-    let is_previous = is_workspace
-        && app.config.jump_back.pin_previous
-        && app.query.trim().is_empty()
-        && app.source_filter.is_none()
-        && entry.workspace_id.is_some()
-        && entry.workspace_id == app.previous_workspace_id;
-    if app.is_pinned(entry) {
-        ("  ◆  ", app.theme.yellow)
-    } else if is_current {
-        ("  ◆  ", app.theme.accent)
-    } else if is_previous {
-        ("  ◆  ", app.theme.red)
-    } else {
-        ("     ", app.theme.overlay0)
     }
 }
 
@@ -1155,7 +1092,6 @@ fn draw_list(f: &mut Frame, app: &App, area: Rect) -> ListHits {
     if app.topology_view() {
         return draw_topology_list(f, app, area);
     }
-    let show_scores = !app.query.trim().is_empty();
     let row_width = area.width.saturating_sub(3) as usize;
     let source_width = source_column_width(app);
     let detailed_layout = detailed_layout(app, row_width, source_width);
@@ -1169,11 +1105,7 @@ fn draw_list(f: &mut Frame, app: &App, area: Rect) -> ListHits {
         if row == app.selected {
             selected_row = Some(items.len());
         }
-        let score = show_scores
-            .then(|| app.filtered_scores.get(row).map(|s| format!("score {s}")))
-            .flatten();
-
-        if app.config.picker.detailed_rows {
+        {
             let status = entry_status(e).filter(|status| *status != "unknown");
             let status_label = status
                 .map(|status| truncate_end(status, detailed_layout.status_width.saturating_sub(2)));
@@ -1207,7 +1139,6 @@ fn draw_list(f: &mut Frame, app: &App, area: Rect) -> ListHits {
                 .saturating_sub(source_width.saturating_add(1))
                 .saturating_sub(detailed_layout.status_width)
                 .saturating_sub(detailed_layout.title_width)
-                .saturating_sub(detailed_layout.marker_width)
                 .saturating_sub(2)
                 .saturating_sub(detailed_layout.right_width)
                 .saturating_sub(usize::from(detailed_layout.right_width > 0));
@@ -1234,7 +1165,6 @@ fn draw_list(f: &mut Frame, app: &App, area: Rect) -> ListHits {
                             .saturating_sub(title.chars().count()),
                     ),
                 ),
-                Span::raw(" ".repeat(detailed_layout.marker_width)),
                 Span::raw("  "),
                 Span::styled(path.clone(), Style::default().fg(app.theme.subtext0)),
                 Span::raw(" ".repeat(path_width.saturating_sub(path.chars().count()))),
@@ -1249,52 +1179,6 @@ fn draw_list(f: &mut Frame, app: &App, area: Rect) -> ListHits {
                 ));
             }
             items.push(ListItem::new(Line::from(title_spans)));
-        } else {
-            let (branch, branch_color) = entry_branch(app, e, false);
-            let status_text = entry_status(e);
-            let status = status_text
-                .map(|status| format!("{} ", status_icon_at(&e.source, status, app.spinner_tick)))
-                .unwrap_or_default();
-            let subtitle = if e.subtitle.is_empty() {
-                String::new()
-            } else {
-                format!("  {}", e.subtitle)
-            };
-            let left_len = source_width.saturating_add(1)
-                + branch.chars().count()
-                + status.chars().count()
-                + e.title.chars().count()
-                + subtitle.chars().count();
-            let spacer = score
-                .as_ref()
-                .map(|score| {
-                    " ".repeat(
-                        row_width
-                            .saturating_sub(left_len + score.chars().count())
-                            .max(2),
-                    )
-                })
-                .unwrap_or_default();
-            let mut spans = source_spans(app, e, source_width);
-            spans.extend([
-                Span::styled(branch, Style::default().fg(branch_color)),
-                Span::styled(
-                    status,
-                    Style::default().fg(status_text
-                        .map(|status| agent_status_color(&app.theme, status))
-                        .unwrap_or(color)),
-                ),
-                Span::styled(e.title.clone(), Style::default().fg(app.theme.text)),
-            ]);
-            if !subtitle.is_empty() {
-                spans.push(Span::raw("  "));
-                spans.extend(breadcrumb_spans(app, e, e.subtitle.as_str()));
-            }
-            if let Some(score) = score {
-                spans.push(Span::raw(spacer));
-                spans.push(Span::styled(score, Style::default().fg(app.theme.overlay0)));
-            }
-            items.push(ListItem::new(Line::from(spans)));
         }
         item_entries.push(Some(row));
     }
@@ -1344,102 +1228,6 @@ fn draw_list(f: &mut Frame, app: &App, area: Rect) -> ListHits {
     }
 }
 
-fn draw_preview(f: &mut Frame, app: &App, area: Rect) {
-    let text = if let Some(e) = app.selected_entry() {
-        preview_text(app, e)
-    } else {
-        "No results".into()
-    };
-    let p = Paragraph::new(text)
-        .style(Style::default().fg(app.theme.text))
-        .wrap(Wrap { trim: false })
-        .block(
-            Block::default()
-                .title(" Preview ")
-                .borders(Borders::LEFT)
-                .border_style(Style::default().fg(app.theme.surface_dim)),
-        );
-    f.render_widget(p, area);
-}
-
-fn preview_text(app: &App, e: &Entry) -> String {
-    let entry_type = e.source_name();
-    let mut lines = vec![format!("type: {entry_type}"), format!("title: {}", e.title)];
-    if !e.path.as_os_str().is_empty() {
-        lines.push(format!("path: {}", e.path.display()));
-    }
-    if !e.subtitle.is_empty() {
-        lines.push(format!("info: {}", e.subtitle));
-    }
-    if let Some(label) = &e.workspace_label {
-        lines.push(format!("workspace: {label}"));
-    }
-    if let Some(id) = &e.workspace_id {
-        lines.push(format!("workspace_id: {id}"));
-    }
-    if let Some(target) = &e.agent_target {
-        lines.push(format!("agent target: {target}"));
-    }
-    if e.source == Source::Agent {
-        lines.push(
-            "agent filters: @ all agents (configured sort), !agent, @workspace/status, /path"
-                .into(),
-        );
-    }
-    if !e.search_terms.is_empty() {
-        lines.push(format!("search terms: {}", e.search_terms.join(", ")));
-    }
-    let workspaces = app.workspaces_for_entry(e);
-    if !workspaces.is_empty() {
-        lines.push("existing workspaces:".into());
-        for ws in workspaces {
-            lines.push(format!(
-                "  - {} [{}] tabs:{} panes:{} {}",
-                ws.id,
-                ws.label,
-                ws.tab_count,
-                ws.pane_count,
-                ws.path.display()
-            ));
-        }
-    }
-    if let Some(p) = &e.project {
-        lines.push("".into());
-        lines.push("project tabs:".into());
-        for tab in &p.tabs {
-            let cmd = tab.command.as_deref().unwrap_or("shell");
-            lines.push(format!("  - {}: {}", tab.name, cmd));
-        }
-    }
-    lines.push("".into());
-    let action: &str = match &e.action {
-        EntryAction::FocusWorkspace { .. } => "focus existing workspace",
-        EntryAction::FocusTab { .. } => "focus exact tab",
-        EntryAction::FocusAgent { .. } => "focus agent pane",
-        EntryAction::FocusPane { .. } => "focus exact pane",
-        EntryAction::OpenRemote { .. } => "open remote Herdr",
-        EntryAction::InvokePluginAction { .. } => "invoke Herdr plugin action",
-        EntryAction::RunCommand { .. } if e.source == Source::Session => "open session via plugin",
-        EntryAction::RunCommand { .. } => "run integration command",
-        EntryAction::OpenProject if app.matching_project_workspace(e).is_some() => {
-            "focus matching project workspace"
-        }
-        EntryAction::OpenProject => "create project workspace + tabs",
-        EntryAction::FocusOrCreateDir if app.matching_dir_workspace(e).is_some() => {
-            "focus matching dir workspace"
-        }
-        EntryAction::FocusOrCreateDir => "create dir workspace",
-    };
-    lines.push(format!("enter: {action}"));
-    if let Some(template) = app.directory_template_for_selected() {
-        lines.push(format!(
-            "{}: apply template {template}",
-            app.config.picker.directory_template_key
-        ));
-    }
-    lines.join("\n")
-}
-
 fn source_color(theme: &Theme, source: &Source) -> Color {
     match source {
         Source::Workspace => theme.green,
@@ -1463,12 +1251,26 @@ mod tests {
     use super::*;
     use crate::{
         config::Config,
+        model::EntryAction,
         theme::Theme,
         topology::{OpenTopology, PaneNode, TabNode, TopologyCursor},
     };
 
     fn key(code: KeyCode) -> KeyEvent {
         KeyEvent::new(code, KeyModifiers::NONE)
+    }
+
+    #[test]
+    fn popup_open_errors_return_failure_instead_of_success() {
+        let error = open_action_error(
+            "Herdr API error (ui_busy): popup already open".into(),
+            false,
+        )
+        .unwrap_err();
+        assert_eq!(
+            error.to_string(),
+            "Herdr API error (ui_busy): popup already open"
+        );
     }
 
     #[test]
@@ -1521,7 +1323,7 @@ mod tests {
     }
 
     #[test]
-    fn detailed_rows_put_status_before_aligned_destinations() {
+    fn flat_rows_put_status_before_aligned_destinations() {
         let mut app = App::new(Config::default(), Theme::load(false));
         let mut idle = entry(Source::Agent, "first-destination");
         idle.search_terms.push("agent-status:idle".into());
@@ -1930,32 +1732,6 @@ mod tests {
             .any(|cell| cell.symbol() == "◆" && cell.fg == app.theme.red));
     }
 
-    #[test]
-    fn current_workspace_marker_wins_over_stale_pin() {
-        let mut app = App::new(Config::default(), Theme::load(false));
-        let mut current = entry(Source::Workspace, "Current");
-        current.workspace_id = Some("w1".into());
-        current.search_terms.push("focused".into());
-        app.previous_workspace_id = Some("w1".into());
-
-        assert_eq!(
-            entry_branch(&app, &current, false),
-            ("  ◆  ", app.theme.accent)
-        );
-    }
-
-    #[test]
-    fn marked_entry_uses_a_yellow_diamond() {
-        let mut app = App::new(Config::default(), Theme::load(false));
-        let marked = entry(Source::Root, "Marked");
-        app.pinned_entries.insert("root:Marked".into());
-
-        assert_eq!(
-            entry_branch(&app, &marked, false),
-            ("  ◆  ", app.theme.yellow)
-        );
-    }
-
     #[cfg(any())]
     #[test]
     fn mark_marker_wins_over_previous_workspace() {
@@ -2041,7 +1817,6 @@ mod tests {
             .contains(Modifier::BOLD));
 
         let mut flat = App::new(Config::default(), Theme::load(false));
-        flat.config.picker.detailed_rows = false;
         let mut result = entry(Source::Workspace, "Destination");
         result.source_label = Some("open".into());
         result.subtitle = "repo › main › Tab".into();
@@ -2102,7 +1877,7 @@ mod tests {
 
     #[cfg(any())]
     #[test]
-    fn detailed_rows_truncate_long_names_and_paths_without_wrapping() {
+    fn flat_rows_truncate_long_names_and_paths_without_wrapping() {
         let mut app = App::new(Config::default(), Theme::load(false));
         let mut root = entry(Source::Root, "very-long-directory-name");
         root.path = PathBuf::from("/projects/with/a/very/long/path");
@@ -2296,38 +2071,21 @@ mod tests {
     }
 
     #[test]
-    fn vim_mode_uses_normal_keys_then_searches_with_slash() {
+    fn normal_navigation_aliases_move_and_query_editing_keeps_hjkl() {
         let mut app = App::new(Config::default(), Theme::load(false));
-        app.config.picker.vim_mode = true;
+        app.entries = vec![entry(Source::Root, "one"), entry(Source::Root, "two")];
+        app.source_filter = Some(Source::Root);
+        app.apply_filter();
         handle_key(&mut app, key(KeyCode::Char('j')));
-        assert!(app.query.is_empty());
-
-        handle_key(&mut app, key(KeyCode::Char('a')));
-        assert_eq!(app.source_filter, Some(Source::Agent));
-
+        assert_eq!(app.selected, 1);
+        handle_key(&mut app, key(KeyCode::Char('k')));
+        assert_eq!(app.selected, 0);
         handle_key(&mut app, key(KeyCode::Char('/')));
-        assert_eq!(app.input_mode, InputMode::Search);
-        assert_eq!(app.source_filter, Some(Source::Agent));
-
+        handle_key(&mut app, key(KeyCode::Char('h')));
         handle_key(&mut app, key(KeyCode::Char('j')));
-        assert_eq!(app.query, "j");
-
-        handle_key(&mut app, key(KeyCode::Esc));
-        assert_eq!(app.input_mode, InputMode::Normal);
-    }
-
-    #[test]
-    fn vim_filter_search_starts_search_after_source_key() {
-        let mut app = App::new(Config::default(), Theme::load(false));
-        app.config.picker.vim_mode = true;
-        app.config.picker.vim_filter_search = true;
-
-        handle_key(&mut app, key(KeyCode::Char('a')));
-        assert_eq!(app.source_filter, Some(Source::Agent));
-        assert_eq!(app.input_mode, InputMode::Search);
-
-        handle_key(&mut app, key(KeyCode::Char('c')));
-        assert_eq!(app.query, "c");
+        handle_key(&mut app, key(KeyCode::Char('l')));
+        handle_key(&mut app, key(KeyCode::Char('k')));
+        assert_eq!(app.query, "hjlk");
     }
 
     #[test]
@@ -2345,24 +2103,11 @@ mod tests {
             .unwrap();
         let text = buffer_text(&terminal);
         assert!(text.contains(" Keybindings "));
-        assert!(text.contains("toggle preview"));
         assert!(text.contains("agents"));
         assert!(!text.contains("?/?"));
 
         handle_key(&mut app, key(KeyCode::Char('?')));
         assert_eq!(app.input_mode, InputMode::Normal);
-    }
-
-    #[test]
-    fn registry_reports_active_toggle_state() {
-        let mut app = App::new(Config::default(), Theme::load(false));
-        app.preview = true;
-        let preview = keybindings(&app)
-            .into_iter()
-            .find(|binding| binding.command == Command::TogglePreview)
-            .unwrap();
-
-        assert!(preview.is_active(&app));
     }
 
     #[test]
@@ -2414,8 +2159,7 @@ mod tests {
 
     #[test]
     fn compact_footer_groups_movement_and_lists_filters() {
-        let mut app = App::new(Config::default(), Theme::load(false));
-        app.config.picker.vim_mode = true;
+        let app = App::new(Config::default(), Theme::load(false));
         let backend = TestBackend::new(110, 20);
         let mut terminal = Terminal::new(backend).unwrap();
         terminal
@@ -2425,9 +2169,9 @@ mod tests {
             .unwrap();
         let text = buffer_text(&terminal);
 
-        assert!(text.contains("j/k up/down"));
-        assert!(text.contains("a agent"));
-        assert!(text.contains("z zoxide"));
+        assert!(text.contains("↓/j up/down"));
+        assert!(text.contains("⌃A agent"));
+        assert!(text.contains("⌃Z zoxide"));
         assert!(!text.contains("k move up"));
     }
 
@@ -2435,7 +2179,6 @@ mod tests {
     #[test]
     fn rendered_mouse_hit_matches_the_visible_compact_row() {
         let mut app = App::new(Config::default(), Theme::load(false));
-        app.config.picker.detailed_rows = false;
         app.entries = vec![
             entry(Source::Workspace, "one"),
             entry(Source::Workspace, "two"),
@@ -2470,9 +2213,8 @@ mod tests {
 
     #[cfg(any())]
     #[test]
-    fn rendered_mouse_hits_follow_grouped_detailed_rows_after_scroll() {
+    fn rendered_mouse_hits_follow_flat_rows_after_scroll() {
         let mut app = App::new(Config::default(), Theme::load(false));
-        app.config.picker.detailed_rows = true;
         app.entries = (0..8)
             .map(|index| entry(Source::Zoxide, &format!("/{index}")))
             .collect();
@@ -2608,11 +2350,9 @@ mod tests {
     #[test]
     fn input_modes_transition_exclusively() {
         let mut app = App::new(Config::default(), Theme::load(false));
-        app.config.picker.vim_mode = true;
-        app.config.picker.vim_filter_search = true;
         assert_eq!(app.input_mode, InputMode::Normal);
 
-        handle_key(&mut app, key(KeyCode::Char('a')));
+        handle_key(&mut app, key(KeyCode::Char('/')));
         assert_eq!(app.input_mode, InputMode::Search);
 
         handle_key(&mut app, key(KeyCode::Char('?')));

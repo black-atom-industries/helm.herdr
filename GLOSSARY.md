@@ -25,7 +25,7 @@
 | Term | Definition | Aliases to avoid |
 | --- | --- | --- |
 | **Picker** | Helm's interactive interface for finding and opening destinations. | Navigator, menu |
-| **Overlay** | A temporary Picker shown over the current workspace. | Modal, popup |
+| **Popup** | A temporary Picker shown by Herdr over the current workspace. | Modal, overlay |
 | **Side pane** | A persistent Picker shown beside the current workspace. | Sidebar, split view |
 | **Query** | The text entered by the User to narrow the result list. | Search term, filter |
 | **Source filter** | A restriction that limits the result list to one Source category. | Filter, search mode |
@@ -82,7 +82,7 @@
 ## Relationships
 
 - A **Picker** has one **Query**, an optional **Source filter**, and a **Result list**.
-- An **Overlay** and a **Side pane** are two presentations of a **Picker**.
+- A **Popup** and a **Side pane** are two presentations of a **Picker**.
 - A **Result list** contains zero or more **Entries**, and each **Entry** belongs to exactly one **Source**.
 - An **Entry row** renders exactly one **Entry**; the **Selected entry** is one Entry in the current Result list.
 - An **Entry action** is applied to the **Selected entry**.

@@ -19,7 +19,7 @@ mod tui;
 mod update;
 
 use app::App;
-use config::Config;
+use config::{Config, Percentage};
 use herdr::herdr_bin;
 use theme::Theme;
 use tui::tui_loop;
@@ -38,15 +38,7 @@ fn main() {
     }
 }
 
-// Must match the pane `title` values in herdr-plugin.toml; Herdr exposes them
-// as labels in `pane list`.
-const PICKER_PANE_LABEL: &str = "Helm";
 const SIDE_PANE_LABEL: &str = "Helm Side";
-
-enum PickerDecision {
-    Open,
-    Focus(String),
-}
 
 enum SideDecision {
     Open,
@@ -72,19 +64,35 @@ fn pane_in_focused_workspace<'a>(
     Some((focused, target))
 }
 
-fn picker_pane_decision(pane_json: &serde_json::Value) -> PickerDecision {
-    pane_in_focused_workspace(pane_json, PICKER_PANE_LABEL)
-        .and_then(|(_, picker)| picker.get("pane_id")?.as_str())
-        .map(|id| PickerDecision::Focus(id.into()))
-        .unwrap_or(PickerDecision::Open)
+fn popup_request(
+    plugin_id: &str,
+    entrypoint: &str,
+    width: Percentage,
+    height: Percentage,
+    request_id: &str,
+) -> serde_json::Value {
+    serde_json::json!({
+        "id": request_id,
+        "method": "plugin.pane.open",
+        "params": {
+            "plugin_id": plugin_id,
+            "entrypoint": entrypoint,
+            "placement": "popup",
+            "width": width.to_string(),
+            "height": height.to_string(),
+        }
+    })
 }
 
 fn open_picker() -> ! {
-    let json = herdr::herdr_json(["pane", "list"]).unwrap_or(serde_json::Value::Null);
-    match picker_pane_decision(&json) {
-        PickerDecision::Open => open_plugin_pane("picker", &["--focus"]),
-        PickerDecision::Focus(id) => run_plugin_pane_cmd("focus", &id),
-    }
+    let config = Config::load();
+    let plugin = env::var("HERDR_PLUGIN_ID").unwrap_or_else(|_| "helm-herdr".into());
+    open_plugin_popup(
+        &plugin,
+        "picker",
+        config.picker.popup_width,
+        config.picker.popup_height,
+    )
 }
 
 // Launch-or-focus, toggle on repeat — same UX as herdr-file-viewer's side pane,
@@ -115,6 +123,26 @@ fn open_side_picker() -> ! {
     }
 }
 
+fn open_plugin_popup(
+    plugin_id: &str,
+    entrypoint: &str,
+    width: Percentage,
+    height: Percentage,
+) -> ! {
+    let request = popup_request(plugin_id, entrypoint, width, height, "helm-herdr-popup");
+    match herdr::socket_request_with_id(
+        request["id"].as_str().unwrap_or_default(),
+        request["method"].as_str().unwrap_or_default(),
+        request["params"].clone(),
+    ) {
+        Ok(_) => process::exit(0),
+        Err(error) => {
+            eprintln!("{error}");
+            process::exit(1);
+        }
+    }
+}
+
 fn open_plugin_pane(entrypoint: &str, extra: &[&str]) -> ! {
     let plugin = env::var("HERDR_PLUGIN_ID").unwrap_or_else(|_| "helm-herdr".into());
     let status = Command::new(herdr_bin())
@@ -131,18 +159,22 @@ fn open_plugin_pane(entrypoint: &str, extra: &[&str]) -> ! {
         .status();
     match status {
         Ok(s) => process::exit(s.code().unwrap_or(0)),
-        Err(e) => {
-            eprintln!("failed to open picker pane: {e}");
+        Err(error) => {
+            eprintln!("failed to open picker pane: {error}");
             process::exit(1);
         }
     }
 }
 
 fn run_plugin_pane_cmd(cmd: &str, pane_id: &str) -> ! {
-    let status = Command::new(herdr_bin())
-        .args(["plugin", "pane", cmd, pane_id])
-        .status();
+    let status = plugin_pane_command(cmd, pane_id);
     process::exit(status.ok().and_then(|s| s.code()).unwrap_or(1));
+}
+
+fn plugin_pane_command(cmd: &str, pane_id: &str) -> std::io::Result<process::ExitStatus> {
+    Command::new(herdr_bin())
+        .args(["plugin", "pane", cmd, pane_id])
+        .status()
 }
 
 fn jump_back() -> ! {
@@ -200,29 +232,77 @@ mod tests {
     }
 
     #[test]
-    fn overlay_picker_opens_once_then_focuses_existing() {
-        let no_picker = pane_list(vec![pane("w1:p1", "w1", None, true)]);
-        assert!(matches!(
-            picker_pane_decision(&no_picker),
-            PickerDecision::Open
-        ));
+    fn popup_request_uses_validated_percentage_dimensions() {
+        let request = popup_request(
+            "helm-herdr",
+            "picker",
+            config::Percentage::try_from(90).unwrap(),
+            config::Percentage::try_from(80).unwrap(),
+            "request-1",
+        );
+        assert_eq!(
+            request,
+            serde_json::json!({
+                "id": "request-1",
+                "method": "plugin.pane.open",
+                "params": {
+                    "plugin_id": "helm-herdr",
+                    "entrypoint": "picker",
+                    "placement": "popup",
+                    "width": "90%",
+                    "height": "80%"
+                }
+            })
+        );
+    }
 
-        let existing_picker = pane_list(vec![
-            pane("w1:p1", "w1", None, true),
-            pane("w1:p2", "w1", Some(PICKER_PANE_LABEL), false),
-        ]);
-        assert!(
-            matches!(picker_pane_decision(&existing_picker), PickerDecision::Focus(id) if id == "w1:p2")
+    #[cfg(unix)]
+    #[test]
+    fn side_pane_focus_uses_cli_wrapper() {
+        use std::{
+            fs,
+            os::unix::fs::PermissionsExt,
+            time::{SystemTime, UNIX_EPOCH},
+        };
+
+        let _lock = herdr::test_env_lock();
+        let stamp = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let dir = env::temp_dir().join(format!("helm-herdr-side-cli-{stamp}"));
+        fs::create_dir(&dir).unwrap();
+        let script = dir.join("herdr");
+        let args = dir.join("args");
+        fs::write(
+            &script,
+            "#!/bin/sh\nprintf '%s\\n' \"$@\" > \"$HERDR_TEST_ARGS\"\n",
+        )
+        .unwrap();
+        let mut permissions = fs::metadata(&script).unwrap().permissions();
+        permissions.set_mode(0o755);
+        fs::set_permissions(&script, permissions).unwrap();
+
+        let previous_bin = env::var_os("HERDR_BIN_PATH");
+        let previous_args = env::var_os("HERDR_TEST_ARGS");
+        env::set_var("HERDR_BIN_PATH", &script);
+        env::set_var("HERDR_TEST_ARGS", &args);
+        let status = plugin_pane_command("focus", "w1:p2").unwrap();
+        assert!(status.success());
+        assert_eq!(
+            fs::read_to_string(&args).unwrap(),
+            "plugin\npane\nfocus\nw1:p2\n"
         );
 
-        let other_workspace = pane_list(vec![
-            pane("w1:p1", "w1", None, true),
-            pane("w2:p2", "w2", Some(PICKER_PANE_LABEL), false),
-        ]);
-        assert!(matches!(
-            picker_pane_decision(&other_workspace),
-            PickerDecision::Open
-        ));
+        match previous_bin {
+            Some(value) => env::set_var("HERDR_BIN_PATH", value),
+            None => env::remove_var("HERDR_BIN_PATH"),
+        }
+        match previous_args {
+            Some(value) => env::set_var("HERDR_TEST_ARGS", value),
+            None => env::remove_var("HERDR_TEST_ARGS"),
+        }
+        fs::remove_dir_all(dir).unwrap();
     }
 
     #[test]

@@ -31,12 +31,9 @@ source_priority_boost = 5
 # - spaces: keep Herdr/pane order
 agent_sort = "herdr"
 
-# Show the right-side preview pane on open. Ctrl-O toggles it at runtime.
-preview = true
-
-# Use one-line source-aware rows with aligned name, path, and metadata columns.
-# Set false for the compact list.
-detailed_rows = true
+# Session-modal Herdr popup dimensions, as percentages of the terminal.
+popup_width = 90
+popup_height = 90
 
 # Check GitHub releases in the background at most once per day. Network errors
 # are ignored; a newer version appears as a badge in the Navigator header.
@@ -46,12 +43,6 @@ check_updates = true
 # selected zoxide/root dir, appending new tabs if its workspace already exists.
 # directory_template = "default.toml"
 # directory_template_key = "alt-enter" # also accepts Ctrl forms such as "ctrl-g"
-
-# Vim-style normal mode: j/k move, source keys filter, and / starts searching.
-vim_mode = false
-
-# Start searching immediately after a Vim source-filter key.
-vim_filter_search = false
 
 # Optional: override source filter shortcuts. Values accept "ctrl-x", "ctrl+x", "^x", or "x".
 # Defaults: server=ctrl-s, agent=ctrl-a, quick=ctrl-q, workspace=ctrl-w, project=ctrl-p,

@@ -13,7 +13,7 @@
 <p align="center">
   <a href="https://github.com/black-atom-industries/helm.herdr/actions/workflows/ci.yml"><img alt="CI" src="https://github.com/black-atom-industries/helm.herdr/actions/workflows/ci.yml/badge.svg" /></a>
   <a href="LICENSE"><img alt="MIT License" src="https://img.shields.io/badge/license-MIT-2ea44f" /></a>
-  <img alt="Herdr 0.7.3+" src="https://img.shields.io/badge/Herdr-0.7.3%2B-66b3ff" />
+  <img alt="Herdr 0.7.4+" src="https://img.shields.io/badge/Herdr-0.7.4%2B-66b3ff" />
   <img alt="Linux and macOS" src="https://img.shields.io/badge/platform-Linux%20%7C%20macOS-c084fc" />
 </p>
 
@@ -30,7 +30,7 @@ herdr plugin install black-atom-industries/helm.herdr --yes
 herdr plugin action invoke helm-herdr.open
 ```
 
-If the overlay opens, add a shortcut to `~/.config/herdr/config.toml`. Invoking `open` again focuses the existing Helm in the current workspace instead of opening a duplicate:
+The action opens Helm in a session-modal Herdr popup. Add a shortcut to `~/.config/herdr/config.toml`:
 
 ```toml
 [[keys.command]]
@@ -92,9 +92,8 @@ Every source can be disabled. Missing optional tools degrade quietly.
 | `Alt-Enter`      | Apply `picker.directory_template` to the selected zoxide/root directory |
 | `Up` / `Down`    | Move across visible workspace, tab, and flat-source rows                |
 | `Left` / `Right` | Collapse/expand Open workspaces                                         |
-| `Tab`            | Cycle source filters                                                    |
 | `Ctrl-W`         | Open topology (workspaces and tabs)                                     |
-| `Ctrl-A` / `@`   | Agents, using configured status order                                   |
+| `Ctrl-A`         | Agents, using configured status order                                   |
 | `Ctrl-P`         | Herdr Plus projects                                                     |
 | `Ctrl-Q`         | Herdr Plus Quick Actions                                                |
 | `Ctrl-S`         | Remotes                                                                 |
@@ -103,7 +102,6 @@ Every source can be disabled. Missing optional tools degrade quietly.
 | `Ctrl-R`         | Roots                                                                   |
 | `Ctrl-X`         | Close the open workspace matching the selected item                     |
 | `Ctrl-B`         | Mark or unmark the selected item                                        |
-| `Ctrl-O`         | Toggle preview                                                          |
 | `Ctrl-U`         | Clear query and filter                                                  |
 | `Ctrl-Backspace` | Delete the last query word                                              |
 | `?`              | Show active keybindings                                                 |
@@ -124,7 +122,7 @@ Structured search narrows large result sets:
 /dotfiles        # cwd/path
 ```
 
-Set `vim_mode = true` for normal-mode `j`/`k`, source keys, and `/` search. All source shortcuts can be remapped through `[picker.filter_keys]`.
+In Normal mode, `h`/`j`/`k`/`l` mirror the arrow navigation keys. Query editing keeps those characters as text. Source shortcuts can be remapped through `[picker.filter_keys]`.
 
 ## Power moves
 
@@ -166,7 +164,7 @@ Keep Helm beside your work:
 herdr plugin action invoke helm-herdr.open-side
 ```
 
-The action opens the side pane, focuses it when it already exists, and closes it when invoked while focused. Unlike the overlay, the side pane stays open after `Enter`.
+The action opens the side pane, focuses it when it already exists, and closes it when invoked while focused. Unlike the popup, the side pane stays open after `Enter`.
 
 Optional binding:
 
@@ -196,13 +194,11 @@ engine = "nucleo" # nucleo | skim | simple
 source_order = ["workspace", "agent", "project", "zoxide", "root", "server", "quick", "plugin"]
 source_priority_boost = 5
 agent_sort = "herdr" # herdr | priority | spaces
-preview = true
-detailed_rows = true # source-aware Herdr-style result rows
+popup_width = 90
+popup_height = 90
 check_updates = true # daily background release check
 # directory_template = "default.toml" # Herdr Plus project file
 # directory_template_key = "alt-enter" # or ctrl-g / ctrl-t
-vim_mode = false
-
 [notifications]
 enabled = true
 audio = false # set true to enable sound
@@ -226,7 +222,7 @@ max_depth = 3
 
 Useful config surfaces:
 
-- `picker.detailed_rows` shows every entry on one line, with aligned name, path, and metadata columns.
+- `picker.popup_width` and `picker.popup_height` set the session-modal popup size as integer percentages from 1 through 100.
 - `picker.check_updates` checks GitHub releases in the background at most daily and shows `↑ vX.Y.Z available · F5 update`; press `F5`, confirm, and Helm installs that release through Herdr. Failures stay silent until an update is requested.
 - `picker.directory_template = "default.toml"` reuses that Herdr Plus project file from its `projects/` config directory. `Enter` keeps normal reuse/create behavior. `picker.directory_template_key` defaults to `alt-enter` and also accepts Ctrl forms such as `ctrl-g`; the shortcut always applies all template tabs, panes, labels, and commands using the selected directory instead of the template's `working_dir`, creating the workspace or appending fresh template tabs.
 - `[notifications]` can disable notifications entirely or use Herdr's default sounds, no sound, or a custom audio file.
@@ -269,7 +265,7 @@ Helm shell-quotes `{{id}}`, `{{title}}`, `{{subtitle}}`, `{{path}}`, and `{{kind
 
 ## Requirements
 
-- Herdr `0.7.3` or newer
+- Herdr `0.7.4` or newer
 - Linux or macOS
 - Optional: `zoxide` for directory history
 - Optional: Herdr Plus for project templates and Quick Actions

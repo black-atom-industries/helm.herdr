@@ -1,8 +1,12 @@
 use std::{
     env,
+    io::{BufRead, BufReader, Write},
     process::{Command, Stdio},
     thread,
 };
+
+#[cfg(unix)]
+use std::{os::unix::net::UnixStream, path::PathBuf};
 
 #[cfg(test)]
 use std::sync::{Mutex, MutexGuard, OnceLock};
@@ -21,6 +25,85 @@ use crate::{config::NotificationsConfig, paths::expand_path};
 
 pub(crate) fn herdr_bin() -> String {
     env::var("HERDR_BIN_PATH").unwrap_or_else(|_| "herdr".into())
+}
+
+#[cfg(unix)]
+pub(crate) fn socket_request(method: &str, params: Value) -> Result<Value, String> {
+    socket_request_with_id(
+        &format!("helm-herdr-{}", std::process::id()),
+        method,
+        params,
+    )
+}
+
+#[cfg(unix)]
+pub(crate) fn socket_request_with_id(
+    id: &str,
+    method: &str,
+    params: Value,
+) -> Result<Value, String> {
+    let path = env::var_os("HERDR_SOCKET_PATH")
+        .map(PathBuf::from)
+        .ok_or_else(|| "HERDR_SOCKET_PATH is not set".to_string())?;
+    let request = serde_json::json!({
+        "id": id,
+        "method": method,
+        "params": params,
+    });
+    let mut stream = UnixStream::connect(&path).map_err(|error| {
+        format!(
+            "failed to connect to Herdr socket {}: {error}",
+            path.display()
+        )
+    })?;
+    let line = serde_json::to_string(&request)
+        .map_err(|error| format!("failed to encode Herdr request: {error}"))?;
+    stream
+        .write_all(line.as_bytes())
+        .and_then(|_| stream.write_all(b"\n"))
+        .map_err(|error| format!("failed to write Herdr request: {error}"))?;
+    let mut response_line = String::new();
+    let bytes = BufReader::new(stream)
+        .read_line(&mut response_line)
+        .map_err(|error| format!("failed to read Herdr response: {error}"))?;
+    if bytes == 0 {
+        return Err("Herdr socket returned EOF".into());
+    }
+    let response: Value = serde_json::from_str(response_line.trim_end())
+        .map_err(|error| format!("malformed Herdr response: {error}"))?;
+    if response.get("id").and_then(Value::as_str) != Some(id) {
+        return Err("Herdr response ID did not match request".into());
+    }
+    if let Some(error) = response.get("error") {
+        let code = error.get("code").and_then(Value::as_str);
+        let message = error.get("message").and_then(Value::as_str);
+        return match (code, message) {
+            (Some(code), Some(message)) => Err(format!("Herdr API error ({code}): {message}")),
+            _ => Err("malformed Herdr API error response".into()),
+        };
+    }
+    response
+        .get("result")
+        .cloned()
+        .ok_or_else(|| "malformed Herdr success response".into())
+}
+
+#[cfg(not(unix))]
+pub(crate) fn socket_request(_method: &str, _params: Value) -> Result<Value, String> {
+    Err("Herdr socket API requires Unix sockets".into())
+}
+
+#[cfg(not(unix))]
+pub(crate) fn socket_request_with_id(
+    _id: &str,
+    _method: &str,
+    _params: Value,
+) -> Result<Value, String> {
+    Err("Herdr socket API requires Unix sockets".into())
+}
+
+pub(crate) fn focus_pane(pane_id: &str) -> Result<(), String> {
+    socket_request("pane.focus", serde_json::json!({ "pane_id": pane_id })).map(|_| ())
 }
 pub(crate) fn herdr_json<const N: usize>(args: [&str; N]) -> Result<Value, String> {
     herdr_json_args(args)
@@ -151,6 +234,138 @@ fn truncate(value: &str, max_chars: usize) -> String {
 mod tests {
     use super::*;
     use crate::config::NotificationsConfig;
+
+    #[cfg(unix)]
+    fn socket_fixture(
+        response: impl FnOnce(String) -> String + Send + 'static,
+    ) -> (std::path::PathBuf, std::thread::JoinHandle<()>) {
+        use std::{
+            os::unix::net::UnixListener,
+            time::{SystemTime, UNIX_EPOCH},
+        };
+        let path = std::env::temp_dir().join(format!(
+            "helm-herdr-test-{}-{}.sock",
+            std::process::id(),
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let listener = UnixListener::bind(&path).unwrap();
+        let handle = std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            let mut line = String::new();
+            let mut byte = [0u8; 1];
+            loop {
+                let count = std::io::Read::read(&mut stream, &mut byte).unwrap();
+                if count == 0 {
+                    break;
+                }
+                line.push(byte[0] as char);
+                if byte[0] == b'\n' {
+                    break;
+                }
+            }
+            writeln!(stream, "{}", response(line)).unwrap();
+        });
+        (path, handle)
+    }
+
+    #[cfg(unix)]
+    fn eof_socket_fixture() -> (std::path::PathBuf, std::thread::JoinHandle<()>) {
+        use std::{
+            os::unix::net::UnixListener,
+            time::{SystemTime, UNIX_EPOCH},
+        };
+        let path = std::env::temp_dir().join(format!(
+            "helm-herdr-eof-{}-{}",
+            std::process::id(),
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let listener = UnixListener::bind(&path).unwrap();
+        let handle = std::thread::spawn(move || {
+            let (stream, _) = listener.accept().unwrap();
+            let mut line = String::new();
+            let _ = BufReader::new(stream).read_line(&mut line);
+        });
+        (path, handle)
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn socket_requests_are_newline_json_and_require_matching_success_id() {
+        let _lock = test_env_lock();
+        let (path, handle) = socket_fixture(|line| {
+            let request: Value = serde_json::from_str(&line).unwrap();
+            assert_eq!(request["method"], "pane.focus");
+            assert_eq!(request["params"], serde_json::json!({"pane_id": "w1:p1"}));
+            serde_json::json!({"id": request["id"], "result": {"type": "ok"}}).to_string()
+        });
+        let previous = env::var_os("HERDR_SOCKET_PATH");
+        env::set_var("HERDR_SOCKET_PATH", &path);
+        assert_eq!(focus_pane("w1:p1"), Ok(()));
+        if let Some(value) = previous {
+            env::set_var("HERDR_SOCKET_PATH", value);
+        } else {
+            env::remove_var("HERDR_SOCKET_PATH");
+        }
+        handle.join().unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn socket_errors_preserve_api_code_and_reject_malformed_eof_and_missing_socket() {
+        let _lock = test_env_lock();
+        let (path, handle) = socket_fixture(|line| {
+            let request: Value = serde_json::from_str(&line).unwrap();
+            serde_json::json!({"id": request["id"], "error": {"code": "ui_busy", "message": "busy"}}).to_string()
+        });
+        let previous = env::var_os("HERDR_SOCKET_PATH");
+        env::set_var("HERDR_SOCKET_PATH", &path);
+        let error = socket_request("plugin.pane.open", serde_json::json!({})).unwrap_err();
+        assert_eq!(error, "Herdr API error (ui_busy): busy");
+        if let Some(value) = previous {
+            env::set_var("HERDR_SOCKET_PATH", value);
+        } else {
+            env::remove_var("HERDR_SOCKET_PATH");
+        }
+        handle.join().unwrap();
+
+        let missing = env::temp_dir().join(format!("helm-herdr-missing-{}", std::process::id()));
+        env::set_var("HERDR_SOCKET_PATH", &missing);
+        assert!(socket_request("pane.focus", serde_json::json!({}))
+            .unwrap_err()
+            .contains("failed to connect"));
+        env::remove_var("HERDR_SOCKET_PATH");
+
+        let (path, handle) = socket_fixture(|_| "not json".into());
+        env::set_var("HERDR_SOCKET_PATH", &path);
+        assert!(socket_request("pane.focus", serde_json::json!({}))
+            .unwrap_err()
+            .contains("malformed Herdr response"));
+        handle.join().unwrap();
+
+        let (path, handle) =
+            socket_fixture(|_| serde_json::json!({"id": "wrong", "result": {}}).to_string());
+        env::set_var("HERDR_SOCKET_PATH", &path);
+        assert_eq!(
+            socket_request("pane.focus", serde_json::json!({})).unwrap_err(),
+            "Herdr response ID did not match request"
+        );
+        handle.join().unwrap();
+
+        let (path, handle) = eof_socket_fixture();
+        env::set_var("HERDR_SOCKET_PATH", &path);
+        assert_eq!(
+            socket_request("pane.focus", serde_json::json!({})).unwrap_err(),
+            "Herdr socket returned EOF"
+        );
+        handle.join().unwrap();
+        env::remove_var("HERDR_SOCKET_PATH");
+    }
 
     #[test]
     fn notification_audio_resolves_silent_default_herdr_and_custom() {

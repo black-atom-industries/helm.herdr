@@ -47,7 +47,6 @@ pub(crate) struct App {
     pub(crate) query: String,
     pub(crate) input_mode: InputMode,
     pub(crate) source_filter: Option<Source>,
-    pub(crate) preview: bool,
     pub(crate) path_to_workspaces: HashMap<String, Vec<WorkspaceRef>>,
     pub(crate) previous_workspace_id: Option<String>,
     pub(crate) pinned_entries: HashSet<String>,
@@ -65,7 +64,6 @@ pub(crate) struct App {
 
 impl App {
     pub(crate) fn new(config: Config, theme: Theme) -> Self {
-        let preview = config.picker.preview;
         Self {
             config,
             theme,
@@ -76,7 +74,6 @@ impl App {
             query: String::new(),
             input_mode: InputMode::Normal,
             source_filter: None,
-            preview,
             path_to_workspaces: HashMap::new(),
             previous_workspace_id: None,
             pinned_entries: HashSet::new(),
@@ -475,19 +472,6 @@ impl App {
         self.selected = 0;
     }
 
-    pub(crate) fn cycle_filter(&mut self) {
-        let sources = self.config.enabled_sources_in_order();
-        self.source_filter = match self.source_filter.as_ref() {
-            None => sources.first().cloned(),
-            Some(cur) => match sources.iter().position(|source| source == cur) {
-                Some(pos) => sources.get(pos + 1).cloned(),
-                None => sources.first().cloned(),
-            },
-        };
-        self.selected = 0;
-        self.apply_filter();
-    }
-
     pub(crate) fn next(&mut self) {
         if !self.filtered.is_empty() {
             self.selected = (self.selected + 1).min(self.filtered.len() - 1);
@@ -559,7 +543,7 @@ impl App {
             return control.focus(action);
         }
         match action {
-            EntryAction::FocusPane { id, .. } => run_herdr(["pane", "focus", id]),
+            EntryAction::FocusPane { id, .. } => crate::herdr::focus_pane(id),
             EntryAction::FocusWorkspace { id, .. } => run_herdr(["workspace", "focus", id]),
             EntryAction::FocusTab { id, .. } => run_herdr(["tab", "focus", id]),
             _ => Err("not a focus action".into()),

@@ -18,14 +18,14 @@ It should unify:
 - configured root scans
 - agent panes
 
-Core UX: if something is already open, focus it; otherwise create/open the smallest useful Herdr workspace.
+Core UX: the default action opens a session-modal popup; if something is already open, focus it; otherwise create/open the smallest useful Herdr workspace.
 
 ## Current public identity
 
 - Cargo package / binary: `helm-herdr`
 - Herdr plugin id: `helm-herdr`
 - Main action: `helm-herdr.open`
-- Overlay pane id: `picker`
+- Popup entrypoint: `picker`
 - Plugin manifest: `herdr-plugin.toml`
 - Main code: `src/main.rs`
 - Default config template: `examples/default-config.toml`

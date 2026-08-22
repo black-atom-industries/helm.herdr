@@ -19,8 +19,8 @@ src/main.rs
 
 ## Entry modes
 
-- `open`: asks Herdr to open the plugin overlay pane.
-- `ui`: runs the interactive TUI inside the overlay pane.
+- `open`: asks Herdr to open the plugin session-modal popup.
+- `ui`: runs the interactive TUI inside the popup.
 - `list`: prints collected entries for debugging.
 
 ## Data flow

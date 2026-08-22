@@ -105,6 +105,7 @@ pub(crate) enum WorkspaceKind {
 }
 
 #[derive(Clone, Debug)]
+#[allow(dead_code)]
 pub(crate) struct WorkspaceRef {
     pub(crate) id: String,
     pub(crate) label: String,

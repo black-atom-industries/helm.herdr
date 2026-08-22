@@ -1,6 +1,6 @@
 # Architecture
 
-Helm for Herdr is a picker center for Herdr: one overlay for choosing where to go or what Herdr-adjacent action to run.
+Helm for Herdr is a picker center for Herdr: one session-modal popup for choosing where to go or what Herdr-adjacent action to run.
 
 It is similar in spirit to `tv`, but deeper integrated with Herdr. Instead of only returning a selected path/item, it can focus existing Herdr state, create Herdr workspaces, apply Herdr Plus project tabs, focus agents, or launch Herdr Plus Quick Actions.
 
@@ -9,21 +9,21 @@ It is similar in spirit to `tv`, but deeper integrated with Herdr. Instead of on
 ```text
 Herdr keybinding
   -> plugin action: helm-herdr.open
-  -> Herdr opens overlay pane: picker
+  -> Herdr opens session-modal popup: picker
   -> binary runs: helm-herdr ui
   -> collect sources
   -> fuzzy filter/rank
   -> Enter dispatches Herdr action
 ```
 
-The plugin is intentionally a terminal TUI running inside a Herdr-managed overlay pane. Herdr plugin v1 does not expose a native custom UI surface.
+The plugin is intentionally a terminal TUI running inside a Herdr-managed popup. Herdr plugin v1 does not expose a native custom UI surface.
 
 ## Entry points
 
 | Command | Purpose |
 | --- | --- |
-| `helm-herdr open` | Ask Herdr to open the picker overlay pane |
-| `helm-herdr ui` | Run the interactive TUI inside that pane |
+| `helm-herdr open` | Ask Herdr to open the picker popup |
+| `helm-herdr ui` | Run the interactive TUI inside the popup |
 | `helm-herdr list` | Debug: print collected entries without opening TUI |
 
 ## Code layout
@@ -102,7 +102,7 @@ This is practical theme inheritance, not native palette access.
 
 ## Design goals
 
-- One fast overlay for "where next?"
+- One fast popup for "where next?"
 - Deep Herdr actions on selection, not just printing paths
 - Optional integrations degrade quietly
 - Small Rust binary, no external picker UI dependency

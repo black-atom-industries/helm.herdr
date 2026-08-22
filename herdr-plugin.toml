@@ -1,7 +1,7 @@
 id = "helm-herdr"
 name = "Helm for Herdr"
 version = "0.5.0"
-min_herdr_version = "0.7.3"
+min_herdr_version = "0.7.4"
 description = "Jump to any Herdr workspace, agent, project, remote, directory, or action from one fuzzy navigator."
 platforms = ["linux", "macos"]
 
@@ -29,7 +29,9 @@ command = ["./target/release/helm-herdr", "jump-back"]
 [[panes]]
 id = "picker"
 title = "Helm"
-placement = "overlay"
+placement = "popup"
+width = "90%"
+height = "90%"
 command = ["./target/release/helm-herdr", "ui"]
 
 # Persistent side pane variant: stays open after Enter, toggled by the open-side
