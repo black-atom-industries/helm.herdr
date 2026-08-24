@@ -70,6 +70,19 @@ impl Theme {
         }
     }
 
+    pub(crate) fn selection_background(&self, strength: u8) -> Color {
+        let strength = u16::from(strength.min(100));
+        let inverse = 100 - strength;
+        match (self.panel_bg, self.accent) {
+            (Color::Rgb(br, bg, bb), Color::Rgb(ar, ag, ab)) => Color::Rgb(
+                ((u16::from(br) * inverse + u16::from(ar) * strength) / 100) as u8,
+                ((u16::from(bg) * inverse + u16::from(ag) * strength) / 100) as u8,
+                ((u16::from(bb) * inverse + u16::from(ab) * strength) / 100) as u8,
+            ),
+            _ => self.surface0,
+        }
+    }
+
     fn terminal() -> Self {
         Self {
             accent: Color::Blue,

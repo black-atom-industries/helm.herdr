@@ -985,7 +985,9 @@ fn draw_topology_list(f: &mut Frame, app: &App, area: Rect) -> ListHits {
         }
         for (line_index, mut line) in rendered.into_iter().enumerate() {
             let mut style = if workspace_index == selected_workspace {
-                Style::default().bg(app.theme.surface0).fg(app.theme.text)
+                Style::default()
+                    .bg(app.theme.selection_background(7))
+                    .fg(app.theme.text)
             } else {
                 Style::default().fg(app.theme.text)
             };
@@ -995,7 +997,7 @@ fn draw_topology_list(f: &mut Frame, app: &App, area: Rect) -> ListHits {
                     || (app.topology_cursor.depth == TopologyDepth::Pane && line_index == 2))
             {
                 style = Style::default()
-                    .bg(app.theme.surface1)
+                    .bg(app.theme.selection_background(19))
                     .fg(app.theme.accent)
                     .add_modifier(Modifier::BOLD);
             }
@@ -1223,11 +1225,7 @@ fn draw_list(f: &mut Frame, app: &App, area: Rect) -> ListHits {
     let list_area = block.inner(area);
     let list = List::new(items)
         .block(block)
-        .highlight_style(
-            Style::default()
-                .bg(app.theme.surface0)
-                .add_modifier(Modifier::BOLD),
-        )
+        .highlight_style(Style::default().bg(app.theme.selection_background(19)))
         .highlight_symbol("→ ");
     f.render_stateful_widget(list, area, &mut state);
 
@@ -1472,6 +1470,48 @@ mod tests {
             source_label: None,
             search_terms: vec![],
         }
+    }
+
+    #[test]
+    fn selected_flat_rows_preserve_semantic_text_styling() {
+        let mut app = App::new(Config::default(), Theme::load(false));
+        let mut workspace = entry(Source::Workspace, "Destination");
+        workspace.source_label = Some("workspace".into());
+        workspace.subtitle = "repo › main".into();
+        workspace.search_terms.push("repo-key:/repo/.git".into());
+        app.entries = vec![workspace];
+        app.filtered = vec![0];
+        app.filtered_scores = vec![0];
+        app.selected = 0;
+        app.query = "repo".into();
+
+        let backend = TestBackend::new(80, 8);
+        let mut terminal = Terminal::new(backend).unwrap();
+        terminal
+            .draw(|f| {
+                draw_list(f, &app, f.area());
+            })
+            .unwrap();
+        let text = buffer_text(&terminal);
+        let buffer = terminal.backend().buffer();
+        let (row, line) = text
+            .lines()
+            .enumerate()
+            .find(|(_, line)| line.contains("repo › main"))
+            .unwrap();
+        let repository_x = line.find("repo").unwrap() as u16;
+        let main_x = line.find("main").unwrap() as u16;
+
+        assert_eq!(
+            buffer[(repository_x, row as u16)].fg,
+            repository_color("/repo/.git", &["/repo/.git".into()], &app.theme)
+        );
+        assert!(buffer[(repository_x, row as u16)]
+            .modifier
+            .contains(Modifier::BOLD));
+        assert!(!buffer[(main_x, row as u16)]
+            .modifier
+            .contains(Modifier::BOLD));
     }
 
     #[test]
@@ -1932,6 +1972,22 @@ mod tests {
     }
 
     #[test]
+    fn selected_topology_uses_light_accent_tints() {
+        let app = topology_test_app();
+        let backend = TestBackend::new(80, 8);
+        let mut terminal = Terminal::new(backend).unwrap();
+        terminal
+            .draw(|f| {
+                draw_list(f, &app, f.area());
+            })
+            .unwrap();
+        let buffer = terminal.backend().buffer();
+
+        assert_eq!(buffer[(0, 1)].bg, Color::Rgb(214, 225, 248));
+        assert_eq!(buffer[(0, 2)].bg, Color::Rgb(236, 240, 249));
+    }
+
+    #[test]
     fn selected_depth_is_stronger_when_surface_colors_match() {
         let mut app = topology_test_app();
         app.theme.surface1 = app.theme.surface0;
@@ -1945,8 +2001,8 @@ mod tests {
             .unwrap();
         let buffer = terminal.backend().buffer();
 
-        assert_eq!(buffer[(0, 1)].bg, app.theme.surface0);
-        assert_eq!(buffer[(0, 2)].bg, app.theme.surface0);
+        assert_eq!(buffer[(0, 1)].bg, app.theme.selection_background(7));
+        assert_eq!(buffer[(0, 2)].bg, app.theme.selection_background(19));
         assert!(buffer[(0, 2)].modifier.contains(Modifier::BOLD));
         assert_eq!(buffer[(9, 2)].symbol(), "t");
     }
