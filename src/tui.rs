@@ -284,6 +284,14 @@ fn handle_key(app: &mut App, key: KeyEvent) -> Action {
                 app.topology_move_workspace(1);
                 return Action::Continue;
             }
+            (KeyCode::Char('K'), KeyModifiers::SHIFT) => {
+                app.topology_move_workspace(-1);
+                return Action::Continue;
+            }
+            (KeyCode::Char('J'), KeyModifiers::SHIFT) => {
+                app.topology_move_workspace(1);
+                return Action::Continue;
+            }
             (KeyCode::Char('h'), KeyModifiers::NONE) => {
                 app.topology_move_horizontal(-1);
                 return Action::Continue;
@@ -332,10 +340,12 @@ fn handle_key(app: &mut App, key: KeyEvent) -> Action {
     // Only plain and shifted characters are text. Without this guard every
     // unbound chord inserts its letter -- Ctrl-Backspace arrives as Ctrl-H on
     // most terminals and used to type an "h".
-    if let KeyCode::Char(c) = key.code {
-        if key.modifiers.difference(KeyModifiers::SHIFT).is_empty() {
-            app.query.push(c);
-            app.apply_filter();
+    if app.input_mode == InputMode::Search {
+        if let KeyCode::Char(c) = key.code {
+            if key.modifiers.difference(KeyModifiers::SHIFT).is_empty() {
+                app.query.push(c);
+                app.apply_filter();
+            }
         }
     }
     Action::Continue
@@ -452,46 +462,63 @@ fn draw(f: &mut Frame, app: &App) -> ListHits {
     let rows = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
-            Constraint::Length(3),
+            Constraint::Length(if app.input_mode == InputMode::Search {
+                3
+            } else {
+                1
+            }),
             Constraint::Min(3),
             Constraint::Length(2),
         ])
         .split(inner);
 
-    let filter = app
-        .source_filter
-        .as_ref()
-        .map(|s| s.label())
-        .unwrap_or("all");
-    let mut search_spans = vec![
-        Span::styled("query ", Style::default().fg(app.theme.overlay0)),
-        Span::styled(
-            &app.query,
-            Style::default()
-                .fg(app.theme.text)
-                .add_modifier(Modifier::BOLD),
-        ),
-        Span::raw("   "),
-        Span::styled(
-            format!("filter:{filter}"),
-            Style::default().fg(app.theme.accent),
-        ),
-    ];
-    if let Some(version) = &app.update_available {
-        search_spans.push(Span::styled(
-            format!("   ↑ v{version} available · F5 update"),
-            Style::default()
-                .fg(app.theme.yellow)
-                .add_modifier(Modifier::BOLD),
-        ));
+    if app.input_mode == InputMode::Search {
+        let filter = app
+            .source_filter
+            .as_ref()
+            .map(|s| s.label())
+            .unwrap_or("all");
+        let mut search_spans = vec![
+            Span::styled("query ", Style::default().fg(app.theme.overlay0)),
+            Span::styled(
+                &app.query,
+                Style::default()
+                    .fg(app.theme.text)
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::raw("   "),
+            Span::styled(
+                format!("filter:{filter}"),
+                Style::default().fg(app.theme.accent),
+            ),
+        ];
+        if let Some(version) = &app.update_available {
+            search_spans.push(Span::styled(
+                format!("   ↑ v{version} available · F5 update"),
+                Style::default()
+                    .fg(app.theme.yellow)
+                    .add_modifier(Modifier::BOLD),
+            ));
+        }
+        let search = Paragraph::new(Line::from(search_spans)).block(
+            Block::default()
+                .title(" Helm ")
+                .style(Style::default().bg(app.theme.panel_bg))
+                .borders(Borders::BOTTOM),
+        );
+        f.render_widget(search, rows[0]);
+    } else {
+        let title = app.update_available.as_ref().map_or_else(
+            || " Helm ".to_string(),
+            |version| format!(" Helm   ↑ v{version} available · F5 update "),
+        );
+        f.render_widget(
+            Block::default()
+                .title(title)
+                .style(Style::default().bg(app.theme.panel_bg)),
+            rows[0],
+        );
     }
-    let search = Paragraph::new(Line::from(search_spans)).block(
-        Block::default()
-            .title(" Helm ")
-            .style(Style::default().bg(app.theme.panel_bg))
-            .borders(Borders::BOTTOM),
-    );
-    f.render_widget(search, rows[0]);
 
     let list_hits = draw_list(f, app, rows[1]);
 
@@ -1609,6 +1636,24 @@ mod tests {
     }
 
     #[test]
+    fn vertical_navigation_crosses_workspace_boundaries() {
+        let mut app = topology_test_app();
+        let mut other = app.topology.workspaces[0].clone();
+        other.id = "w2".into();
+        other.label = "Other".into();
+        app.topology.workspaces.push(other);
+        app.topology_cursor.depth = TopologyDepth::Pane;
+
+        handle_key(&mut app, key(KeyCode::Char('j')));
+        assert_eq!(app.topology_cursor.workspace, 1);
+        assert_eq!(app.topology_cursor.depth, TopologyDepth::Pane);
+
+        app.topology_cursor.depth = TopologyDepth::Workspace;
+        handle_key(&mut app, key(KeyCode::Char('k')));
+        assert_eq!(app.topology_cursor.workspace, 0);
+    }
+
+    #[test]
     fn topology_mouse_selects_and_remembers_exact_pane_span() {
         let mut app = topology_test_app();
         let backend = TestBackend::new(80, 8);
@@ -1907,6 +1952,32 @@ mod tests {
     }
 
     #[test]
+    fn normal_mode_hides_query_bar_until_search_starts() {
+        let mut app = App::new(Config::default(), Theme::terminal());
+        let backend = TestBackend::new(60, 10);
+        let mut terminal = Terminal::new(backend).unwrap();
+
+        terminal
+            .draw(|f| {
+                draw(f, &app);
+            })
+            .unwrap();
+        let normal_text = buffer_text(&terminal);
+        assert!(!normal_text.contains("query"));
+        assert!(!normal_text.contains("filter:all"));
+
+        handle_key(&mut app, key(KeyCode::Char('/')));
+        terminal
+            .draw(|f| {
+                draw(f, &app);
+            })
+            .unwrap();
+        let search_text = buffer_text(&terminal);
+        assert!(search_text.contains("query"));
+        assert!(search_text.contains("filter:all"));
+    }
+
+    #[test]
     fn draw_uses_the_picker_title() {
         let app = App::new(Config::default(), Theme::load(false));
         let backend = TestBackend::new(60, 10);
@@ -2052,7 +2123,8 @@ mod tests {
         }
         assert_eq!(app.query, "");
 
-        // Plain and shifted characters are still text.
+        // Plain and shifted characters are text in Search mode.
+        handle_key(&mut app, key(KeyCode::Char('/')));
         handle_key(&mut app, key(KeyCode::Char('a')));
         handle_key(
             &mut app,
@@ -2229,6 +2301,19 @@ mod tests {
             &hits,
         );
         assert_eq!(app.selected, 0);
+    }
+
+    #[test]
+    fn normal_mode_letters_wait_for_the_search_trigger() {
+        let mut app = App::new(Config::default(), Theme::terminal());
+
+        handle_key(&mut app, key(KeyCode::Char('x')));
+        assert_eq!(app.query, "");
+
+        handle_key(&mut app, key(KeyCode::Char('/')));
+        handle_key(&mut app, key(KeyCode::Char('x')));
+        assert_eq!(app.query, "x");
+        assert_eq!(app.input_mode, InputMode::Search);
     }
 
     #[test]

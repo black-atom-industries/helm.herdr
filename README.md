@@ -90,10 +90,11 @@ Every source can be disabled. Missing optional tools degrade quietly.
 
 | Key              | Action                                                                  |
 | ---------------- | ----------------------------------------------------------------------- |
-| type             | Fuzzy search                                                            |
+| `/` then type    | Search the Query                                                       |
 | `Enter`          | Open selected item normally                                             |
 | `Alt-Enter`      | Apply `picker.directory_template` to the selected zoxide/root directory |
 | `Up` / `Down`    | Move through Workspace, Tab, Pane, and flat Result selections        |
+| `J` / `K`        | Move to the next / previous Workspace from any Topology depth          |
 | `Left` / `Right` | Move through Topology depth and child selections                      |
 | `Ctrl-W`         | Workspaces / Tabs / Panes                                               |
 | `Ctrl-A`         | Agents, using configured status order                                   |
@@ -110,11 +111,13 @@ Every source can be disabled. Missing optional tools degrade quietly.
 | `?`              | Show active keybindings                                                 |
 | `Esc` / `Ctrl-C` | Back or close                                                           |
 
+Press `/` to enter Search mode. The Query bar appears only in Search mode, and plain letters in Normal mode remain inert unless they are bound to an action.
+
 The empty Query with no Source filter, or with the Workspace Source filter, shows one fixed four-line block per open Workspace. The lines are the Workspace identity, its `tabs`, the selected Tab's `panes`, and the selected Pane detail. The block is a projection of the live Workspace → Tab → Pane Topology; it does not mix with the flat Result list.
 
 A typed Query or any non-Workspace Source filter shows a flat one-line Result list. Each row is `Source | symbol+word status | destination`. Agent rows use the exact `agent` Query token for agent-only results. `!claude` matches an agent name, `@idle` matches workspace or status text, `@Dotfiles` matches an agent workspace label or status, and `/dotfiles` matches a path. Marking an Entry changes its visible Source to `bookmark` without duplicating the destination.
 
-At Workspace depth, `Up`/`Down` move between Workspaces. `Right` or `Tab` enters the selected Workspace's Tabs; `Left` or `h` returns to Workspace depth. At Tab depth, `Left`/`Right` or `Shift-Tab`/`Tab` selects Tabs and `Down` enters the selected Tab's Panes; `Up` returns to Workspace depth. At Pane depth, `Left`/`Right` or `Shift-Tab`/`Tab` selects Panes and `Up` returns to Tab depth. `[` and `]` move between Workspaces from any depth. `Enter` focuses the exact Workspace, Tab, or Pane represented by the current selection. Pane focus uses the exact Pane ID, not an agent target.
+At Workspace depth, `Up`/`Down` move between Workspaces. `Right` or `Tab` enters the selected Workspace's Tabs; `Left` or `h` returns to Workspace depth. At Tab depth, `Left`/`Right` or `Shift-Tab`/`Tab` selects Tabs and `Down` enters the selected Tab's Panes; `Up` returns to Workspace depth. At Pane depth, `Left`/`Right` or `Shift-Tab`/`Tab` selects Panes and `Up` returns to Tab depth. `[`, `]`, `J`, and `K` move between Workspaces from any depth. `Enter` focuses the exact Workspace, Tab, or Pane represented by the current selection. Pane focus uses the exact Pane ID, not an agent target.
 
 `h`/`j`/`k`/`l` mirror the arrow navigation keys in Normal mode. Source shortcuts can be remapped through `[picker.filter_keys]`.
 

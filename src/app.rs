@@ -270,6 +270,9 @@ impl App {
             (TopologyDepth::Tab, d) if d.is_negative() => self.topology_cursor.leave_to_workspace(),
             (TopologyDepth::Tab, _) => self.topology_cursor.enter_pane(&self.topology),
             (TopologyDepth::Pane, d) if d.is_negative() => self.topology_cursor.leave_to_tab(),
+            (TopologyDepth::Pane, d) if d.is_positive() => {
+                self.topology_cursor.move_workspace(&self.topology, 1)
+            }
             (TopologyDepth::Pane, _) => {}
         }
         self.topology_cursor.clamp(&self.topology);
