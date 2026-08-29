@@ -145,7 +145,18 @@ impl Default for TopologyCursor {
 impl TopologyCursor {
     pub(crate) fn new(topology: &OpenTopology) -> Self {
         let mut cursor = Self {
-            selection: vec![ChildSelection::default(); topology.workspaces.len()],
+            selection: topology
+                .workspaces
+                .iter()
+                .map(|workspace| ChildSelection {
+                    tab: workspace
+                        .tabs
+                        .iter()
+                        .position(|tab| tab.focused)
+                        .unwrap_or(0),
+                    ..ChildSelection::default()
+                })
+                .collect(),
             ..Self::default()
         };
         cursor.clamp(topology);
@@ -476,7 +487,7 @@ fn parse_workspaces(
             .unwrap_or(false);
         let workspace_session =
             value_string(workspace, &["session", "session_name"]).or_else(|| session.clone());
-        let mut workspace_tabs = tabs
+        let workspace_tabs = tabs
             .iter()
             .filter(|tab| tab.get("workspace_id").and_then(Value::as_str) == Some(id.as_str()))
             .map(|tab| {
@@ -531,7 +542,6 @@ fn parse_workspaces(
                 }
             })
             .collect::<Vec<_>>();
-        workspace_tabs.sort_by_key(|tab| !tab.focused);
         result.push(WorkspaceNode {
             id,
             label,
@@ -827,6 +837,14 @@ pub(crate) fn render_workspace_block(workspace: &WorkspaceNode, width: usize) ->
     render_workspace_block_selected(workspace, width, None)
 }
 
+pub(crate) fn selection_slot(value: &str, selected: bool) -> String {
+    if selected {
+        format!("[{value}]")
+    } else {
+        format!(" {value} ")
+    }
+}
+
 pub(crate) fn render_workspace_block_selected(
     workspace: &WorkspaceNode,
     width: usize,
@@ -872,11 +890,10 @@ pub(crate) fn render_workspace_block_selected(
                 } else {
                     tab.label.as_str()
                 };
-                if selection.is_some_and(|selection| selection.tab == index) {
-                    format!("[{label}]")
-                } else {
-                    label.into()
-                }
+                selection_slot(
+                    label,
+                    selection.is_some_and(|selection| selection.tab == index),
+                )
             })
             .collect::<Vec<_>>()
             .join(" ")
@@ -891,11 +908,10 @@ pub(crate) fn render_workspace_block_selected(
                     .enumerate()
                     .map(|(index, pane)| {
                         let value = pane_value(pane);
-                        if selection.is_some_and(|selection| selection.pane == index) {
-                            format!("[{value}]")
-                        } else {
-                            value
-                        }
+                        selection_slot(
+                            &value,
+                            selection.is_some_and(|selection| selection.pane == index),
+                        )
                     })
                     .collect::<Vec<_>>()
                     .join(" ")
@@ -1265,6 +1281,29 @@ mod tests {
             .all(|line| !line.contains('├') && !line.contains('└')));
         assert_eq!(topology.workspaces[0].id, "w1");
         assert_eq!(topology.workspaces[0].tabs[0].panes[0].id, "w1:p1");
+    }
+
+    #[test]
+    fn snapshot_preserves_tab_order_while_marking_focused_tab() {
+        let value = snapshot(
+            serde_json::json!([{"workspace_id":"w1","label":"Project"}]),
+            serde_json::json!([
+                {"workspace_id":"w1","tab_id":"t1","label":"Code","focused":false},
+                {"workspace_id":"w1","tab_id":"t2","label":"Edit","focused":true}
+            ]),
+            serde_json::json!([]),
+            serde_json::json!([]),
+        );
+
+        let tabs = &parse_snapshot(&value, None, &[]).workspaces[0].tabs;
+
+        assert_eq!(
+            tabs.iter()
+                .map(|tab| tab.label.as_str())
+                .collect::<Vec<_>>(),
+            ["Code", "Edit"]
+        );
+        assert_eq!(tabs.iter().position(|tab| tab.focused), Some(1));
     }
 
     #[test]

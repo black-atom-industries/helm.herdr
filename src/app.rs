@@ -239,6 +239,9 @@ impl App {
             }
         }
         self.topology_cursor.clamp(&self.topology);
+        if self.initial_selection_pending {
+            self.topology_cursor.enter_tab(&self.topology);
+        }
     }
 
     pub(crate) fn remember_topology_selection(&mut self) {
@@ -1502,6 +1505,39 @@ exit 0
         app.entries = vec![entry];
         app.filtered = vec![0];
         app
+    }
+
+    #[test]
+    fn initial_topology_selection_starts_at_tab_depth() {
+        let mut app = App::new(Config::default(), Theme::terminal());
+        app.topology = OpenTopology {
+            workspaces: vec![crate::topology::WorkspaceNode {
+                id: "w1".into(),
+                label: "web-ui".into(),
+                session: Some("dev".into()),
+                focused: true,
+                tabs: vec![
+                    crate::topology::TabNode {
+                        id: "t1".into(),
+                        label: "Code".into(),
+                        focused: false,
+                        panes: vec![],
+                    },
+                    crate::topology::TabNode {
+                        id: "t2".into(),
+                        label: "Edit".into(),
+                        focused: true,
+                        panes: vec![],
+                    },
+                ],
+                git: None,
+            }],
+        };
+
+        app.sync_topology_cursor();
+
+        assert_eq!(app.topology_cursor.depth, TopologyDepth::Tab);
+        assert_eq!(app.topology_cursor.selection[0].tab, 1);
     }
 
     #[test]

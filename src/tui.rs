@@ -926,13 +926,7 @@ fn topology_child_ranges(
     let decorated = values
         .iter()
         .enumerate()
-        .map(|(index, value)| {
-            if selected_child == Some(index) {
-                format!("[{value}]")
-            } else {
-                value.clone()
-            }
-        })
+        .map(|(index, value)| crate::topology::selection_slot(value, selected_child == Some(index)))
         .collect::<Vec<_>>();
     let full = decorated.join(" ");
     let selected_value = selected_child.and_then(|index| decorated.get(index).map(String::as_str));
@@ -1708,6 +1702,32 @@ mod tests {
         );
         assert_eq!(app.topology_cursor.selection[1].tab, 1);
         assert_eq!(app.topology_cursor.selection[1].pane, 0);
+    }
+
+    #[test]
+    fn topology_rows_reserve_selection_slots_for_tabs_and_panes() {
+        let mut app = topology_test_app();
+        app.topology.workspaces[0].tabs.push(TabNode {
+            id: "t2".into(),
+            label: "Other".into(),
+            focused: false,
+            panes: vec![PaneNode {
+                id: "p3".into(),
+                label: "Three".into(),
+                cwd: PathBuf::new(),
+                focused: false,
+                title: None,
+                agent: None,
+            }],
+        });
+        let rows = crate::topology::topology_rows_selected(
+            &app.topology.workspaces[0],
+            80,
+            Some(crate::topology::ChildSelection { tab: 0, pane: 1 }),
+        );
+
+        assert!(rows[1].contains("[Tab]  Other"));
+        assert!(rows[2].contains(" One  [Two] "));
     }
 
     #[test]
