@@ -28,11 +28,6 @@ The plugin is itself a Rust TUI. Do not depend on `fzf`, `tv`, etc.
 If Herdr Plus config dirs are absent, project/quick sources should degrade quietly.
 No hard failure on missing Herdr Plus.
 
-## Theme implementation is local mapping
-
-Known limitation: Herdr plugin v1 does not provide active theme palette.
-Local mapping + custom override is the accepted solution for now.
-
 ## Simplicity bias
 
 This project should stay a compact plugin. Avoid speculative abstractions, plugin SDK wrappers, or multi-file refactors unless code size starts blocking safe changes.

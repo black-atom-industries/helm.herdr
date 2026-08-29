@@ -1007,7 +1007,7 @@ fn draw_topology_list(f: &mut Frame, app: &App, area: Rect) -> ListHits {
         for (line_index, mut line) in rendered.into_iter().enumerate() {
             let mut style = if workspace_index == selected_workspace {
                 Style::default()
-                    .bg(app.theme.selection_background(7))
+                    .bg(app.theme.selection_background(false))
                     .fg(app.theme.text)
             } else {
                 Style::default().fg(app.theme.text)
@@ -1018,7 +1018,7 @@ fn draw_topology_list(f: &mut Frame, app: &App, area: Rect) -> ListHits {
                     || (app.topology_cursor.depth == TopologyDepth::Pane && line_index == 2))
             {
                 style = Style::default()
-                    .bg(app.theme.selection_background(19))
+                    .bg(app.theme.selection_background(true))
                     .fg(app.theme.accent)
                     .add_modifier(Modifier::BOLD);
             }
@@ -1246,7 +1246,7 @@ fn draw_list(f: &mut Frame, app: &App, area: Rect) -> ListHits {
     let list_area = block.inner(area);
     let list = List::new(items)
         .block(block)
-        .highlight_style(Style::default().bg(app.theme.selection_background(19)))
+        .highlight_style(Style::default().bg(app.theme.selection_background(true)))
         .highlight_symbol("→ ");
     f.render_stateful_widget(list, area, &mut state);
 
@@ -1319,7 +1319,7 @@ mod tests {
 
     #[test]
     fn projected_topology_rows_use_breadcrumb_destinations_without_cwd_columns() {
-        let mut app = App::new(Config::default(), Theme::load(false));
+        let mut app = App::new(Config::default(), Theme::terminal());
         let mut workspace = entry(Source::Workspace, "old-workspace");
         workspace.source_label = Some("workspace".into());
         workspace.subtitle = "repo › main".into();
@@ -1402,7 +1402,7 @@ mod tests {
 
     #[test]
     fn ctrl_w_filters_to_workspaces_tabs_and_panes() {
-        let mut app = App::new(Config::default(), Theme::load(false));
+        let mut app = App::new(Config::default(), Theme::terminal());
 
         assert!(matches!(
             handle_key(
@@ -1417,7 +1417,7 @@ mod tests {
 
     #[test]
     fn topology_help_names_workspaces_tabs_and_panes() {
-        let app = App::new(Config::default(), Theme::load(false));
+        let app = App::new(Config::default(), Theme::terminal());
         let binding = keybindings(&app)
             .into_iter()
             .find(|binding| binding.command == Command::Filter(Source::Workspace))
@@ -1495,7 +1495,7 @@ mod tests {
 
     #[test]
     fn selected_flat_rows_preserve_semantic_text_styling() {
-        let mut app = App::new(Config::default(), Theme::load(false));
+        let mut app = App::new(Config::default(), Theme::terminal());
         let mut workspace = entry(Source::Workspace, "Destination");
         workspace.source_label = Some("workspace".into());
         workspace.subtitle = "repo › main".into();
@@ -1537,7 +1537,7 @@ mod tests {
 
     #[test]
     fn flat_rows_put_status_before_aligned_destinations() {
-        let mut app = App::new(Config::default(), Theme::load(false));
+        let mut app = App::new(Config::default(), Theme::terminal());
         let mut idle = entry(Source::Agent, "first-destination");
         idle.search_terms.push("agent-status:idle".into());
         let mut blocked = entry(Source::Agent, "second-destination");
@@ -1628,7 +1628,7 @@ mod tests {
                 git: None,
             }],
         };
-        let mut app = App::new(Config::default(), Theme::load(false));
+        let mut app = App::new(Config::default(), Theme::terminal());
         app.topology_entries = crate::topology::query_entries(&topology, false);
         app.topology = topology;
         app.topology_cursor = TopologyCursor::new(&app.topology);
@@ -1876,7 +1876,7 @@ mod tests {
 
     #[test]
     fn herdr_plus_sources_share_color() {
-        let theme = Theme::load(false);
+        let theme = Theme::terminal();
         assert_eq!(
             source_color(&theme, &Source::Project),
             source_color(&theme, &Source::QuickAction)
@@ -1887,7 +1887,7 @@ mod tests {
     fn alt_enter_opens_selected_directory_with_configured_template() {
         let mut config = Config::default();
         config.picker.directory_template = Some("default.toml".into());
-        let mut app = App::new(config, Theme::load(false));
+        let mut app = App::new(config, Theme::terminal());
         app.entries = vec![entry(Source::Zoxide, "/tmp")];
         app.apply_filter();
 
@@ -1912,7 +1912,7 @@ mod tests {
 
     #[test]
     fn update_badge_renders_action_and_f5_triggers_it() {
-        let mut app = App::new(Config::default(), Theme::load(false));
+        let mut app = App::new(Config::default(), Theme::terminal());
         assert!(matches!(
             handle_key(
                 &mut app,
@@ -1942,7 +1942,7 @@ mod tests {
 
     #[test]
     fn status_colors_match_herdr() {
-        let theme = Theme::load(false);
+        let theme = Theme::terminal();
 
         assert_eq!(agent_status_color(&theme, "blocked"), theme.red);
         assert_eq!(agent_status_color(&theme, "working"), theme.yellow);
@@ -1979,7 +1979,7 @@ mod tests {
 
     #[test]
     fn draw_uses_the_picker_title() {
-        let app = App::new(Config::default(), Theme::load(false));
+        let app = App::new(Config::default(), Theme::terminal());
         let backend = TestBackend::new(60, 10);
         let mut terminal = Terminal::new(backend).unwrap();
         terminal
@@ -2023,7 +2023,7 @@ mod tests {
             .modifier
             .contains(Modifier::BOLD));
 
-        let mut flat = App::new(Config::default(), Theme::load(false));
+        let mut flat = App::new(Config::default(), Theme::terminal());
         let mut result = entry(Source::Workspace, "Destination");
         result.source_label = Some("open".into());
         result.subtitle = "repo › main › Tab".into();
@@ -2063,7 +2063,7 @@ mod tests {
     }
 
     #[test]
-    fn selected_topology_uses_light_accent_tints() {
+    fn selected_topology_uses_terminal_selection_colors() {
         let app = topology_test_app();
         let backend = TestBackend::new(80, 8);
         let mut terminal = Terminal::new(backend).unwrap();
@@ -2074,8 +2074,8 @@ mod tests {
             .unwrap();
         let buffer = terminal.backend().buffer();
 
-        assert_eq!(buffer[(0, 1)].bg, Color::Rgb(214, 225, 248));
-        assert_eq!(buffer[(0, 2)].bg, Color::Rgb(236, 240, 249));
+        assert_eq!(buffer[(0, 1)].bg, Color::DarkGray);
+        assert_eq!(buffer[(0, 2)].bg, Color::DarkGray);
     }
 
     #[test]
@@ -2092,15 +2092,15 @@ mod tests {
             .unwrap();
         let buffer = terminal.backend().buffer();
 
-        assert_eq!(buffer[(0, 1)].bg, app.theme.selection_background(7));
-        assert_eq!(buffer[(0, 2)].bg, app.theme.selection_background(19));
+        assert_eq!(buffer[(0, 1)].bg, app.theme.selection_background(false));
+        assert_eq!(buffer[(0, 2)].bg, app.theme.selection_background(true));
         assert!(buffer[(0, 2)].modifier.contains(Modifier::BOLD));
         assert_eq!(buffer[(9, 2)].symbol(), "t");
     }
 
     #[test]
     fn modified_chords_never_insert_text() {
-        let mut app = App::new(Config::default(), Theme::load(false));
+        let mut app = App::new(Config::default(), Theme::terminal());
 
         // Ctrl-Backspace reaches the app as Ctrl-H on most terminals; it used to
         // fall through and type an "h".
@@ -2139,7 +2139,7 @@ mod tests {
             KeyEvent::new(KeyCode::Char('h'), KeyModifiers::CONTROL),
             KeyEvent::new(KeyCode::Backspace, KeyModifiers::CONTROL),
         ] {
-            let mut app = App::new(Config::default(), Theme::load(false));
+            let mut app = App::new(Config::default(), Theme::terminal());
             app.query = "foo bar".into();
 
             handle_key(&mut app, chord);
@@ -2156,7 +2156,7 @@ mod tests {
 
     #[test]
     fn delete_word_handles_trailing_space_and_multibyte() {
-        let mut app = App::new(Config::default(), Theme::load(false));
+        let mut app = App::new(Config::default(), Theme::terminal());
 
         app.query = "foo bar  ".into();
         app.delete_query_word();
@@ -2173,7 +2173,7 @@ mod tests {
 
     #[test]
     fn normal_navigation_aliases_move_and_query_editing_keeps_hjkl() {
-        let mut app = App::new(Config::default(), Theme::load(false));
+        let mut app = App::new(Config::default(), Theme::terminal());
         app.entries = vec![entry(Source::Root, "one"), entry(Source::Root, "two")];
         app.source_filter = Some(Source::Root);
         app.apply_filter();
@@ -2191,7 +2191,7 @@ mod tests {
 
     #[test]
     fn question_mark_toggles_registry_help_overlay() {
-        let mut app = App::new(Config::default(), Theme::load(false));
+        let mut app = App::new(Config::default(), Theme::terminal());
         handle_key(&mut app, key(KeyCode::Char('?')));
         assert_eq!(app.input_mode, InputMode::Help);
 
@@ -2213,7 +2213,7 @@ mod tests {
 
     #[test]
     fn registry_maps_ctrl_b_to_mark_without_stealing_enter() {
-        let app = App::new(Config::default(), Theme::load(false));
+        let app = App::new(Config::default(), Theme::terminal());
         let mark = keybindings(&app)
             .into_iter()
             .find(|binding| binding.command == Command::ToggleMark)
@@ -2234,7 +2234,7 @@ mod tests {
 
     #[test]
     fn disabled_sources_are_absent_from_filter_bindings_and_footer() {
-        let mut app = App::new(Config::default(), Theme::load(false));
+        let mut app = App::new(Config::default(), Theme::terminal());
         app.config.sources.servers = false;
         app.config.sources.sessions = false;
 
@@ -2260,7 +2260,7 @@ mod tests {
 
     #[test]
     fn compact_footer_groups_movement_and_lists_filters() {
-        let app = App::new(Config::default(), Theme::load(false));
+        let app = App::new(Config::default(), Theme::terminal());
         let backend = TestBackend::new(110, 20);
         let mut terminal = Terminal::new(backend).unwrap();
         terminal
@@ -2278,7 +2278,7 @@ mod tests {
 
     #[test]
     fn mouse_ignores_input_outside_results() {
-        let mut app = App::new(Config::default(), Theme::load(false));
+        let mut app = App::new(Config::default(), Theme::terminal());
         app.entries = vec![
             entry(Source::Workspace, "one"),
             entry(Source::Workspace, "two"),
@@ -2304,6 +2304,28 @@ mod tests {
     }
 
     #[test]
+    fn uppercase_j_and_k_switch_workspaces_at_nested_depth() {
+        let mut app = topology_test_app();
+        let mut other = app.topology.workspaces[0].clone();
+        other.id = "w2".into();
+        other.label = "Other".into();
+        app.topology.workspaces.push(other);
+        app.topology_cursor.depth = TopologyDepth::Pane;
+
+        handle_key(
+            &mut app,
+            KeyEvent::new(KeyCode::Char('J'), KeyModifiers::SHIFT),
+        );
+        assert_eq!(app.topology_cursor.workspace, 1);
+
+        handle_key(
+            &mut app,
+            KeyEvent::new(KeyCode::Char('K'), KeyModifiers::SHIFT),
+        );
+        assert_eq!(app.topology_cursor.workspace, 0);
+    }
+
+    #[test]
     fn normal_mode_letters_wait_for_the_search_trigger() {
         let mut app = App::new(Config::default(), Theme::terminal());
 
@@ -2318,7 +2340,7 @@ mod tests {
 
     #[test]
     fn input_modes_transition_exclusively() {
-        let mut app = App::new(Config::default(), Theme::load(false));
+        let mut app = App::new(Config::default(), Theme::terminal());
         assert_eq!(app.input_mode, InputMode::Normal);
 
         handle_key(&mut app, key(KeyCode::Char('/')));

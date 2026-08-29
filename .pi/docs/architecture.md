@@ -13,7 +13,7 @@ The popup defaults to 90% width × 90% height. `picker.popup_width` and `picker.
 
 ## Data flow
 
-1. Load the plugin config and theme.
+1. Load the plugin config.
 2. Collect enabled source Entries and the live Workspace/Tab/Pane Topology.
 3. With an empty Query and no filter or the Workspace filter, render fixed four-line Workspace blocks.
 4. With a typed Query or any non-Workspace filter, score and render a flat one-line Result list.
@@ -47,6 +47,6 @@ The Herdr Plus adapter reads project TOML, creates or reuses Workspaces, and app
 
 Command/JSON integrations provide a `collect` command that prints an array and an `open` command that runs for the selected Entry. Helm owns success and error notifications. `Source` identifies the visible category; `EntryAction` owns Enter behavior.
 
-## Theme flow
+## Color flow
 
-Herdr does not expose its active palette to plugins. Helm reads Herdr config, maps supported theme names locally, applies `[theme.custom]`, and falls back to One Light.
+Helm uses the terminal's default colors and ANSI palette. Color selection is part of the Picker renderer rather than plugin configuration.

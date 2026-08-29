@@ -1504,7 +1504,7 @@ exit 0
     }
 
     fn app_with_selected_entry(config: Config, entry: Entry) -> App {
-        let mut app = App::new(config, Theme::load(false));
+        let mut app = App::new(config, Theme::terminal());
         app.entries = vec![entry];
         app.filtered = vec![0];
         app
@@ -1545,7 +1545,7 @@ exit 0
 
     #[test]
     fn first_query_character_projects_flat_direct_destinations() {
-        let mut app = App::new(Config::default(), Theme::load(false));
+        let mut app = App::new(Config::default(), Theme::terminal());
         app.topology = OpenTopology {
             workspaces: vec![crate::topology::WorkspaceNode {
                 id: "w1".into(),
@@ -1581,7 +1581,7 @@ exit 0
 
     #[test]
     fn exact_agent_token_is_a_trait_predicate_and_agents_is_plain_text() {
-        let mut app = App::new(Config::default(), Theme::load(false));
+        let mut app = App::new(Config::default(), Theme::terminal());
         let mut agent = entry(Source::Agent, "/tmp", "Codex");
         agent.agent_target = Some("p1".into());
         let tab = entry(Source::Workspace, "/tmp", "Agents");
@@ -1613,7 +1613,7 @@ exit 0
 
     #[test]
     fn marked_flat_destinations_use_bookmark_source_without_duplicates() {
-        let mut app = App::new(Config::default(), Theme::load(false));
+        let mut app = App::new(Config::default(), Theme::terminal());
         app.entries = vec![entry(Source::Root, "/tmp/project", "Project")];
         let key = pin_key(&app.entries[0]);
         app.pinned_entries.insert(key);
@@ -1625,7 +1625,7 @@ exit 0
 
     #[test]
     fn previous_workspace_is_pinned_only_on_initial_unfiltered_view() {
-        let mut app = App::new(Config::default(), Theme::load(false));
+        let mut app = App::new(Config::default(), Theme::terminal());
         let mut alpha = entry(Source::Workspace, "/alpha", "alpha");
         alpha.workspace_id = Some("w1".into());
         alpha.action = EntryAction::FocusWorkspace {
@@ -1665,7 +1665,7 @@ exit 0
 
     #[test]
     fn equal_score_ties_preserve_insertion_order() {
-        let mut app = App::new(Config::default(), Theme::load(false));
+        let mut app = App::new(Config::default(), Theme::terminal());
         app.entries = vec![
             entry(Source::Zoxide, "/zulu", "zulu"),
             entry(Source::Zoxide, "/alpha", "alpha"),
@@ -1678,7 +1678,7 @@ exit 0
 
     #[test]
     fn pinned_entries_sort_first_and_persist() {
-        let mut app = App::new(Config::default(), Theme::load(false));
+        let mut app = App::new(Config::default(), Theme::terminal());
         app.entries = vec![
             entry(Source::Root, "/alpha", "alpha"),
             entry(Source::Root, "/zulu", "zulu"),
@@ -1701,7 +1701,7 @@ exit 0
 
     #[test]
     fn previous_workspace_sorts_before_marked_entries() {
-        let mut app = App::new(Config::default(), Theme::load(false));
+        let mut app = App::new(Config::default(), Theme::terminal());
         let marked = entry(Source::Root, "/marked", "marked");
         let mut previous = entry(Source::Workspace, "/previous", "previous");
         previous.workspace_id = Some("w2".into());
@@ -1723,7 +1723,7 @@ exit 0
 
     #[test]
     fn source_specific_reuse_distinguishes_same_path_workspaces() {
-        let mut app = App::new(Config::default(), Theme::load(false));
+        let mut app = App::new(Config::default(), Theme::terminal());
         let mut project = entry(Source::Project, "/tmp", "tmp");
         project.project = Some(Project {
             name: "tmp".into(),
@@ -1746,7 +1746,7 @@ exit 0
 
     #[test]
     fn plain_workspace_is_shared_by_project_and_directory_entries() {
-        let mut app = App::new(Config::default(), Theme::load(false));
+        let mut app = App::new(Config::default(), Theme::terminal());
         let mut project = entry(Source::Project, "/tmp", "tmp");
         project.project = Some(Project {
             name: "tmp".into(),
@@ -1770,7 +1770,7 @@ exit 0
     fn offers_directory_template_for_new_and_existing_directory_workspaces() {
         let mut config = Config::default();
         config.picker.directory_template = Some("default.toml".into());
-        let mut app = App::new(config, Theme::load(false));
+        let mut app = App::new(config, Theme::terminal());
         app.entries = vec![entry(Source::Zoxide, "/tmp", "tmp")];
         app.apply_filter();
 
@@ -1799,7 +1799,7 @@ exit 0
 
     #[test]
     fn close_target_matches_entry_kind() {
-        let mut app = App::new(Config::default(), Theme::load(false));
+        let mut app = App::new(Config::default(), Theme::terminal());
         let mut project = entry(Source::Project, "/tmp", "tmp");
         project.project = Some(Project {
             name: "tmp".into(),

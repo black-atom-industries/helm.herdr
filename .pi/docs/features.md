@@ -43,9 +43,9 @@ Helm hands remote targets to Herdr rather than wrapping an SSH terminal. Open re
 
 Project Entries reuse or create a Workspace and apply project tabs and panes. Quick Actions remain owned by Herdr Plus.
 
-## Theme
+## Colors
 
-Helm maps Herdr theme names locally and applies `[theme.custom]` overrides because Herdr plugin APIs do not expose the active palette.
+Helm uses the terminal's default colors and ANSI palette.
 
 ## Command/JSON plugin integrations
 

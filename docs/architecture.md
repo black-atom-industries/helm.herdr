@@ -79,11 +79,11 @@ Helm integrates with Herdr Plus without copying its UI:
 
 ## Configuration boundary
 
-Current Picker keys are `reuse_existing`, `create_missing`, `engine`, `source_order`, `source_priority_boost`, `agent_sort`, `popup_width`, `popup_height`, `check_updates`, `directory_template`, `directory_template_key`, and `[picker.filter_keys]`. Other current sections are `[notifications]`, `[jump_back]`, `[sources]`, `[theme]`, `[[roots]]`, `[[agent_aliases]]`, `[[sessions.entries]]`, and `[[integrations]]`.
+Current Picker keys are `reuse_existing`, `create_missing`, `engine`, `source_order`, `source_priority_boost`, `agent_sort`, `popup_width`, `popup_height`, `check_updates`, `directory_template`, `directory_template_key`, and `[picker.filter_keys]`. Other current sections are `[notifications]`, `[jump_back]`, `[sources]`, `[[roots]]`, `[[agent_aliases]]`, `[[sessions.entries]]`, and `[[integrations]]`.
 
-## Theme boundary
+## Color boundary
 
-Herdr plugin APIs do not expose the active palette directly. Helm reads the Herdr config, maps supported theme names locally, applies custom tokens, and falls back to One Light.
+Helm uses the terminal's default colors and ANSI palette. Color selection is part of the Picker renderer rather than plugin configuration.
 
 ## Design goals
 

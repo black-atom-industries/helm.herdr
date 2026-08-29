@@ -35,9 +35,6 @@ servers = true
 sessions = false
 herdr_plus_quick_actions = true
 
-[theme]
-inherit_herdr = true
-
 [[roots]]
 path = "~/workspace"
 max_depth = 3

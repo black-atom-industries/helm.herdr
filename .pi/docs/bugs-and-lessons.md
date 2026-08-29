@@ -35,16 +35,6 @@ herdr plugin action list --plugin helm-herdr
 rg "fenix.workdir-picker|herdr-picker-plus|herdr-workdir-picker" ~/.config/herdr/config.toml .
 ```
 
-## Theme inheritance misunderstanding
-
-Symptom: “why hardcode all colors; can’t plugin get from Herdr?”
-
-Fact: Herdr plugin v1 does not expose active palette. Only config/env/context are available.
-
-Fix: use One Light fallback, map a small set of supported `theme.name`, then apply `[theme.custom]` overrides.
-
-Lesson: phrase docs honestly: “maps supported Herdr theme names locally,” not “native palette access.”
-
 ## Release assets kept old names after tag force
 
 Symptom: release had both old and new asset names.

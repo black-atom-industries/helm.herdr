@@ -90,7 +90,7 @@ Every source can be disabled. Missing optional tools degrade quietly.
 
 | Key              | Action                                                                  |
 | ---------------- | ----------------------------------------------------------------------- |
-| `/` then type    | Search the Query                                                       |
+| `/` then type    | Fuzzy search                                                            |
 | `Enter`          | Open selected item normally                                             |
 | `Alt-Enter`      | Apply `picker.directory_template` to the selected zoxide/root directory |
 | `Up` / `Down`    | Move through Workspace, Tab, Pane, and flat Result selections        |
@@ -226,7 +226,6 @@ Useful config surfaces:
 - `[picker.filter_keys]` remaps source shortcuts.
 - `[[agent_aliases]]` adds memorable search terms without renaming Herdr panes.
 - `[[sessions.entries]]` configures remote targets.
-- `[theme]` inherits supported Herdr themes and custom tokens.
 - `[[integrations]]` adds external command/JSON sources.
 
 ## Add your own source
