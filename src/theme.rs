@@ -1,6 +1,7 @@
 use std::{
     env, fs,
     path::{Path, PathBuf},
+    process::Command,
 };
 
 use ratatui::style::Color;
@@ -544,11 +545,7 @@ impl Theme {
         let Ok(v) = s.parse::<toml::Value>() else {
             return Self::catppuccin();
         };
-        Self::from_herdr_config(&v)
-    }
-
-    fn from_herdr_config(v: &toml::Value) -> Self {
-        Self::from_herdr_config_with_appearance(v, None)
+        Self::from_herdr_config_with_appearance(&v, detect_host_appearance())
     }
 
     fn from_herdr_config_with_appearance(
@@ -656,6 +653,43 @@ fn herdr_config_path() -> PathBuf {
         return Path::new(&xdg).join("herdr/config.toml");
     }
     home().join(".config/herdr/config.toml")
+}
+
+// macOS: `defaults read -g AppleInterfaceStyle` fails with a missing key in
+// light mode, so only an explicit dark read counts as Dark.
+#[cfg(target_os = "macos")]
+fn detect_host_appearance() -> Option<HostAppearance> {
+    let status = Command::new("defaults")
+        .args(["read", "-g", "AppleInterfaceStyle"])
+        .status()
+        .ok()
+        .map(|status| status.success());
+    status.and_then(appearance_from_status)
+}
+
+#[cfg(not(target_os = "macos"))]
+fn detect_host_appearance() -> Option<HostAppearance> {
+    let output = Command::new("gsettings")
+        .args(["get", "org.gnome.desktop.interface", "color-scheme"])
+        .output()
+        .ok()
+        .filter(|output| output.status.success())
+        .map(|output| String::from_utf8_lossy(&output.stdout).into_owned());
+    output.and_then(|scheme| appearance_from_gsettings(&scheme))
+}
+
+fn appearance_from_status(dark: bool) -> Option<HostAppearance> {
+    dark.then_some(HostAppearance::Dark)
+        .or(Some(HostAppearance::Light))
+}
+
+#[cfg(any(test, not(target_os = "macos")))]
+fn appearance_from_gsettings(scheme: &str) -> Option<HostAppearance> {
+    match scheme.trim() {
+        "'prefer-dark'" => Some(HostAppearance::Dark),
+        "'prefer-light'" => Some(HostAppearance::Light),
+        _ => None,
+    }
 }
 
 fn normalize_theme_name(name: &str) -> String {
@@ -788,9 +822,28 @@ mod tests {
         toml_src.parse::<toml::Value>().expect("valid toml")
     }
 
+    fn from_herdr_config_no_appearance(v: &toml::Value) -> Theme {
+        Theme::from_herdr_config_with_appearance(v, None)
+    }
+
+    #[test]
+    fn resolves_host_appearance_from_platform_probes() {
+        assert_eq!(appearance_from_status(true), Some(HostAppearance::Dark));
+        assert_eq!(appearance_from_status(false), Some(HostAppearance::Light));
+        assert_eq!(
+            appearance_from_gsettings("'prefer-dark'\n"),
+            Some(HostAppearance::Dark)
+        );
+        assert_eq!(
+            appearance_from_gsettings("'prefer-light'\n"),
+            Some(HostAppearance::Light)
+        );
+        assert_eq!(appearance_from_gsettings("'default'\n"), None);
+    }
+
     #[test]
     fn inherits_herdr_default_when_theme_name_is_unset() {
-        let theme = Theme::from_herdr_config(&theme_value(""));
+        let theme = from_herdr_config_no_appearance(&theme_value(""));
 
         assert_eq!(theme.panel_bg, rgb(24, 24, 37));
         assert_eq!(theme.accent, rgb(137, 180, 250));
@@ -798,7 +851,7 @@ mod tests {
 
     #[test]
     fn inherits_rose_pine_dawn_and_custom_overrides() {
-        let theme = Theme::from_herdr_config(&theme_value(
+        let theme = from_herdr_config_no_appearance(&theme_value(
             r##"
             [theme]
             name = "rose_pine_dawn"
@@ -843,7 +896,7 @@ mod tests {
             );
         }
 
-        let dracula = Theme::from_herdr_config(&theme_value(
+        let dracula = from_herdr_config_no_appearance(&theme_value(
             r#"
             [theme]
             name = "dracula"
@@ -855,7 +908,7 @@ mod tests {
 
     #[test]
     fn parses_rgb_named_and_reset_custom_colors() {
-        let theme = Theme::from_herdr_config(&theme_value(
+        let theme = from_herdr_config_no_appearance(&theme_value(
             r##"
             [theme]
             name = "terminal"
@@ -875,9 +928,9 @@ mod tests {
     #[test]
     fn detects_light_and_dark_herdr_themes_and_custom_colors() {
         let light =
-            Theme::from_herdr_config(&theme_value("[theme]\nname = \"catppuccin-latte\"\n"));
-        let dark = Theme::from_herdr_config(&theme_value("[theme]\nname = \"dracula\"\n"));
-        let custom = Theme::from_herdr_config(&theme_value(
+            from_herdr_config_no_appearance(&theme_value("[theme]\nname = \"catppuccin-latte\"\n"));
+        let dark = from_herdr_config_no_appearance(&theme_value("[theme]\nname = \"dracula\"\n"));
+        let custom = from_herdr_config_no_appearance(&theme_value(
             "[theme]\nname = \"terminal\"\n\n[theme.custom]\npanel_bg = \"#010203\"\naccent = \"#a0b0c0\"\n",
         ));
 
@@ -891,8 +944,8 @@ mod tests {
     #[test]
     fn derived_backgrounds_are_ordered_for_light_and_dark_palettes() {
         for theme in [
-            Theme::from_herdr_config(&theme_value("[theme]\nname = \"catppuccin-latte\"")),
-            Theme::from_herdr_config(&theme_value("[theme]\nname = \"dracula\"")),
+            from_herdr_config_no_appearance(&theme_value("[theme]\nname = \"catppuccin-latte\"")),
+            from_herdr_config_no_appearance(&theme_value("[theme]\nname = \"dracula\"")),
         ] {
             let backgrounds = [
                 theme.group_background(),
@@ -907,7 +960,7 @@ mod tests {
 
     #[test]
     fn parses_all_herdr_custom_color_forms() {
-        let theme = Theme::from_herdr_config(&theme_value(
+        let theme = from_herdr_config_no_appearance(&theme_value(
             r##"
             [theme]
             name = "terminal"
@@ -950,7 +1003,7 @@ mod tests {
 
     #[test]
     fn equal_custom_panel_and_accent_still_have_distinct_palette_backgrounds() {
-        let theme = Theme::from_herdr_config(&theme_value(
+        let theme = from_herdr_config_no_appearance(&theme_value(
             r##"
             [theme]
             name = "catppuccin"
