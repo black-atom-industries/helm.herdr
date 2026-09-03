@@ -1,41 +1,6 @@
 use std::{collections::HashMap, fs};
 
-use serde::{de, Deserialize, Deserializer};
-use std::fmt;
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) struct Percentage(u8);
-
-impl TryFrom<u8> for Percentage {
-    type Error = String;
-
-    fn try_from(value: u8) -> Result<Self, Self::Error> {
-        (1..=100)
-            .contains(&value)
-            .then_some(Self(value))
-            .ok_or_else(|| format!("percentage must be between 1 and 100, got {value}"))
-    }
-}
-
-impl fmt::Display for Percentage {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{}%", self.0)
-    }
-}
-
-impl<'de> Deserialize<'de> for Percentage {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        let value = u8::deserialize(deserializer)?;
-        Self::try_from(value).map_err(de::Error::custom)
-    }
-}
-
-fn default_popup_percentage() -> Percentage {
-    Percentage::try_from(90).expect("90 is a valid popup percentage")
-}
+use serde::Deserialize;
 
 use crate::{
     model::Source,
@@ -80,10 +45,6 @@ pub(crate) struct PickerConfig {
     pub(crate) source_priority_boost: i64,
     #[serde(default = "default_agent_sort")]
     pub(crate) agent_sort: String,
-    #[serde(default = "default_popup_percentage")]
-    pub(crate) popup_width: Percentage,
-    #[serde(default = "default_popup_percentage")]
-    pub(crate) popup_height: Percentage,
     #[serde(default = "yes")]
     pub(crate) check_updates: bool,
     #[serde(default)]
@@ -290,8 +251,6 @@ impl Default for PickerConfig {
             source_order: default_source_order(),
             source_priority_boost: default_source_priority_boost(),
             agent_sort: default_agent_sort(),
-            popup_width: default_popup_percentage(),
-            popup_height: default_popup_percentage(),
             check_updates: true,
             directory_template: None,
             directory_template_key: default_directory_template_key(),
@@ -476,41 +435,6 @@ mod tests {
         assert_eq!(sources[1], Source::Workspace);
         assert!(!sources.contains(&Source::Server));
         assert!(!sources.contains(&Source::Session));
-    }
-
-    #[test]
-    fn popup_percentages_default_to_ninety_and_accept_bounds() {
-        let default = Config::default();
-        assert_eq!(
-            default.picker.popup_width,
-            Percentage::try_from(90).unwrap()
-        );
-        assert_eq!(
-            default.picker.popup_height,
-            Percentage::try_from(90).unwrap()
-        );
-
-        let config: Config = toml::from_str(
-            r#"
-            [picker]
-            popup_width = 1
-            popup_height = 100
-            "#,
-        )
-        .unwrap();
-        assert_eq!(config.picker.popup_width, Percentage::try_from(1).unwrap());
-        assert_eq!(
-            config.picker.popup_height,
-            Percentage::try_from(100).unwrap()
-        );
-    }
-
-    #[test]
-    fn popup_percentages_reject_invalid_toml_types_and_bounds() {
-        for value in ["0", "101", "90.0", "\"90\""] {
-            let source = format!("[picker]\npopup_width = {value}");
-            assert!(toml::from_str::<Config>(&source).is_err(), "{value}");
-        }
     }
 
     #[test]

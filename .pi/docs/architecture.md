@@ -9,7 +9,7 @@ Helm is a Rust TUI Herdr plugin. `main` handles CLI entrypoints and Herdr placem
 - `ui` runs the interactive Picker.
 - `list` prints collected Entries for debugging.
 
-The popup defaults to 90% width × 90% height. `picker.popup_width` and `picker.popup_height` accept integer percentages from 1 through 100. The Side split has no popup dimensions and remains open after Enter.
+The `helm-herdr` binary runs in a popup whose dimensions belong to the user's Herdr `type = "popup"` keybinding. The Side split has no popup dimensions and remains open after Enter.
 
 ## Data flow
 

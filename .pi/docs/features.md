@@ -4,7 +4,7 @@ Helm is one Picker for Herdr destinations and actions. The common flow is `prefi
 
 ## Presentation
 
-- `open` requests a session-modal Herdr popup. It defaults to 90% × 90%, controlled by `picker.popup_width` and `picker.popup_height` as integer percentages from 1 through 100.
+- The `helm-herdr` binary runs inside a user-owned session-modal Herdr popup, whose dimensions come from the user's `type = "popup"` keybinding.
 - `open-side` opens a persistent right split, focuses it when it exists elsewhere in the Workspace, and closes it when already focused. Enter leaves the Side pane open.
 
 ## Result projections

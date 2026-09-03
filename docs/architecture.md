@@ -1,20 +1,20 @@
 # Architecture
 
-Helm for Herdr is a picker center for choosing a destination or Herdr action. Herdr owns the presentation: `helm-herdr.open` opens a session-modal popup, while `helm-herdr.open-side` opens the persistent Side pane.
+Helm for Herdr is a picker center for choosing a destination or Herdr action. The `helm-herdr` binary runs inside a user-owned session-modal popup, while `helm-herdr.open-side` opens the persistent Side pane.
 
 ## Runtime shape
 
 ```text
 Herdr keybinding
-  -> plugin action: helm-herdr.open
-  -> Herdr opens a 90% × 90% popup
-  -> binary runs: helm-herdr ui
+  -> user-owned popup: helm-herdr
+  -> Herdr opens the configured dimensions
+  -> binary runs its Picker UI
   -> collect live sources
   -> project Query into Topology or flat Result list
   -> Enter applies the selected Entry action
 ```
 
-The default popup dimensions are configurable with integer `picker.popup_width` and `picker.popup_height` values from 1 through 100. The Side pane uses a Herdr split and does not use popup dimensions.
+Popup dimensions belong to the user's Herdr `type = "popup"` keybinding. The Side pane uses a Herdr split and does not use popup dimensions.
 
 ## Entry points
 
@@ -22,7 +22,7 @@ The default popup dimensions are configurable with integer `picker.popup_width` 
 | --- | --- |
 | `helm-herdr open` | Ask Herdr to open the configured popup |
 | `helm-herdr open-side` | Launch, focus, or close the Side pane according to its toggle state |
-| `helm-herdr ui` | Run the interactive Picker |
+| `helm-herdr` | Run the interactive Picker; `helm-herdr ui` remains an explicit equivalent |
 | `helm-herdr list` | Print collected Entries without opening the Picker |
 
 ## Code layout
@@ -79,7 +79,7 @@ Helm integrates with Herdr Plus without copying its UI:
 
 ## Configuration boundary
 
-Current Picker keys are `reuse_existing`, `create_missing`, `engine`, `source_order`, `source_priority_boost`, `agent_sort`, `popup_width`, `popup_height`, `check_updates`, `directory_template`, `directory_template_key`, and `[picker.filter_keys]`. Other current sections are `[notifications]`, `[jump_back]`, `[sources]`, `[[roots]]`, `[[agent_aliases]]`, `[[sessions.entries]]`, and `[[integrations]]`.
+Current Picker keys are `reuse_existing`, `create_missing`, `engine`, `source_order`, `source_priority_boost`, `agent_sort`, `check_updates`, `directory_template`, `directory_template_key`, and `[picker.filter_keys]`. Other current sections are `[notifications]`, `[jump_back]`, `[sources]`, `[[roots]]`, `[[agent_aliases]]`, `[[sessions.entries]]`, and `[[integrations]]`.
 
 ## Color boundary
 

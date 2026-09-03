@@ -18,7 +18,7 @@ It should unify:
 - configured root scans
 - agent panes
 
-Core UX: the default action opens a session-modal popup sized at 90% × 90%; the Side action keeps a persistent split available after Enter.
+Core UX: the `helm-herdr` binary runs inside a session-modal popup sized by the user's Herdr keybinding; the Side action keeps a persistent split available after Enter.
 
 ## Current public identity
 

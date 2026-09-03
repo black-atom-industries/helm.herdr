@@ -25,19 +25,39 @@ prefix+t  →  type  →  Enter
 
 ## Install
 
+Install Helm as a Herdr plugin. Herdr clones the repository, runs the
+`cargo build --release` command from `herdr-plugin.toml`, and registers the
+plugin and its actions:
+
 ```bash
 herdr plugin install black-atom-industries/helm.herdr --yes
-herdr plugin action invoke helm-herdr.open
 ```
 
-The action opens Helm in a session-modal Herdr popup. Add a shortcut to `~/.config/herdr/config.toml`:
+The plugin install builds Helm inside Herdr's managed plugin directory, but it
+does not put `helm-herdr` on your shell `PATH`. Link that installed binary into
+`~/.local/bin` for a direct user-owned popup:
+
+```bash
+plugin_root=$(herdr plugin list --plugin helm-herdr --json \
+  | jq -r '.result.plugins[0].plugin_root')
+mkdir -p "$HOME/.local/bin"
+ln -sfn "$plugin_root/target/release/helm-herdr" \
+  "$HOME/.local/bin/helm-herdr"
+```
+
+Run the link command again after reinstalling the plugin, because Herdr may use
+a new managed checkout path.
+
+Make sure `~/.local/bin` is on `PATH`, then let Herdr own the popup:
 
 ```toml
 [[keys.command]]
 key = "prefix+t"
-type = "plugin_action"
-command = "helm-herdr.open"
+type = "popup"
+command = "helm-herdr"
 description = "jump to anything"
+width = "90%"
+height = "90%"
 ```
 
 A single result list can move between live Herdr state and things that are not open yet:
@@ -54,7 +74,7 @@ A single result list can move between live Herdr state and things that are not o
 | **One index across Herdr**  | Search workspaces, agents, projects, sessions, remotes, directories, Quick Actions, and integrations together.                        |
 | **Action-aware Enter**      | Results do not just return paths; they focus, create, attach, hand off, invoke, or run.                                               |
 | **Reuse first**             | Existing workspaces are focused before new ones are created. Project and directory workspaces sharing a cwd keep separate identities. |
-| **Agents are first-class**  | Search agent names and status, with agent-only Query tokens and aliases.                                                             |
+| **Agents are first-class**  | Search agent names and status, with agent-only Query tokens and aliases.                                                              |
 | **Extensible without Rust** | Add another tool with a command that returns JSON and a command that opens the selected item.                                         |
 | **No picker dependency**    | The Rust/ratatui interface runs in a Herdr-managed pane; `fzf` and `tv` are not runtime requirements.                                 |
 
@@ -70,19 +90,19 @@ Herdr's built-in navigation remains the simpler choice for a single entity type.
 
 ## What it can open
 
-| Source     | Data                                | Enter does                                                         |
-| ---------- | ----------------------------------- | ------------------------------------------------------------------ |
-| `workspace`| Current-session Workspaces         | Focus the exact Workspace                                         |
-| `tab`      | Tabs in the current-session Topology | Focus the exact Tab                                             |
-| `pane`     | Panes in the current-session Topology | Focus the exact Pane ID                                        |
-| `agent`    | Agent destinations                 | Focus the agent through Herdr                                     |
-| `project`  | Herdr Plus project TOML            | Reuse or create a project Workspace and apply tabs and splits     |
-| `server`   | Configured remote targets           | Hand off to the remote Herdr server                               |
-| `zoxide`   | `zoxide query -l`                   | Enter opens normally; `Alt-Enter` applies the shared template     |
-| `root`     | Configured filesystem roots        | Enter opens normally; `Alt-Enter` applies the shared template     |
-| `quick`    | Herdr Plus Quick Actions           | Open the Quick Actions picker                                     |
-| `plugin`   | Command/JSON integrations          | Run the configured open command                                   |
-| `bookmark` | Marked Entries                      | Apply the marked Entry's action                                   |
+| Source      | Data                                  | Enter does                                                    |
+| ----------- | ------------------------------------- | ------------------------------------------------------------- |
+| `workspace` | Current-session Workspaces            | Focus the exact Workspace                                     |
+| `tab`       | Tabs in the current-session Topology  | Focus the exact Tab                                           |
+| `pane`      | Panes in the current-session Topology | Focus the exact Pane ID                                       |
+| `agent`     | Agent destinations                    | Focus the agent through Herdr                                 |
+| `project`   | Herdr Plus project TOML               | Reuse or create a project Workspace and apply tabs and splits |
+| `server`    | Configured remote targets             | Hand off to the remote Herdr server                           |
+| `zoxide`    | `zoxide query -l`                     | Enter opens normally; `Alt-Enter` applies the shared template |
+| `root`      | Configured filesystem roots           | Enter opens normally; `Alt-Enter` applies the shared template |
+| `quick`     | Herdr Plus Quick Actions              | Open the Quick Actions picker                                 |
+| `plugin`    | Command/JSON integrations             | Run the configured open command                               |
+| `bookmark`  | Marked Entries                        | Apply the marked Entry's action                               |
 
 Every source can be disabled. Missing optional tools degrade quietly.
 
@@ -93,9 +113,9 @@ Every source can be disabled. Missing optional tools degrade quietly.
 | `/` then type    | Fuzzy search                                                            |
 | `Enter`          | Open selected item normally                                             |
 | `Alt-Enter`      | Apply `picker.directory_template` to the selected zoxide/root directory |
-| `Up` / `Down`    | Move through Workspace, Tab, Pane, and flat Result selections        |
-| `J` / `K`        | Move to the next / previous Workspace from any Topology depth          |
-| `Left` / `Right` | Move through Topology depth and child selections                      |
+| `Up` / `Down`    | Move through Workspace, Tab, Pane, and flat Result selections           |
+| `J` / `K`        | Move to the next / previous Workspace from any Topology depth           |
+| `Left` / `Right` | Move through Topology depth and child selections                        |
 | `Ctrl-W`         | Workspaces / Tabs / Panes                                               |
 | `Ctrl-A`         | Agents, using configured status order                                   |
 | `Ctrl-P`         | Herdr Plus projects                                                     |
@@ -191,8 +211,6 @@ engine = "nucleo" # nucleo | skim | simple
 source_order = ["workspace", "agent", "project", "session", "zoxide", "root", "server", "quick", "plugin"]
 source_priority_boost = 5
 agent_sort = "herdr" # herdr | priority | spaces
-popup_width = 90
-popup_height = 90
 check_updates = true # daily background release check
 # directory_template = "default.toml" # Herdr Plus project file
 # directory_template_key = "alt-enter" # or ctrl-g / ctrl-t
@@ -223,7 +241,7 @@ max_depth = 3
 
 Useful config surfaces:
 
-- `picker.popup_width` and `picker.popup_height` set the session-modal popup size as integer percentages from 1 through 100.
+- The `helm-herdr` binary runs the Picker directly. Put it in a Herdr `type = "popup"` binding to choose the popup's `width` and `height` per shortcut.
 - `picker.check_updates` checks GitHub releases in the background at most daily and shows `↑ vX.Y.Z available · F5 update`; press `F5`, confirm, and Helm installs that release through Herdr. Failures stay silent until an update is requested.
 - `picker.directory_template = "default.toml"` reuses that Herdr Plus project file from its `projects/` config directory. `Enter` keeps normal reuse/create behavior. `picker.directory_template_key` defaults to `alt-enter` and also accepts Ctrl forms such as `ctrl-g`; the shortcut always applies all template tabs, panes, labels, and commands using the selected directory instead of the template's `working_dir`, creating the workspace or appending fresh template tabs.
 - `[theme] inherit_herdr = true` follows Herdr's configured palette, including its light/dark and custom color settings. Set it to `false` to use Helm's built-in light palette.
@@ -272,14 +290,19 @@ Helm shell-quotes `{{id}}`, `{{title}}`, `{{subtitle}}`, `{{path}}`, and `{{kind
 - Optional: Herdr Plus for project templates and Quick Actions
 - Rust stable + Cargo only when building from source
 
-Build and link locally:
+Build, install, and link locally:
 
 ```bash
 git clone https://github.com/black-atom-industries/helm.herdr.git
 cd helm.herdr
-cargo build --release
-herdr plugin link "$PWD"
+./scripts/install-local.sh
 ```
+
+The script builds the release binary, symlinks it to
+`~/.local/bin/helm-herdr`, and registers the local plugin with Herdr. The
+symlink keeps `helm-herdr` on `PATH` while every later release build updates
+the binary it points to. The Pi project extension runs this script after the
+agent settles, so the local binary and plugin registration stay current.
 
 ## Troubleshooting
 

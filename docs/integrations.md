@@ -7,6 +7,7 @@ Helm for Herdr is intended to be a picker center. Other Herdr plugins should int
 | Surface | Value |
 | --- | --- |
 | Plugin id | `helm-herdr` |
+| Popup command | `helm-herdr` |
 | Open action | `helm-herdr.open` |
 | Binary | `helm-herdr` |
 | Debug list | `helm-herdr list` |
@@ -18,9 +19,11 @@ Bind the picker to any key:
 ```toml
 [[keys.command]]
 key = "prefix+t"
-type = "plugin_action"
-command = "helm-herdr.open"
+type = "popup"
+command = "helm-herdr"
 description = "picker center"
+width = "90%"
+height = "90%"
 ```
 
 ## From another plugin

@@ -31,10 +31,6 @@ source_priority_boost = 5
 # - spaces: keep Herdr/pane order
 agent_sort = "herdr"
 
-# Session-modal Herdr popup dimensions, as percentages of the terminal.
-popup_width = 90
-popup_height = 90
-
 # Check GitHub releases in the background at most once per day. Network errors
 # are ignored; a newer version appears as a badge in the Helm header.
 check_updates = true

@@ -8,22 +8,14 @@ export default function (pi: ExtensionAPI) {
     const root = rootResult.stdout.trim();
     if (rootResult.code !== 0 || !root) return;
 
-    const build = await pi.exec("cargo", ["build", "--release"], {
+    const install = await pi.exec("./scripts/install-local.sh", [], {
       cwd: root,
     });
-    if (build.code !== 0) {
-      ctx.ui.notify(`helm-herdr rebuild failed: ${build.stderr.trim()}`, "error");
+    if (install.code !== 0) {
+      ctx.ui.notify(`helm-herdr install failed: ${install.stderr.trim()}`, "error");
       return;
     }
 
-    const link = await pi.exec("herdr", ["plugin", "link", root], {
-      cwd: root,
-    });
-    if (link.code !== 0) {
-      ctx.ui.notify(`helm-herdr plugin link failed: ${link.stderr.trim()}`, "error");
-      return;
-    }
-
-    ctx.ui.notify("helm-herdr rebuilt and linked", "info");
+    ctx.ui.notify("helm-herdr built, installed, and linked", "info");
   });
 }

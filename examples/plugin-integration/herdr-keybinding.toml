@@ -3,6 +3,8 @@
 
 [[keys.command]]
 key = "prefix+t"
-type = "plugin_action"
-command = "helm-herdr.open"
+type = "popup"
+command = "helm-herdr"
 description = "picker center"
+width = "90%"
+height = "90%"

@@ -19,20 +19,41 @@ mod tui;
 mod update;
 
 use app::App;
-use config::{Config, Percentage};
+use config::Config;
 use herdr::herdr_bin;
 use theme::Theme;
 use tui::tui_loop;
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum CliCommand {
+    Open,
+    OpenSide,
+    JumpBack,
+    Ui,
+    List,
+    Invalid,
+}
+
+fn cli_command(command: Option<&str>) -> CliCommand {
+    match command {
+        None | Some("ui") => CliCommand::Ui,
+        Some("open") => CliCommand::Open,
+        Some("open-side") => CliCommand::OpenSide,
+        Some("jump-back") => CliCommand::JumpBack,
+        Some("list") => CliCommand::List,
+        Some(_) => CliCommand::Invalid,
+    }
+}
+
 fn main() {
-    match env::args().nth(1).as_deref() {
-        Some("open") => open_picker(),
-        Some("open-side") => open_side_picker(),
-        Some("jump-back") => jump_back(),
-        Some("ui") => run_ui(env::args().nth(2).as_deref() == Some("--side")),
-        Some("list") => debug_list(),
-        _ => {
-            eprintln!("usage: helm-herdr <open|open-side|jump-back|ui|list>");
+    match cli_command(env::args().nth(1).as_deref()) {
+        CliCommand::Open => open_picker(),
+        CliCommand::OpenSide => open_side_picker(),
+        CliCommand::JumpBack => jump_back(),
+        CliCommand::Ui => run_ui(env::args().nth(2).as_deref() == Some("--side")),
+        CliCommand::List => debug_list(),
+        CliCommand::Invalid => {
+            eprintln!("usage: helm-herdr [open|open-side|jump-back|ui|list]");
             process::exit(2);
         }
     }
@@ -64,13 +85,7 @@ fn pane_in_focused_workspace<'a>(
     Some((focused, target))
 }
 
-fn popup_request(
-    plugin_id: &str,
-    entrypoint: &str,
-    width: Percentage,
-    height: Percentage,
-    request_id: &str,
-) -> serde_json::Value {
+fn popup_request(plugin_id: &str, entrypoint: &str, request_id: &str) -> serde_json::Value {
     serde_json::json!({
         "id": request_id,
         "method": "plugin.pane.open",
@@ -78,21 +93,13 @@ fn popup_request(
             "plugin_id": plugin_id,
             "entrypoint": entrypoint,
             "placement": "popup",
-            "width": width.to_string(),
-            "height": height.to_string(),
         }
     })
 }
 
 fn open_picker() -> ! {
-    let config = Config::load();
     let plugin = env::var("HERDR_PLUGIN_ID").unwrap_or_else(|_| "helm-herdr".into());
-    open_plugin_popup(
-        &plugin,
-        "picker",
-        config.picker.popup_width,
-        config.picker.popup_height,
-    )
+    open_plugin_popup(&plugin, "picker")
 }
 
 // Launch-or-focus, toggle on repeat — same UX as herdr-file-viewer's side pane,
@@ -123,13 +130,8 @@ fn open_side_picker() -> ! {
     }
 }
 
-fn open_plugin_popup(
-    plugin_id: &str,
-    entrypoint: &str,
-    width: Percentage,
-    height: Percentage,
-) -> ! {
-    let request = popup_request(plugin_id, entrypoint, width, height, "helm-herdr-popup");
+fn open_plugin_popup(plugin_id: &str, entrypoint: &str) -> ! {
+    let request = popup_request(plugin_id, entrypoint, "helm-herdr-popup");
     match herdr::socket_request_with_id(
         request["id"].as_str().unwrap_or_default(),
         request["method"].as_str().unwrap_or_default(),
@@ -234,14 +236,13 @@ mod tests {
     }
 
     #[test]
-    fn popup_request_uses_validated_percentage_dimensions() {
-        let request = popup_request(
-            "helm-herdr",
-            "picker",
-            config::Percentage::try_from(90).unwrap(),
-            config::Percentage::try_from(80).unwrap(),
-            "request-1",
-        );
+    fn bare_binary_starts_the_picker_ui() {
+        assert_eq!(cli_command(None), CliCommand::Ui);
+    }
+
+    #[test]
+    fn popup_request_leaves_dimensions_to_herdr() {
+        let request = popup_request("helm-herdr", "picker", "request-1");
         assert_eq!(
             request,
             serde_json::json!({
@@ -250,9 +251,7 @@ mod tests {
                 "params": {
                     "plugin_id": "helm-herdr",
                     "entrypoint": "picker",
-                    "placement": "popup",
-                    "width": "90%",
-                    "height": "80%"
+                    "placement": "popup"
                 }
             })
         );

@@ -30,8 +30,6 @@ command = ["./target/release/helm-herdr", "jump-back"]
 id = "picker"
 title = "Helm"
 placement = "popup"
-width = "100%"
-height = "100%"
 command = ["./target/release/helm-herdr", "ui"]
 
 # Persistent side pane variant: stays open after Enter, toggled by the open-side
