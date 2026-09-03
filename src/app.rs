@@ -239,9 +239,6 @@ impl App {
             }
         }
         self.topology_cursor.clamp(&self.topology);
-        if self.initial_selection_pending {
-            self.topology_cursor.enter_tab(&self.topology);
-        }
     }
 
     pub(crate) fn remember_topology_selection(&mut self) {
@@ -271,7 +268,11 @@ impl App {
             (TopologyDepth::Tab, _) => self.topology_cursor.enter_pane(&self.topology),
             (TopologyDepth::Pane, d) if d.is_negative() => self.topology_cursor.leave_to_tab(),
             (TopologyDepth::Pane, d) if d.is_positive() => {
-                self.topology_cursor.move_workspace(&self.topology, 1)
+                let workspace = self.topology_cursor.workspace;
+                self.topology_cursor.move_workspace(&self.topology, 1);
+                if self.topology_cursor.workspace != workspace {
+                    self.topology_cursor.leave_to_tab();
+                }
             }
             (TopologyDepth::Pane, _) => {}
         }
@@ -1511,36 +1512,48 @@ exit 0
     }
 
     #[test]
-    fn initial_topology_selection_starts_at_tab_depth() {
+    fn initial_topology_selection_starts_at_workspace_depth() {
         let mut app = App::new(Config::default(), Theme::terminal());
         app.topology = OpenTopology {
-            workspaces: vec![crate::topology::WorkspaceNode {
-                id: "w1".into(),
-                label: "web-ui".into(),
-                session: Some("dev".into()),
-                focused: true,
-                tabs: vec![
-                    crate::topology::TabNode {
-                        id: "t1".into(),
-                        label: "Code".into(),
-                        focused: false,
-                        panes: vec![],
-                    },
-                    crate::topology::TabNode {
-                        id: "t2".into(),
-                        label: "Edit".into(),
-                        focused: true,
-                        panes: vec![],
-                    },
-                ],
-                git: None,
-            }],
+            workspaces: vec![
+                crate::topology::WorkspaceNode {
+                    id: "w1".into(),
+                    label: "web-ui".into(),
+                    session: Some("dev".into()),
+                    focused: true,
+                    tabs: vec![
+                        crate::topology::TabNode {
+                            id: "t1".into(),
+                            label: "Code".into(),
+                            focused: false,
+                            panes: vec![],
+                        },
+                        crate::topology::TabNode {
+                            id: "t2".into(),
+                            label: "Edit".into(),
+                            focused: true,
+                            panes: vec![],
+                        },
+                    ],
+                    git: None,
+                },
+                crate::topology::WorkspaceNode {
+                    id: "w2".into(),
+                    label: "api".into(),
+                    session: Some("dev".into()),
+                    focused: false,
+                    tabs: vec![],
+                    git: None,
+                },
+            ],
         };
 
         app.sync_topology_cursor();
 
-        assert_eq!(app.topology_cursor.depth, TopologyDepth::Tab);
+        assert_eq!(app.topology_cursor.depth, TopologyDepth::Workspace);
         assert_eq!(app.topology_cursor.selection[0].tab, 1);
+        app.topology_move_vertical(1);
+        assert_eq!(app.topology_cursor.workspace, 1);
     }
 
     #[test]

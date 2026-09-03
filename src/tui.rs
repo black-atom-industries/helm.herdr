@@ -1646,6 +1646,9 @@ mod tests {
 
         handle_key(&mut app, key(KeyCode::Char('j')));
         assert_eq!(app.topology_cursor.workspace, 1);
+        assert_eq!(app.topology_cursor.depth, TopologyDepth::Tab);
+
+        handle_key(&mut app, key(KeyCode::Char('j')));
         assert_eq!(app.topology_cursor.depth, TopologyDepth::Pane);
 
         app.topology_cursor.depth = TopologyDepth::Workspace;
