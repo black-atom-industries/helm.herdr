@@ -50,6 +50,10 @@ check_updates = true
 # [picker.filter_keys]
 # server = "ctrl-g"
 
+[theme]
+# Inherit the palette configured in Herdr's ~/.config/herdr/config.toml.
+inherit_herdr = true
+
 [notifications]
 # Show Helm success/error notifications.
 enabled = true

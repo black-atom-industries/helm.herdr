@@ -196,6 +196,10 @@ popup_height = 90
 check_updates = true # daily background release check
 # directory_template = "default.toml" # Herdr Plus project file
 # directory_template_key = "alt-enter" # or ctrl-g / ctrl-t
+[theme]
+# Inherit the palette configured in Herdr's ~/.config/herdr/config.toml.
+inherit_herdr = true
+
 [notifications]
 enabled = true
 audio = false # set true to enable sound
@@ -222,6 +226,7 @@ Useful config surfaces:
 - `picker.popup_width` and `picker.popup_height` set the session-modal popup size as integer percentages from 1 through 100.
 - `picker.check_updates` checks GitHub releases in the background at most daily and shows `↑ vX.Y.Z available · F5 update`; press `F5`, confirm, and Helm installs that release through Herdr. Failures stay silent until an update is requested.
 - `picker.directory_template = "default.toml"` reuses that Herdr Plus project file from its `projects/` config directory. `Enter` keeps normal reuse/create behavior. `picker.directory_template_key` defaults to `alt-enter` and also accepts Ctrl forms such as `ctrl-g`; the shortcut always applies all template tabs, panes, labels, and commands using the selected directory instead of the template's `working_dir`, creating the workspace or appending fresh template tabs.
+- `[theme] inherit_herdr = true` follows Herdr's configured palette, including its light/dark and custom color settings. Set it to `false` to use Helm's built-in light palette.
 - `[notifications]` can disable notifications entirely or use Herdr's default sounds, no sound, or a custom audio file.
 - `[picker.filter_keys]` remaps source shortcuts.
 - `[[agent_aliases]]` adds memorable search terms without renaming Herdr panes.

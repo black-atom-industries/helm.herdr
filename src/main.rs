@@ -195,7 +195,8 @@ fn jump_back() -> ! {
 fn run_ui(persist: bool) -> ! {
     let config = Config::load();
     let check_updates = config.picker.check_updates;
-    let mut app = App::new(config, Theme::terminal());
+    let theme = Theme::load(config.theme.inherit_herdr);
+    let mut app = App::new(config, theme);
     app.refresh();
     let update_check = check_updates.then(update::check_in_background);
 
@@ -207,7 +208,9 @@ fn run_ui(persist: bool) -> ! {
 }
 
 fn debug_list() {
-    let mut app = App::new(Config::load(), Theme::terminal());
+    let config = Config::load();
+    let theme = Theme::load(config.theme.inherit_herdr);
+    let mut app = App::new(config, theme);
     app.refresh();
     for e in app.entries {
         println!("{}\t{}\t{}", e.source_name(), e.title, e.path.display());

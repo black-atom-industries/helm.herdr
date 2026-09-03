@@ -49,4 +49,4 @@ Command/JSON integrations provide a `collect` command that prints an array and a
 
 ## Color flow
 
-Helm uses the terminal's default colors and ANSI palette. Color selection is part of the Picker renderer rather than plugin configuration.
+Helm loads Herdr's configured palette by default, including light/dark and custom color settings. The Picker renderer derives group, depth, and cell backgrounds from that palette. Setting `[theme].inherit_herdr = false` uses Helm's built-in light palette.

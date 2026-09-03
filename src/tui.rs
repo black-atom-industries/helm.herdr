@@ -958,14 +958,14 @@ fn topology_child_ranges(
     let full = decorated.join(" ");
     let selected_value = selected_child.and_then(|index| decorated.get(index).map(String::as_str));
     let visible =
-        crate::topology::clip_selected_for_hits(&full, width.saturating_sub(9), selected_value);
+        crate::topology::clip_selected_for_hits(&full, width.saturating_sub(17), selected_value);
     let mut search_from = 0usize;
     decorated
         .into_iter()
         .enumerate()
         .filter_map(|(index, value)| {
             let search_value = if selected_child == Some(index)
-                && Span::raw(&value).width() > width.saturating_sub(9)
+                && Span::raw(&value).width() > width.saturating_sub(17)
             {
                 visible.as_str()
             } else {
@@ -985,7 +985,8 @@ fn topology_child_ranges(
 fn draw_topology_list(f: &mut Frame, app: &App, area: Rect) -> ListHits {
     let block = Block::default()
         .title(" WORKSPACES ")
-        .borders(Borders::RIGHT);
+        .borders(Borders::RIGHT)
+        .style(Style::default().bg(app.theme.base_background));
     let list_area = block.inner(area);
     let width = list_area.width as usize;
     let mut lines = Vec::new();
@@ -999,15 +1000,21 @@ fn draw_topology_list(f: &mut Frame, app: &App, area: Rect) -> ListHits {
     for (workspace_index, workspace) in app.topology.workspaces.iter().enumerate() {
         let selection = (workspace_index == selected_workspace)
             .then_some(app.topology_cursor.selection[workspace_index]);
-        let mut rendered =
-            topology_lines_selected(workspace, width, selection, &app.theme, &repositories);
+        let mut rendered = topology_lines_selected(
+            workspace,
+            width,
+            selection,
+            app.topology_cursor.depth,
+            &app.theme,
+            &repositories,
+        );
         if workspace.id == app.previous_workspace_id.as_deref().unwrap_or("") {
             rendered[0].spans[0] = Span::styled("  ←  ", Style::default().fg(app.theme.red));
         }
         for (line_index, mut line) in rendered.into_iter().enumerate() {
             let mut style = if workspace_index == selected_workspace {
                 Style::default()
-                    .bg(app.theme.selection_background(false))
+                    .bg(app.theme.group_background())
                     .fg(app.theme.text)
             } else {
                 Style::default().fg(app.theme.text)
@@ -1018,7 +1025,7 @@ fn draw_topology_list(f: &mut Frame, app: &App, area: Rect) -> ListHits {
                     || (app.topology_cursor.depth == TopologyDepth::Pane && line_index == 2))
             {
                 style = Style::default()
-                    .bg(app.theme.selection_background(true))
+                    .bg(app.theme.depth_background())
                     .fg(app.theme.accent)
                     .add_modifier(Modifier::BOLD);
             }
@@ -1045,66 +1052,69 @@ fn draw_topology_list(f: &mut Frame, app: &App, area: Rect) -> ListHits {
     let mut hits = Vec::new();
     let mut topology_hits = Vec::new();
     let mut y = list_area.y;
-    for (index, height) in item_heights.into_iter().enumerate() {
+    for (index, height) in item_heights.into_iter().enumerate().skip(state.offset()) {
         if y.saturating_add(height) > list_area.bottom() {
             break;
         }
-        if index % 4 == 0 && index / 4 < app.topology.workspaces.len() {
-            let workspace = index / 4;
-            let workspace_node = &app.topology.workspaces[workspace];
+        let workspace = index / 4;
+        if workspace >= app.topology.workspaces.len() {
+            y += height;
+            continue;
+        }
+        let line = index % 4;
+        let workspace_node = &app.topology.workspaces[workspace];
+        if line == 0 {
             hits.push((y..y + height.saturating_add(3), workspace));
-            let selected_tab = if workspace == selected_workspace {
-                app.topology_cursor.selection[workspace].tab
+        }
+        let selected_tab = if workspace == selected_workspace {
+            app.topology_cursor.selection[workspace].tab
+        } else {
+            workspace_node
+                .tabs
+                .iter()
+                .position(|tab| tab.focused)
+                .unwrap_or(0)
+        };
+        let ranges = if line == 1 || line == 2 {
+            let selected_child = if workspace == selected_workspace {
+                Some(if line == 1 {
+                    app.topology_cursor.selection[workspace].tab
+                } else {
+                    app.topology_cursor.selection[workspace].pane
+                })
             } else {
-                workspace_node
-                    .tabs
-                    .iter()
-                    .position(|tab| tab.focused)
-                    .unwrap_or(0)
+                None
             };
-            for line in 0..4 {
-                let ranges = if line == 1 || line == 2 {
-                    let selected_child = if workspace == selected_workspace {
-                        Some(if line == 1 {
-                            app.topology_cursor.selection[workspace].tab
-                        } else {
-                            app.topology_cursor.selection[workspace].pane
-                        })
-                    } else {
-                        None
-                    };
-                    topology_child_ranges(
-                        workspace_node,
-                        line,
-                        selected_tab,
-                        selected_child,
-                        width,
-                        list_area.x + 9,
-                    )
-                } else {
-                    Vec::new()
-                };
-                if ranges.is_empty() {
-                    topology_hits.push(TopologyHit {
-                        y: y + line as u16..y + line as u16 + 1,
-                        x: list_area.x..list_area.right(),
-                        workspace,
-                        line,
-                        tab: selected_tab,
-                        child: None,
-                    });
-                } else {
-                    for (x, child) in ranges {
-                        topology_hits.push(TopologyHit {
-                            y: y + line as u16..y + line as u16 + 1,
-                            x,
-                            workspace,
-                            line,
-                            tab: selected_tab,
-                            child: Some(child),
-                        });
-                    }
-                }
+            topology_child_ranges(
+                workspace_node,
+                line,
+                selected_tab,
+                selected_child,
+                width,
+                list_area.x + 17,
+            )
+        } else {
+            Vec::new()
+        };
+        if ranges.is_empty() {
+            topology_hits.push(TopologyHit {
+                y: y..y + 1,
+                x: list_area.x..list_area.right(),
+                workspace,
+                line,
+                tab: selected_tab,
+                child: None,
+            });
+        } else {
+            for (x, child) in ranges {
+                topology_hits.push(TopologyHit {
+                    y: y..y + 1,
+                    x,
+                    workspace,
+                    line,
+                    tab: selected_tab,
+                    child: Some(child),
+                });
             }
         }
         y += height;
@@ -1242,7 +1252,8 @@ fn draw_list(f: &mut Frame, app: &App, area: Rect) -> ListHits {
     state.select(selected_row);
     let block = Block::default()
         .title(format!(" RESULTS · {} ", app.filtered.len()))
-        .borders(Borders::RIGHT);
+        .borders(Borders::RIGHT)
+        .style(Style::default().bg(app.theme.base_background));
     let list_area = block.inner(area);
     let list = List::new(items)
         .block(block)
@@ -1665,17 +1676,26 @@ mod tests {
         terminal
             .draw(|frame| hits = draw_list(frame, &app, frame.area()))
             .unwrap();
+        let text = buffer_text(&terminal);
+        let (row, line) = text
+            .lines()
+            .enumerate()
+            .find(|(_, line)| line.contains("Two"))
+            .unwrap();
+        let displayed_column = line.find("Two").unwrap() as u16;
+        let displayed_row = row as u16;
         let hit = hits
             .topology
             .iter()
             .find(|hit| hit.line == 2 && hit.child == Some(1))
             .unwrap();
+        assert!(hit.x.contains(&displayed_column));
         let action = handle_mouse(
             &mut app,
             MouseEvent {
                 kind: MouseEventKind::Down(MouseButton::Left),
-                column: hit.x.start,
-                row: hit.y.start,
+                column: displayed_column,
+                row: displayed_row,
                 modifiers: KeyModifiers::NONE,
             },
             &hits,
@@ -1685,6 +1705,52 @@ mod tests {
         assert_eq!(app.topology_cursor.selection[0].pane, 1);
         app.sync_topology_cursor();
         assert_eq!(app.topology_cursor.selection[0].pane, 1);
+    }
+
+    #[test]
+    fn topology_mouse_uses_screen_coordinates_after_workspace_scroll() {
+        let mut app = topology_test_app();
+        for index in 1..6 {
+            let mut workspace = app.topology.workspaces[0].clone();
+            workspace.id = format!("w{index}");
+            workspace.label = format!("Workspace {index}");
+            app.topology.workspaces.push(workspace);
+        }
+        app.topology_cursor = TopologyCursor::new(&app.topology);
+        app.topology_cursor.workspace = 5;
+        app.topology_cursor.clamp(&app.topology);
+
+        let backend = TestBackend::new(80, 8);
+        let mut terminal = Terminal::new(backend).unwrap();
+        let mut hits = ListHits::default();
+        terminal
+            .draw(|frame| hits = draw_list(frame, &app, frame.area()))
+            .unwrap();
+        let text = buffer_text(&terminal);
+        let (row, line) = text
+            .lines()
+            .enumerate()
+            .find(|(_, line)| line.contains("Workspace 4"))
+            .unwrap();
+        let displayed_column = line.find("Workspace 4").unwrap() as u16;
+        let displayed_row = row as u16;
+        assert!(hits
+            .topology
+            .iter()
+            .any(|hit| hit.workspace == 4 && hit.line == 0 && hit.y.contains(&displayed_row)));
+
+        let action = handle_mouse(
+            &mut app,
+            MouseEvent {
+                kind: MouseEventKind::Down(MouseButton::Left),
+                column: displayed_column,
+                row: displayed_row,
+                modifiers: KeyModifiers::NONE,
+            },
+            &hits,
+        );
+        assert!(matches!(action, Action::Continue));
+        assert_eq!(app.topology_cursor.workspace, 4);
     }
 
     #[test]
@@ -1774,8 +1840,11 @@ mod tests {
             Some(crate::topology::ChildSelection { tab: 0, pane: 1 }),
         );
 
-        assert!(rows[1].contains("[Tab]  Other"));
-        assert!(rows[2].contains(" One  [Two] "));
+        assert!(rows[1].contains(" Tab   Other "));
+        assert!(rows[2].contains(" One   Two "));
+        assert!(rows
+            .iter()
+            .all(|row| !row.contains('[') && !row.contains(']')));
     }
 
     #[test]
@@ -1833,8 +1902,11 @@ mod tests {
             44,
             Some(app.topology_cursor.selection[0]),
         );
-        assert!(rows[1].contains("[Tab-9]") || rows[1].contains("[Tab-10]"));
-        assert!(rows[2].contains("[Pane-9]") || rows[2].contains("[Pane-10]"));
+        assert!(rows[1].contains("Tab-9") || rows[1].contains("Tab-10"));
+        assert!(rows[2].contains("Pane-9") || rows[2].contains("Pane-10"));
+        assert!(rows
+            .iter()
+            .all(|row| !row.contains('[') && !row.contains(']')));
     }
 
     #[test]
@@ -2066,8 +2138,9 @@ mod tests {
     }
 
     #[test]
-    fn selected_topology_uses_terminal_selection_colors() {
-        let app = topology_test_app();
+    fn topology_selection_uses_derived_group_depth_and_cell_backgrounds() {
+        let mut app = topology_test_app();
+        app.topology_cursor.depth = TopologyDepth::Tab;
         let backend = TestBackend::new(80, 8);
         let mut terminal = Terminal::new(backend).unwrap();
         terminal
@@ -2076,15 +2149,91 @@ mod tests {
             })
             .unwrap();
         let buffer = terminal.backend().buffer();
+        let text = buffer_text(&terminal);
 
-        assert_eq!(buffer[(0, 1)].bg, Color::DarkGray);
-        assert_eq!(buffer[(0, 2)].bg, Color::DarkGray);
+        assert!(!text.contains('['));
+        assert!(!text.contains(']'));
+        assert!(app.theme.group_background() != app.theme.base_background);
+        assert!(app.theme.depth_background() != app.theme.group_background());
+        assert!(app.theme.cell_background() != app.theme.depth_background());
+        assert_eq!(buffer[(0, 1)].bg, app.theme.group_background());
+        assert_eq!(buffer[(0, 2)].bg, app.theme.depth_background());
+        assert_eq!(buffer[(0, 3)].bg, app.theme.group_background());
+        assert_eq!(buffer[(0, 4)].bg, app.theme.group_background());
+
+        let tab_row = text.lines().nth(2).unwrap();
+        let tab_x = tab_row.find("Tab").unwrap() as u16;
+        assert_eq!(buffer[(tab_x, 2)].bg, app.theme.cell_background());
+        assert_eq!(buffer[(tab_x - 1, 2)].bg, app.theme.depth_background());
+        assert_eq!(buffer[(tab_x + 3, 2)].bg, app.theme.depth_background());
     }
 
     #[test]
-    fn selected_depth_is_stronger_when_surface_colors_match() {
+    fn only_the_current_topology_depth_cell_looks_selected() {
         let mut app = topology_test_app();
-        app.theme.surface1 = app.theme.surface0;
+        app.topology_cursor.depth = TopologyDepth::Tab;
+        app.topology_cursor.selection[0].pane = 1;
+        let backend = TestBackend::new(80, 8);
+        let mut terminal = Terminal::new(backend).unwrap();
+        terminal
+            .draw(|f| {
+                draw_list(f, &app, f.area());
+            })
+            .unwrap();
+        let buffer = terminal.backend().buffer();
+        let text = buffer_text(&terminal);
+        let tab_x = text.lines().nth(2).unwrap().find("Tab").unwrap() as u16;
+        let pane_x = text.lines().nth(3).unwrap().find("Two").unwrap() as u16;
+
+        assert_eq!(buffer[(tab_x, 2)].bg, app.theme.cell_background());
+        assert_ne!(buffer[(pane_x, 3)].bg, app.theme.cell_background());
+        assert!(!buffer[(pane_x, 3)].modifier.contains(Modifier::BOLD));
+    }
+
+    #[test]
+    fn pane_cells_use_compact_backgrounds_without_brackets() {
+        let mut app = topology_test_app();
+        app.topology_cursor.depth = TopologyDepth::Pane;
+        app.topology_cursor.selection[0].pane = 1;
+        let backend = TestBackend::new(80, 8);
+        let mut terminal = Terminal::new(backend).unwrap();
+        terminal
+            .draw(|f| {
+                draw_list(f, &app, f.area());
+            })
+            .unwrap();
+        let buffer = terminal.backend().buffer();
+        let text = buffer_text(&terminal);
+        let pane_row = text.lines().nth(3).unwrap();
+        let pane_x = pane_row.find("Two").unwrap() as u16;
+
+        assert_eq!(buffer[(pane_x, 3)].bg, app.theme.cell_background());
+        assert_eq!(buffer[(pane_x - 1, 3)].bg, app.theme.depth_background());
+        assert_eq!(buffer[(pane_x + 3, 3)].bg, app.theme.depth_background());
+        assert!(!pane_row.contains('['));
+        assert!(!pane_row.contains(']'));
+    }
+
+    #[test]
+    fn picker_default_surfaces_use_the_base_background() {
+        let app = App::new(Config::default(), Theme::terminal());
+        let backend = TestBackend::new(80, 8);
+        let mut terminal = Terminal::new(backend).unwrap();
+        terminal
+            .draw(|f| {
+                draw(f, &app);
+            })
+            .unwrap();
+        let buffer = terminal.backend().buffer();
+
+        assert_eq!(buffer[(0, 0)].bg, app.theme.base_background);
+        assert_eq!(buffer[(0, 1)].bg, app.theme.base_background);
+        assert_eq!(buffer[(0, 6)].bg, app.theme.base_background);
+    }
+
+    #[test]
+    fn selected_depth_is_distinct_from_the_workspace_group() {
+        let mut app = topology_test_app();
         app.topology_cursor.depth = TopologyDepth::Tab;
         let backend = TestBackend::new(80, 8);
         let mut terminal = Terminal::new(backend).unwrap();
@@ -2095,8 +2244,8 @@ mod tests {
             .unwrap();
         let buffer = terminal.backend().buffer();
 
-        assert_eq!(buffer[(0, 1)].bg, app.theme.selection_background(false));
-        assert_eq!(buffer[(0, 2)].bg, app.theme.selection_background(true));
+        assert_eq!(buffer[(0, 1)].bg, app.theme.group_background());
+        assert_eq!(buffer[(0, 2)].bg, app.theme.depth_background());
         assert!(buffer[(0, 2)].modifier.contains(Modifier::BOLD));
         assert_eq!(buffer[(9, 2)].symbol(), "t");
     }

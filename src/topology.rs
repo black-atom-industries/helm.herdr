@@ -837,12 +837,8 @@ pub(crate) fn render_workspace_block(workspace: &WorkspaceNode, width: usize) ->
     render_workspace_block_selected(workspace, width, None)
 }
 
-pub(crate) fn selection_slot(value: &str, selected: bool) -> String {
-    if selected {
-        format!("[{value}]")
-    } else {
-        format!(" {value} ")
-    }
+pub(crate) fn selection_slot(value: &str, _selected: bool) -> String {
+    format!(" {value} ")
 }
 
 pub(crate) fn render_workspace_block_selected(
@@ -965,14 +961,14 @@ pub(crate) fn render_workspace_block_selected(
             } else {
                 tab.label.as_str()
             };
-            format!("[{value}]")
+            format!(" {value} ")
         })
     });
     let selected_pane_value = selection.and_then(|selection| {
         selected_tab.and_then(|tab| {
             tab.panes
                 .get(selection.pane)
-                .map(|pane| format!("[{}]", pane_value(pane)))
+                .map(|pane| format!(" {} ", pane_value(pane)))
         })
     });
     format!(
@@ -1017,10 +1013,65 @@ pub(crate) fn topology_rows_selected(
     rows
 }
 
+fn selected_cell_range(
+    workspace: &WorkspaceNode,
+    row: &str,
+    line: usize,
+    selection: Option<ChildSelection>,
+) -> Option<std::ops::Range<usize>> {
+    let selection = selection?;
+    let selected_index = match line {
+        1 => selection.tab,
+        2 => selection.pane,
+        _ => return None,
+    };
+    let values = if line == 1 {
+        workspace
+            .tabs
+            .iter()
+            .map(|tab| {
+                if tab.label.is_empty() {
+                    "unnamed".to_string()
+                } else {
+                    tab.label.clone()
+                }
+            })
+            .collect::<Vec<_>>()
+    } else {
+        let tab = workspace.tabs.get(selection.tab)?;
+        tab.panes.iter().map(pane_value).collect::<Vec<_>>()
+    };
+    let selected = values.get(selected_index)?;
+    let prefix_len = 17.min(row.len());
+    let mut offset = prefix_len;
+    for (index, value) in values.iter().enumerate() {
+        let slot = format!(" {value} ");
+        if index == selected_index {
+            let start = offset + 1;
+            let end = start + selected.len();
+            if end <= row.len() {
+                return Some(start..end);
+            }
+            break;
+        }
+        offset += slot.len() + 1;
+    }
+    if let Some(start) = row[prefix_len..].find(selected) {
+        let start = prefix_len + start;
+        return Some(start..start + selected.len());
+    }
+    let visible_start = row[prefix_len..]
+        .find(|character: char| !character.is_whitespace())
+        .map(|start| prefix_len + start)?;
+    let visible_end = row.trim_end().len();
+    (visible_start < visible_end).then_some(visible_start..visible_end)
+}
+
 pub(crate) fn topology_lines_selected(
     workspace: &WorkspaceNode,
     width: usize,
     selection: Option<ChildSelection>,
+    depth: TopologyDepth,
     theme: &crate::theme::Theme,
     repositories: &[String],
 ) -> [Line<'static>; 4] {
@@ -1051,11 +1102,36 @@ pub(crate) fn topology_lines_selected(
         let prefix_end = 9.min(row.len());
         let label_end = 17.min(row.len());
         let value_style = if index == 3 { muted } else { base };
-        lines[index] = Line::from(vec![
+        let mut spans = vec![
             Span::styled(row[..prefix_end].to_string(), muted),
             Span::styled(row[prefix_end..label_end].to_string(), muted),
-            Span::styled(row[label_end..].to_string(), value_style),
-        ]);
+        ];
+        let active_cell = matches!(
+            (depth, index),
+            (TopologyDepth::Tab, 1) | (TopologyDepth::Pane, 2)
+        );
+        if active_cell {
+            if let Some(selected) = selected_cell_range(workspace, row, index, selection) {
+                let start = selected.start.max(label_end).min(row.len());
+                let end = selected.end.max(start).min(row.len());
+                spans.extend([
+                    Span::styled(row[label_end..start].to_string(), value_style),
+                    Span::styled(
+                        row[start..end].to_string(),
+                        Style::default()
+                            .fg(theme.text)
+                            .bg(theme.cell_background())
+                            .add_modifier(Modifier::BOLD),
+                    ),
+                    Span::styled(row[end..].to_string(), value_style),
+                ]);
+            } else {
+                spans.push(Span::styled(row[label_end..].to_string(), value_style));
+            }
+        } else {
+            spans.push(Span::styled(row[label_end..].to_string(), value_style));
+        }
+        lines[index] = Line::from(spans);
     }
     lines
 }

@@ -45,7 +45,7 @@ Project Entries reuse or create a Workspace and apply project tabs and panes. Qu
 
 ## Colors
 
-Helm uses the terminal's default colors and ANSI palette.
+Helm inherits Herdr's configured palette by default, including light/dark and custom color settings. Set `[theme].inherit_herdr = false` to use Helm's built-in light palette.
 
 ## Command/JSON plugin integrations
 

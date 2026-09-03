@@ -55,6 +55,8 @@ pub(crate) struct Config {
     #[serde(default)]
     pub(crate) sources: SourcesConfig,
     #[serde(default)]
+    pub(crate) theme: ThemeConfig,
+    #[serde(default)]
     pub(crate) roots: Vec<RootConfig>,
     #[serde(default)]
     pub(crate) sessions: SessionsConfig,
@@ -174,6 +176,12 @@ pub(crate) struct IntegrationConfig {
     pub(crate) notify_success: bool,
     #[serde(default = "yes")]
     pub(crate) notify_error: bool,
+}
+
+#[derive(Clone, Deserialize)]
+pub(crate) struct ThemeConfig {
+    #[serde(default = "yes")]
+    pub(crate) inherit_herdr: bool,
 }
 
 #[derive(Clone, Deserialize)]
@@ -372,6 +380,13 @@ impl Default for NotificationsConfig {
         }
     }
 }
+impl Default for ThemeConfig {
+    fn default() -> Self {
+        Self {
+            inherit_herdr: true,
+        }
+    }
+}
 impl Default for Config {
     fn default() -> Self {
         Self {
@@ -379,6 +394,7 @@ impl Default for Config {
             jump_back: JumpBackConfig::default(),
             notifications: NotificationsConfig::default(),
             sources: SourcesConfig::default(),
+            theme: ThemeConfig::default(),
             sessions: SessionsConfig::default(),
             integrations: vec![],
             agent_aliases: vec![],
