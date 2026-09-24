@@ -916,6 +916,7 @@ fn topology_child_ranges(
     selected_child: Option<usize>,
     width: usize,
     start: u16,
+    spinner_tick: u32,
 ) -> Vec<(std::ops::Range<u16>, usize)> {
     let values = if line == 1 {
         workspace
@@ -935,19 +936,7 @@ fn topology_child_ranges(
         };
         tab.panes
             .iter()
-            .map(|pane| {
-                if let Some(agent) = &pane.agent {
-                    format!(
-                        "{} {}",
-                        agent.state.glyph(),
-                        agent.alias.as_deref().unwrap_or(&agent.name)
-                    )
-                } else if pane.label.is_empty() {
-                    "unnamed".into()
-                } else {
-                    pane.label.clone()
-                }
-            })
+            .map(|pane| crate::topology::pane_value(pane, spinner_tick))
             .collect::<Vec<_>>()
     };
     let decorated = values
@@ -1007,6 +996,7 @@ fn draw_topology_list(f: &mut Frame, app: &App, area: Rect) -> ListHits {
             app.topology_cursor.depth,
             &app.theme,
             &repositories,
+            app.spinner_tick,
         );
         if workspace.id == app.previous_workspace_id.as_deref().unwrap_or("") {
             rendered[0].spans[0] = Span::styled("  ←  ", Style::default().fg(app.theme.red));
@@ -1092,6 +1082,7 @@ fn draw_topology_list(f: &mut Frame, app: &App, area: Rect) -> ListHits {
                 selected_child,
                 width,
                 list_area.x + 17,
+                app.spinner_tick,
             )
         } else {
             Vec::new()
@@ -1704,6 +1695,54 @@ mod tests {
         assert_eq!(app.topology_cursor.depth, TopologyDepth::Pane);
         assert_eq!(app.topology_cursor.selection[0].pane, 1);
         app.sync_topology_cursor();
+        assert_eq!(app.topology_cursor.selection[0].pane, 1);
+    }
+
+    #[test]
+    fn working_topology_entries_keep_the_spinner_loop_active() {
+        let mut app = topology_test_app();
+        app.topology.workspaces[0].tabs[0].panes[1].agent = Some(crate::topology::AgentMeta {
+            name: "claude".into(),
+            state: crate::topology::AgentState::Working,
+            alias: None,
+        });
+        app.entries = crate::topology::query_entries(&app.topology, false);
+        assert!(has_working_entry(&app));
+    }
+
+    #[test]
+    fn mouse_target_matches_the_current_animated_pane_glyph() {
+        let mut app = topology_test_app();
+        app.topology.workspaces[0].tabs[0].panes[1].agent = Some(crate::topology::AgentMeta {
+            name: "claude".into(),
+            state: crate::topology::AgentState::Working,
+            alias: None,
+        });
+        app.spinner_tick = 1;
+        let backend = TestBackend::new(80, 8);
+        let mut terminal = Terminal::new(backend).unwrap();
+        let mut hits = ListHits::default();
+        terminal
+            .draw(|frame| hits = draw_list(frame, &app, frame.area()))
+            .unwrap();
+        let text = buffer_text(&terminal);
+        let (row, line) = text
+            .lines()
+            .enumerate()
+            .find(|(_, line)| line.contains("⠙ claude"))
+            .unwrap();
+        let column = line.find("⠙").unwrap() as u16;
+        let action = handle_mouse(
+            &mut app,
+            MouseEvent {
+                kind: MouseEventKind::Down(MouseButton::Left),
+                column,
+                row: row as u16,
+                modifiers: KeyModifiers::NONE,
+            },
+            &hits,
+        );
+        assert!(matches!(action, Action::Continue));
         assert_eq!(app.topology_cursor.selection[0].pane, 1);
     }
 

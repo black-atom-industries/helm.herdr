@@ -15,6 +15,7 @@ use serde_json::Value;
 use crate::{
     config::AgentAliasConfig,
     model::{Entry, EntryAction, Source},
+    sources::status_icon_at,
 };
 
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
@@ -817,7 +818,7 @@ fn aggregate(workspace: &WorkspaceNode) -> String {
     values.join(" · ")
 }
 
-fn pane_value(pane: &PaneNode) -> String {
+pub(crate) fn pane_value(pane: &PaneNode, spinner_tick: u32) -> String {
     let label = if pane.label.is_empty() {
         "unnamed"
     } else {
@@ -826,7 +827,7 @@ fn pane_value(pane: &PaneNode) -> String {
     match &pane.agent {
         Some(agent) => format!(
             "{} {}",
-            agent.state.glyph(),
+            status_icon_at(&Source::Agent, agent.state.label(), spinner_tick),
             agent.alias.as_deref().unwrap_or(&agent.name)
         ),
         None => label.to_string(),
@@ -845,6 +846,15 @@ pub(crate) fn render_workspace_block_selected(
     workspace: &WorkspaceNode,
     width: usize,
     selection: Option<ChildSelection>,
+) -> String {
+    render_workspace_block_selected_at(workspace, width, selection, 0)
+}
+
+fn render_workspace_block_selected_at(
+    workspace: &WorkspaceNode,
+    width: usize,
+    selection: Option<ChildSelection>,
+    spinner_tick: u32,
 ) -> String {
     let identity = workspace.git.as_ref().map_or_else(
         || workspace.label.clone(),
@@ -903,7 +913,7 @@ pub(crate) fn render_workspace_block_selected(
                     .iter()
                     .enumerate()
                     .map(|(index, pane)| {
-                        let value = pane_value(pane);
+                        let value = pane_value(pane, spinner_tick);
                         selection_slot(
                             &value,
                             selection.is_some_and(|selection| selection.pane == index),
@@ -968,7 +978,7 @@ pub(crate) fn render_workspace_block_selected(
         selected_tab.and_then(|tab| {
             tab.panes
                 .get(selection.pane)
-                .map(|pane| format!(" {} ", pane_value(pane)))
+                .map(|pane| format!(" {} ", pane_value(pane, spinner_tick)))
         })
     });
     format!(
@@ -992,7 +1002,16 @@ pub(crate) fn topology_rows_selected(
     width: usize,
     selection: Option<ChildSelection>,
 ) -> [String; 4] {
-    let block = render_workspace_block_selected(workspace, width, selection);
+    topology_rows_selected_at(workspace, width, selection, 0)
+}
+
+fn topology_rows_selected_at(
+    workspace: &WorkspaceNode,
+    width: usize,
+    selection: Option<ChildSelection>,
+    spinner_tick: u32,
+) -> [String; 4] {
+    let block = render_workspace_block_selected_at(workspace, width, selection, spinner_tick);
     let mut lines = block.lines().map(str::to_string);
     let mut rows = [
         lines.next().unwrap_or_default(),
@@ -1018,6 +1037,7 @@ fn selected_cell_range(
     row: &str,
     line: usize,
     selection: Option<ChildSelection>,
+    spinner_tick: u32,
 ) -> Option<std::ops::Range<usize>> {
     let selection = selection?;
     let selected_index = match line {
@@ -1039,7 +1059,10 @@ fn selected_cell_range(
             .collect::<Vec<_>>()
     } else {
         let tab = workspace.tabs.get(selection.tab)?;
-        tab.panes.iter().map(pane_value).collect::<Vec<_>>()
+        tab.panes
+            .iter()
+            .map(|pane| pane_value(pane, spinner_tick))
+            .collect::<Vec<_>>()
     };
     let selected = values.get(selected_index)?;
     let prefix_len = 17.min(row.len());
@@ -1067,6 +1090,110 @@ fn selected_cell_range(
     (visible_start < visible_end).then_some(visible_start..visible_end)
 }
 
+fn styled_pane_row(
+    workspace: &WorkspaceNode,
+    row: &str,
+    selection: Option<ChildSelection>,
+    highlight_selection: bool,
+    theme: &crate::theme::Theme,
+    spinner_tick: u32,
+    prefix_end: usize,
+    label_end: usize,
+    width: usize,
+) -> Line<'static> {
+    let selected = highlight_selection
+        .then(|| selected_cell_range(workspace, row, 2, selection, spinner_tick))
+        .flatten()
+        .map(|range| range.start.max(label_end)..range.end.max(label_end).min(row.len()));
+    let selected_tab = selection
+        .map(|selection| selection.tab)
+        .filter(|index| *index < workspace.tabs.len())
+        .or_else(|| workspace.tabs.iter().position(|tab| tab.focused))
+        .or_else(|| (!workspace.tabs.is_empty()).then_some(0));
+    let panes = selected_tab
+        .and_then(|index| workspace.tabs.get(index))
+        .map(|tab| &tab.panes);
+    let mut working_glyphs = Vec::new();
+    if let Some(panes) = panes {
+        let values = panes
+            .iter()
+            .map(|pane| pane_value(pane, spinner_tick))
+            .collect::<Vec<_>>();
+        let full = values
+            .iter()
+            .map(|value| selection_slot(value, false))
+            .collect::<Vec<_>>()
+            .join(" ");
+        let selected_value = selection.and_then(|selection| {
+            panes
+                .get(selection.pane)
+                .map(|pane| format!(" {} ", pane_value(pane, spinner_tick)))
+        });
+        let clip_width = width.saturating_sub(label_end);
+        let clipped = clip_selected_for_hits(&full, clip_width, selected_value.as_deref());
+        let clip_start = if Span::raw(&full).width() > clip_width {
+            selected_value
+                .as_deref()
+                .and_then(|value| full.find(value))
+                .unwrap_or(0)
+        } else {
+            0
+        };
+        let mut offset = 0;
+        for (pane, value) in panes.iter().zip(values) {
+            if pane
+                .agent
+                .as_ref()
+                .is_some_and(|agent| agent.state == AgentState::Working)
+            {
+                let start = offset + 1;
+                let end = start + status_icon_at(&Source::Agent, "working", spinner_tick).len();
+                if start >= clip_start && end <= clip_start + clipped.len() {
+                    working_glyphs
+                        .push(label_end + start - clip_start..label_end + end - clip_start);
+                }
+            }
+            offset += value.len() + 3;
+        }
+    }
+    let mut spans = vec![
+        Span::styled(
+            row[..prefix_end].to_string(),
+            Style::default().fg(theme.overlay0),
+        ),
+        Span::styled(
+            row[prefix_end..label_end].to_string(),
+            Style::default().fg(theme.overlay0),
+        ),
+    ];
+    let mut run = String::new();
+    let mut run_style = None;
+    for (index, character) in row[label_end..].char_indices() {
+        let start = label_end + index;
+        let is_selected = selected
+            .as_ref()
+            .is_some_and(|range| range.contains(&start));
+        let is_working = working_glyphs.iter().any(|range| range.contains(&start));
+        let mut style = Style::default().fg(if is_working { theme.yellow } else { theme.text });
+        if is_selected {
+            style = style
+                .bg(theme.cell_background())
+                .add_modifier(Modifier::BOLD);
+        }
+        if run_style.is_some_and(|current| current != style) {
+            if let Some(previous_style) = run_style.take() {
+                spans.push(Span::styled(std::mem::take(&mut run), previous_style));
+            }
+        }
+        run.push(character);
+        run_style = Some(style);
+    }
+    if let Some(style) = run_style {
+        spans.push(Span::styled(run, style));
+    }
+    Line::from(spans)
+}
+
 pub(crate) fn topology_lines_selected(
     workspace: &WorkspaceNode,
     width: usize,
@@ -1074,8 +1201,9 @@ pub(crate) fn topology_lines_selected(
     depth: TopologyDepth,
     theme: &crate::theme::Theme,
     repositories: &[String],
+    spinner_tick: u32,
 ) -> [Line<'static>; 4] {
-    let rows = topology_rows_selected(workspace, width, selection);
+    let rows = topology_rows_selected_at(workspace, width, selection, spinner_tick);
     let base = Style::default().fg(theme.text);
     let muted = Style::default().fg(theme.overlay0);
     let mut lines = rows.clone().map(|row| Line::from(Span::styled(row, base)));
@@ -1101,6 +1229,20 @@ pub(crate) fn topology_lines_selected(
     for (index, row) in rows.iter().enumerate().skip(1) {
         let prefix_end = 9.min(row.len());
         let label_end = 17.min(row.len());
+        if index == 2 {
+            lines[index] = styled_pane_row(
+                workspace,
+                row,
+                selection,
+                depth == TopologyDepth::Pane,
+                theme,
+                spinner_tick,
+                prefix_end,
+                label_end,
+                width,
+            );
+            continue;
+        }
         let value_style = if index == 3 { muted } else { base };
         let mut spans = vec![
             Span::styled(row[..prefix_end].to_string(), muted),
@@ -1111,7 +1253,9 @@ pub(crate) fn topology_lines_selected(
             (TopologyDepth::Tab, 1) | (TopologyDepth::Pane, 2)
         );
         if active_cell {
-            if let Some(selected) = selected_cell_range(workspace, row, index, selection) {
+            if let Some(selected) =
+                selected_cell_range(workspace, row, index, selection, spinner_tick)
+            {
                 let start = selected.start.max(label_end).min(row.len());
                 let end = selected.end.max(start).min(row.len());
                 spans.extend([
@@ -1447,6 +1591,72 @@ mod tests {
         );
         assert!(render_workspace_block(workspace, 120)
             .contains("1 blocked · 1 done · 1 working · 1 idle"));
+    }
+
+    #[test]
+    fn working_agent_glyph_animates_and_uses_status_color_when_selected() {
+        let value = snapshot(
+            serde_json::json!([{"workspace_id":"w1","label":"Project"}]),
+            serde_json::json!([{"workspace_id":"w1","tab_id":"t1","label":"Code","focused":true}]),
+            serde_json::json!([{"workspace_id":"w1","tab_id":"t1","pane_id":"p1","label":"Shell","agent":"claude","agent_status":"working"}]),
+            serde_json::json!([]),
+        );
+        let workspace = &parse_snapshot(&value, None, &[]).workspaces[0];
+        let theme = crate::theme::Theme::load(false);
+        let selected = Some(ChildSelection { tab: 0, pane: 0 });
+        let first =
+            topology_lines_selected(workspace, 80, selected, TopologyDepth::Pane, &theme, &[], 0);
+        let next =
+            topology_lines_selected(workspace, 80, selected, TopologyDepth::Pane, &theme, &[], 1);
+        let text = |line: &Line<'static>| {
+            line.spans
+                .iter()
+                .map(|span| span.content.as_ref())
+                .collect::<String>()
+        };
+        assert!(text(&first[2]).contains("⠋ claude"));
+        assert!(text(&next[2]).contains("⠙ claude"));
+        assert!(first[2].spans.iter().any(|span| {
+            span.content == "⠋"
+                && span.style.fg == Some(theme.yellow)
+                && span.style.bg == Some(theme.cell_background())
+        }));
+    }
+
+    #[test]
+    fn clipped_working_pane_keeps_its_color_and_unselected_tab_context() {
+        let value = snapshot(
+            serde_json::json!([{"workspace_id":"w1","label":"Project"}]),
+            serde_json::json!([
+                {"workspace_id":"w1","tab_id":"t1","label":"Focused","focused":true},
+                {"workspace_id":"w1","tab_id":"t2","label":"Chosen"}
+            ]),
+            serde_json::json!([
+                {"workspace_id":"w1","tab_id":"t1","pane_id":"p1","label":"Shell"},
+                {"workspace_id":"w1","tab_id":"t2","pane_id":"p2","label":"Agent","agent":"claude","agent_status":"working"}
+            ]),
+            serde_json::json!([]),
+        );
+        let workspace = &parse_snapshot(&value, None, &[]).workspaces[0];
+        let theme = crate::theme::Theme::load(false);
+        let selected = Some(ChildSelection { tab: 1, pane: 0 });
+        let row = topology_lines_selected(
+            workspace,
+            28,
+            selected,
+            TopologyDepth::Workspace,
+            &theme,
+            &[],
+            1,
+        );
+        assert!(row[2]
+            .spans
+            .iter()
+            .any(|span| { span.content == "⠙" && span.style.fg == Some(theme.yellow) }));
+        assert!(row[2]
+            .spans
+            .iter()
+            .any(|span| { span.content.contains("claude") && span.style.fg == Some(theme.text) }));
     }
 
     #[test]
