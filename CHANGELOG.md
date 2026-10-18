@@ -2,6 +2,13 @@
 
 All notable changes to this project are documented here.
 
+## [0.6.1](https://github.com/black-atom-industries/helm.herdr/compare/v0.6.0...v0.6.1) (2026-10-18)
+
+
+### Documentation
+
+* rewrite the README around the topology and query views ([e605685](https://github.com/black-atom-industries/helm.herdr/commit/e6056851177c40c36a736dc21e264e38c2839b2e))
+
 ## [0.6.0](https://github.com/black-atom-industries/helm.herdr/compare/v0.5.0...v0.6.0) (2026-10-18)
 
 ### Highlights
