@@ -561,13 +561,6 @@ impl App {
         }
         .ok_or("nothing selected")?;
         let action_destination = recent_destination_for_entry(&e);
-        let tracks_workspace_transition =
-            self.config.jump_back.enabled && tracks_workspace_transition(&e.action);
-        let origin_workspace = if tracks_workspace_transition {
-            launch_workspace_id().or_else(|| current_workspace_id().ok())
-        } else {
-            None
-        };
         let (result, notify_success, notify_failure) = match &e.action {
             EntryAction::FocusAgent { target } => {
                 (run_herdr(["agent", "focus", target]), true, true)
@@ -600,15 +593,6 @@ impl App {
 
         match result {
             Ok(()) => {
-                if tracks_workspace_transition {
-                    let destination = current_workspace_id().ok();
-                    if let Some(previous) = previous_workspace_to_record(
-                        origin_workspace.as_deref(),
-                        destination.as_deref(),
-                    ) {
-                        let _ = save_previous_workspace(previous);
-                    }
-                }
                 let destination = action_destination.or_else(|| {
                     recent_destination_after_indirect_success(
                         &e.action,
@@ -841,18 +825,6 @@ fn current_session_name() -> Option<String> {
         .filter(|name| !name.trim().is_empty())
 }
 
-fn tracks_workspace_transition(action: &EntryAction) -> bool {
-    matches!(
-        action,
-        EntryAction::FocusAgent { .. }
-            | EntryAction::FocusPane { .. }
-            | EntryAction::FocusWorkspace { .. }
-            | EntryAction::FocusTab { .. }
-            | EntryAction::OpenProject
-            | EntryAction::FocusOrCreateDir
-    )
-}
-
 fn recent_destination_for_entry(e: &Entry) -> Option<(Option<String>, String)> {
     match &e.action {
         EntryAction::FocusWorkspace { session, id, .. } => Some((session.clone(), id.clone())),
@@ -1060,6 +1032,7 @@ fn workspace_text(entry: &Entry) -> String {
 }
 
 const JUMP_BACK_STATE_FILE: &str = "jump-back-workspace";
+const FOCUSED_WORKSPACE_STATE_FILE: &str = "focused-workspace";
 const PINNED_ENTRIES_STATE_FILE: &str = "pinned-entries.json";
 
 #[derive(Debug, Deserialize, Serialize, PartialEq, Eq)]
@@ -1093,7 +1066,6 @@ pub(crate) fn jump_back(config: &Config) -> Result<String, String> {
     };
 
     run_herdr(["workspace", "focus", &previous])?;
-    save_previous_workspace(&current)?;
     record_persisted_recent_workspace(current_session_name().as_deref(), &previous);
     Ok(label)
 }
@@ -1123,14 +1095,28 @@ fn current_workspace_id() -> Result<String, String> {
         .ok_or_else(|| "can't determine the current workspace".into())
 }
 
-fn previous_workspace_to_record<'a>(
-    origin: Option<&'a str>,
-    destination: Option<&str>,
-) -> Option<&'a str> {
-    match (origin, destination) {
-        (Some(origin), Some(destination)) if origin != destination => Some(origin),
-        _ => None,
+pub(crate) fn track_focus(config: &Config) -> Result<(), String> {
+    if !config.jump_back.enabled {
+        return Ok(());
     }
+    let event = env::var("HERDR_PLUGIN_EVENT_JSON")
+        .map_err(|_| "HERDR_PLUGIN_EVENT_JSON is not set".to_string())?;
+    let event = serde_json::from_str::<serde_json::Value>(&event)
+        .map_err(|e| format!("failed to parse focus event: {e}"))?;
+    let focused = event
+        .pointer("/data/workspace_id")
+        .and_then(|v| v.as_str())
+        .ok_or("focus event has no workspace_id")?;
+    record_focused_workspace(focused)
+}
+
+fn record_focused_workspace(focused: &str) -> Result<(), String> {
+    if let Ok(last) = read_workspace_state(FOCUSED_WORKSPACE_STATE_FILE) {
+        if last != focused {
+            save_previous_workspace(&last)?;
+        }
+    }
+    save_workspace_state(FOCUSED_WORKSPACE_STATE_FILE, focused)
 }
 
 fn decode_previous_workspace(
@@ -1165,7 +1151,11 @@ fn encode_previous_workspace(session: &str, workspace_id: &str) -> Result<String
 }
 
 fn read_previous_workspace() -> Result<String, String> {
-    let path = plugin_config_dir().join(JUMP_BACK_STATE_FILE);
+    read_workspace_state(JUMP_BACK_STATE_FILE)
+}
+
+fn read_workspace_state(file: &str) -> Result<String, String> {
+    let path = plugin_config_dir().join(file);
     let value = fs::read_to_string(path).map_err(|error| {
         if error.kind() == std::io::ErrorKind::NotFound {
             "no previous workspace yet".into()
@@ -1180,11 +1170,14 @@ fn read_previous_workspace() -> Result<String, String> {
 }
 
 fn save_previous_workspace(id: &str) -> Result<(), String> {
+    save_workspace_state(JUMP_BACK_STATE_FILE, id)
+}
+
+fn save_workspace_state(file: &str, id: &str) -> Result<(), String> {
     let dir = plugin_config_dir();
     fs::create_dir_all(&dir).map_err(|e| format!("failed to create plugin config: {e}"))?;
     let value = encode_previous_workspace(&current_session_identity(), id)?;
-    fs::write(dir.join(JUMP_BACK_STATE_FILE), value)
-        .map_err(|e| format!("failed to save jump-back state: {e}"))
+    fs::write(dir.join(file), value).map_err(|e| format!("failed to save workspace state: {e}"))
 }
 
 fn read_pinned_entries(path: &Path) -> Result<HashSet<String>, String> {
@@ -1960,7 +1953,6 @@ exit 0
             RecentState::load().recent_ids(Some("work")),
             &["w-previous"]
         );
-        assert_eq!(read_previous_workspace().unwrap(), "w-current");
     }
 
     #[test]
@@ -2027,7 +2019,6 @@ exit 0
             recent_destination_for_entry(&pane),
             Some((Some("work".into()), "w4".into()))
         );
-        assert!(tracks_workspace_transition(&pane.action));
     }
 
     #[test]
@@ -2056,14 +2047,20 @@ exit 0
     }
 
     #[test]
-    fn jump_back_records_only_real_workspace_transitions() {
-        assert_eq!(
-            previous_workspace_to_record(Some("w1"), Some("w2")),
-            Some("w1")
-        );
-        assert_eq!(previous_workspace_to_record(Some("w1"), Some("w1")), None);
-        assert_eq!(previous_workspace_to_record(None, Some("w2")), None);
-        assert_eq!(previous_workspace_to_record(Some("w1"), None), None);
+    fn focus_changes_record_the_workspace_left_behind() {
+        let _env = command_test_env();
+
+        record_focused_workspace("w1").unwrap();
+        assert!(read_previous_workspace().is_err());
+
+        record_focused_workspace("w2").unwrap();
+        assert_eq!(read_previous_workspace().unwrap(), "w1");
+
+        record_focused_workspace("w2").unwrap();
+        assert_eq!(read_previous_workspace().unwrap(), "w1");
+
+        record_focused_workspace("w1").unwrap();
+        assert_eq!(read_previous_workspace().unwrap(), "w2");
     }
 
     #[test]

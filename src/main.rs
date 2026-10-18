@@ -29,6 +29,7 @@ enum CliCommand {
     Open,
     OpenSide,
     JumpBack,
+    TrackFocus,
     Ui,
     List,
     Invalid,
@@ -40,6 +41,7 @@ fn cli_command(command: Option<&str>) -> CliCommand {
         Some("open") => CliCommand::Open,
         Some("open-side") => CliCommand::OpenSide,
         Some("jump-back") => CliCommand::JumpBack,
+        Some("track-focus") => CliCommand::TrackFocus,
         Some("list") => CliCommand::List,
         Some(_) => CliCommand::Invalid,
     }
@@ -50,10 +52,11 @@ fn main() {
         CliCommand::Open => open_picker(),
         CliCommand::OpenSide => open_side_picker(),
         CliCommand::JumpBack => jump_back(),
+        CliCommand::TrackFocus => track_focus(),
         CliCommand::Ui => run_ui(env::args().nth(2).as_deref() == Some("--side")),
         CliCommand::List => debug_list(),
         CliCommand::Invalid => {
-            eprintln!("usage: helm-herdr [open|open-side|jump-back|ui|list]");
+            eprintln!("usage: helm-herdr [open|open-side|jump-back|track-focus|ui|list]");
             process::exit(2);
         }
     }
@@ -192,6 +195,14 @@ fn jump_back() -> ! {
             process::exit(1);
         }
     }
+}
+
+fn track_focus() -> ! {
+    if let Err(error) = app::track_focus(&Config::load()) {
+        eprintln!("track focus failed: {error}");
+        process::exit(1);
+    }
+    process::exit(0);
 }
 
 fn run_ui(persist: bool) -> ! {

@@ -26,6 +26,10 @@ title = "Helm: jump back"
 contexts = ["workspace", "global"]
 command = ["./target/release/helm-herdr", "jump-back"]
 
+[[events]]
+on = "workspace.focused"
+command = ["./target/release/helm-herdr", "track-focus"]
+
 [[panes]]
 id = "picker"
 title = "Helm"

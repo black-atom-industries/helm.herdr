@@ -151,7 +151,7 @@ Helm refuses to close the workspace that owns the picker; switch away first. Dir
 
 ### Jump Back
 
-Helm remembers the workspace left by a successful local navigation. Bind the dedicated action for tmux-style current/previous toggling:
+Helm remembers the workspace left by every local workspace focus change, including Herdr's own keybindings. Bind the dedicated action for tmux-style current/previous toggling:
 
 ```toml
 [[keys.command]]
