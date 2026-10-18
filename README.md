@@ -295,6 +295,8 @@ Build, install, and link locally:
 ```bash
 git clone https://github.com/black-atom-industries/helm.herdr.git
 cd helm.herdr
+mise run git:config
+lefthook install
 ./scripts/install-local.sh
 ```
 
@@ -336,10 +338,8 @@ find ~/.config/herdr/plugins/config/cloudmanic.herdr-plus/projects -name '*.toml
 ## Project docs
 
 - [`ROADMAP.md`](ROADMAP.md) — planned todos
-- [`docs/architecture.md`](docs/architecture.md) — runtime flow and design
-- [`docs/integrations.md`](docs/integrations.md) — Herdr/plugin integration patterns
-- [`docs/plugin-integrations.md`](docs/plugin-integrations.md) — command/JSON contract
-- [`CHANGELOG.md`](CHANGELOG.md) — released and unreleased changes
+- [`docs/index.md`](docs/index.md) — architecture, integrations, plugin contract, and releases
+- [`CHANGELOG.md`](CHANGELOG.md) — release notes
 - [`CONTRIBUTING.md`](CONTRIBUTING.md) — development workflow
 
 Helm for Herdr is intentionally small: reuse Herdr primitives, keep optional integrations optional, and make the common path `prefix+t → type → Enter`.

@@ -12,7 +12,6 @@ Keep these files:
 - CHANGELOG
 - SECURITY
 - CONTRIBUTING
-- RELEASE
 - GitHub CI/release workflows
 - issue/PR templates
 

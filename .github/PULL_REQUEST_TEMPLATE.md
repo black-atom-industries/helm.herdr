@@ -4,6 +4,4 @@
 
 ## Checks
 
-- [ ] `cargo fmt --check`
-- [ ] `cargo clippy -- -D warnings`
-- [ ] `cargo test`
+- [ ] `mise run verify:full`

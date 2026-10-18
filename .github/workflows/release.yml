@@ -2,14 +2,28 @@ name: Release
 
 on:
   push:
-    tags:
-      - 'v*'
+    branches: [main]
 
 permissions:
   contents: write
+  pull-requests: write
 
 jobs:
+  release-please:
+    runs-on: ubuntu-latest
+    outputs:
+      release_created: ${{ steps.release.outputs.release_created }}
+      tag_name: ${{ steps.release.outputs.tag_name }}
+    steps:
+      - uses: googleapis/release-please-action@v4
+        id: release
+        with:
+          config-file: .github/release-please-config.json
+          manifest-file: .github/.release-please-manifest.json
+
   build:
+    needs: release-please
+    if: needs.release-please.outputs.release_created == 'true'
     strategy:
       fail-fast: false
       matrix:
@@ -21,6 +35,8 @@ jobs:
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.release-please.outputs.tag_name }}
       - uses: dtolnay/rust-toolchain@stable
       - run: cargo build --release
       - name: Package
@@ -31,7 +47,8 @@ jobs:
           cp README.md LICENSE CHANGELOG.md herdr-plugin.toml dist/helm-herdr/
           cp -R examples dist/helm-herdr/
           tar -C dist -czf helm-herdr-${{ matrix.name }}.tar.gz helm-herdr
-      - uses: softprops/action-gh-release@v2
-        with:
-          files: helm-herdr-${{ matrix.name }}.tar.gz
-          generate_release_notes: true
+      - name: Attach to release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ needs.release-please.outputs.tag_name }}
+        run: gh release upload "$TAG" helm-herdr-${{ matrix.name }}.tar.gz --clobber

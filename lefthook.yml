@@ -1,0 +1,10 @@
+pre-commit:
+  jobs:
+    - name: format
+      run: mise run verify:format
+    - name: lint
+      run: mise run verify:lint
+pre-push:
+  jobs:
+    - name: verify
+      run: mise run verify:full

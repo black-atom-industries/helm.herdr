@@ -1,0 +1,24 @@
+[tools]
+lefthook = "2.1.12"
+
+[tasks.format]
+run = "cargo fmt"
+
+[tasks."verify:format"]
+run = "cargo fmt --check"
+
+[tasks."verify:lint"]
+run = "cargo clippy --all-targets -- -D warnings"
+
+[tasks."verify:tests"]
+run = "cargo test"
+
+[tasks."verify:full"]
+depends = ["verify:format", "verify:lint", "verify:tests"]
+run = "cargo build --release"
+
+[tasks."git:config"]
+run = [
+  "git config pull.rebase true",
+  "git config merge.ff only",
+]

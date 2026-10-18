@@ -46,4 +46,3 @@ cargo build --release
 - `features.md`: current feature behavior and UX intent
 - `decisions.md`: durable decisions; do not casually reverse
 - `bugs-and-lessons.md`: bugs hit during development and fixes
-- `release.md`: publish/release notes for agents
