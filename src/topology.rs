@@ -1090,6 +1090,7 @@ fn selected_cell_range(
     (visible_start < visible_end).then_some(visible_start..visible_end)
 }
 
+#[allow(clippy::too_many_arguments)]
 fn styled_pane_row(
     workspace: &WorkspaceNode,
     row: &str,
