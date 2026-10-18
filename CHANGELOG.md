@@ -4,6 +4,58 @@ All notable changes to this project are documented here.
 
 ## [0.6.0](https://github.com/black-atom-industries/helm.herdr/compare/v0.5.0...v0.6.0) (2026-10-18)
 
+### Highlights
+
+#### Live topology picker
+
+Helm opens on the current session as Workspace → Tab → Pane blocks. `h` `j` `k` `l` walk the levels, `J` and `K` jump between Workspaces from any depth, and Enter focuses the exact Pane.
+
+![Walking from the api Workspace into web's preview Tab and focusing the vite Pane](https://raw.githubusercontent.com/black-atom-industries/helm.herdr/v0.6.0/docs/assets/changelog/0.6.0-topology.webp)
+
+#### One Query for open and not-yet-open
+
+Typing turns the topology into flat one-line rows: open Workspaces, Tabs, Panes, agents, zoxide directories, and configured roots. Enter focuses what is open and creates a Workspace for what is not.
+
+![Typing "do" mixes the docs Workspace with zoxide and root directories, then "infra" opens a new Workspace from a root](https://raw.githubusercontent.com/black-atom-industries/helm.herdr/v0.6.0/docs/assets/changelog/0.6.0-query.webp)
+
+#### Herdr owns the popup
+
+`helm-herdr` runs directly in a Herdr popup binding, so the key and the size are yours:
+
+```toml
+[[keys.command]]
+key = "prefix+t"
+type = "popup"
+command = "helm-herdr"
+width = "90%"
+height = "90%"
+```
+
+Colors follow the terminal and Herdr's themes, and auto-switching themes track the macOS appearance. Working agents get an animated indicator.
+
+#### Important fixes
+
+- Jump-back follows every Workspace focus change, including Herdr's own `previous_agent` and `next_agent` keys.
+- The macOS appearance probe stays out of the popup, where it used to flash `Dark`.
+
+#### Upgrading from 0.5
+
+The plugin is now `helm-herdr` from `black-atom-industries/helm.herdr`. Install it under the new name; on first run Helm copies the config from `herdr-navigator`.
+
+```diff
+-herdr plugin install thanhdat77/herdr-navigator --yes
++herdr plugin install black-atom-industries/helm.herdr --yes
+```
+
+Point the binding at the new binary:
+
+```diff
+-type = "plugin_action"
+-command = "herdr-navigator.open"
++type = "popup"
++command = "helm-herdr"
+```
+
 
 ### chore
 
