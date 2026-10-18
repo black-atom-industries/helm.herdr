@@ -1,0 +1,16 @@
+onboarding = false
+
+[ui]
+sidebar_collapsed_mode = "hidden"
+hide_tab_bar_when_single_tab = false
+
+[update]
+version_check = false
+
+[[keys.command]]
+key = "ctrl+g"
+type = "popup"
+command = "helm-herdr"
+description = "Open Helm"
+width = "100%"
+height = "100%"
