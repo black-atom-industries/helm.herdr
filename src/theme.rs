@@ -678,6 +678,7 @@ fn detect_host_appearance() -> Option<HostAppearance> {
     output.and_then(|scheme| appearance_from_gsettings(&scheme))
 }
 
+#[cfg(any(test, target_os = "macos"))]
 fn appearance_from_status(dark: bool) -> Option<HostAppearance> {
     dark.then_some(HostAppearance::Dark)
         .or(Some(HostAppearance::Light))
