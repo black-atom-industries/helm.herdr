@@ -2,6 +2,23 @@
 
 All notable changes to this project are documented here.
 
+## [0.6.0](https://github.com/black-atom-industries/helm.herdr/compare/v0.5.0...v0.6.0) (2026-10-18)
+
+
+### chore
+
+* release 0.6.0 ([61eeb86](https://github.com/black-atom-industries/helm.herdr/commit/61eeb86b9bba7df582fe7d8aefa2e7a46ee1afe8))
+
+
+### Bug Fixes
+
+* **theme:** keep the appearance probe out of the popup ([5e4e5b1](https://github.com/black-atom-industries/helm.herdr/commit/5e4e5b119e59c4946aba9f0cfff73051af749ccf))
+
+
+### Documentation
+
+* add the 0.6.0 topology and query clips with their tapes ([bd59342](https://github.com/black-atom-industries/helm.herdr/commit/bd593426a598dfacf62ecb4f8aeba128900ddbe6))
+
 ## [0.5.0] - 2026-08-07
 
 ### Changed
