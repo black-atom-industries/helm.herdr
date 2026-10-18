@@ -1,7 +1,7 @@
 use std::{
     env, fs,
     path::{Path, PathBuf},
-    process::{Command, Stdio},
+    process::Command,
 };
 
 use ratatui::style::Color;
@@ -661,8 +661,8 @@ fn herdr_config_path() -> PathBuf {
 fn detect_host_appearance() -> Option<HostAppearance> {
     let status = Command::new("defaults")
         .args(["read", "-g", "AppleInterfaceStyle"])
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
         .status()
         .ok()
         .map(|status| status.success());
