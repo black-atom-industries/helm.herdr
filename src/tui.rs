@@ -848,57 +848,66 @@ fn draw_key_hints(f: &mut Frame, app: &App, area: Rect) {
 
 fn draw_keybindings_help(f: &mut Frame, app: &App, area: Rect) {
     let bindings = keybindings(app);
-    let mut lines = Vec::new();
-    for group in ["Move", "Open", "Find", "Sources", "Act"] {
-        let start = lines.len();
-        lines.push(Line::styled(
-            format!(" {group}"),
-            Style::default()
-                .fg(app.theme.accent)
-                .add_modifier(Modifier::BOLD),
-        ));
-        for binding in bindings.iter().filter(|binding| binding.group == group) {
-            let key = binding.key_label(app);
-            if key.is_empty() {
-                continue;
-            }
-            let active = binding.is_active(app);
-            let key_style = if active {
+    let column = |groups: &[&str]| {
+        let mut lines = Vec::new();
+        for group in groups {
+            let start = lines.len();
+            lines.push(Line::styled(
+                format!(" {group}"),
                 Style::default()
-                    .fg(app.theme.panel_bg)
-                    .bg(app.theme.accent)
-                    .add_modifier(Modifier::BOLD)
+                    .fg(app.theme.accent)
+                    .add_modifier(Modifier::BOLD),
+            ));
+            for binding in bindings.iter().filter(|binding| binding.group == *group) {
+                let key = binding.key_label(app);
+                if key.is_empty() {
+                    continue;
+                }
+                let active = binding.is_active(app);
+                let key_style = if active {
+                    Style::default()
+                        .fg(app.theme.panel_bg)
+                        .bg(app.theme.accent)
+                        .add_modifier(Modifier::BOLD)
+                } else {
+                    Style::default().fg(app.theme.accent)
+                };
+                lines.push(Line::from(vec![
+                    Span::raw("   "),
+                    Span::styled(key.clone(), key_style),
+                    Span::raw(" ".repeat(12usize.saturating_sub(key.chars().count()))),
+                    Span::styled(binding.label.clone(), Style::default().fg(app.theme.text)),
+                ]));
+            }
+            if lines.len() == start + 1 {
+                lines.pop();
             } else {
-                Style::default().fg(app.theme.accent)
-            };
-            lines.push(Line::from(vec![
-                Span::raw("   "),
-                Span::styled(format!("{key:<12}"), key_style),
-                Span::styled(&binding.label, Style::default().fg(app.theme.text)),
-            ]));
+                lines.push(Line::default());
+            }
         }
-        if lines.len() == start + 1 {
-            lines.pop();
-        } else {
-            lines.push(Line::default());
-        }
-    }
-    lines.pop();
+        lines.pop();
+        lines
+    };
+    let left = column(&["Move", "Open", "Find"]);
+    let right = column(&["Sources", "Act"]);
 
-    let height = (lines.len() as u16 + 2).min(area.height.saturating_sub(2).max(1));
-    let popup = area.centered(Constraint::Percentage(72), Constraint::Length(height));
+    let rows = left.len().max(right.len()) as u16;
+    let height = (rows + 2).min(area.height.saturating_sub(2).max(1));
+    let popup = area.centered(Constraint::Percentage(90), Constraint::Length(height));
+    let block = Block::default()
+        .title(" Keybindings ")
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(app.theme.accent))
+        .style(Style::default().bg(app.theme.panel_bg));
+    let inner = block.inner(popup);
     f.render_widget(Clear, popup);
-    f.render_widget(
-        Paragraph::new(Text::from(lines))
-            .style(Style::default().bg(app.theme.panel_bg))
-            .block(
-                Block::default()
-                    .title(" Keybindings ")
-                    .borders(Borders::ALL)
-                    .border_style(Style::default().fg(app.theme.accent)),
-            ),
-        popup,
-    );
+    f.render_widget(block, popup);
+    let columns = Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
+        .split(inner);
+    f.render_widget(Paragraph::new(Text::from(left)), columns[0]);
+    f.render_widget(Paragraph::new(Text::from(right)), columns[1]);
 }
 
 fn has_working_entry(app: &App) -> bool {
@@ -3343,13 +3352,15 @@ mod tests {
             ActivityState::default(),
         );
         handle_key(&mut app, key(KeyCode::Char('?')));
-        let (lines, _) = render_app(&app, 100, 40);
+        let (lines, _) = render_app(&app, 124, 34);
         let text = lines.join("\n");
         for section in [" Move", " Open", " Find", " Sources", " Act"] {
             assert!(text.contains(section), "{section}");
         }
         assert!(text.contains("J K"));
         assert!(text.contains("a–g"));
+        assert!(text.contains("send to cold (c twice) / warm up"));
+        assert!(text.contains("this sheet"));
     }
 
     const WORKSPACE_KEY: &str = "<default>::w1";
