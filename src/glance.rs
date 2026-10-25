@@ -111,8 +111,7 @@ pub(crate) fn evidence(
         .filter_map(|pane| {
             let agent = pane.agent.as_ref()?;
             let since = activity
-                .panes
-                .get(&pane.id)
+                .pane(workspace.session.as_deref(), &pane.id)
                 .filter(|recorded| AgentState::parse(&recorded.status) == agent.state)
                 .map(|recorded| recorded.since);
             Some(PaneEvidence {
@@ -124,10 +123,7 @@ pub(crate) fn evidence(
     Evidence {
         pinned,
         agents,
-        focused_at: activity
-            .workspaces
-            .get(&workspace.id)
-            .map(|recorded| recorded.focused_at),
+        focused_at: activity.focused_at(workspace.session.as_deref(), &workspace.id),
         last_commit_at: workspace.git.as_ref().and_then(|git| git.last_commit_at),
     }
 }

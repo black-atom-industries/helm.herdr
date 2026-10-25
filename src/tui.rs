@@ -70,7 +70,7 @@ pub(crate) fn tui_loop(
                 Err(TryRecvError::Empty) => {}
             }
         }
-        if let Ok(workspaces) = workspace_refresh.try_recv() {
+        if let Some(workspaces) = workspace_refresh.try_iter().last() {
             app.apply_workspaces(workspaces, now_unix_secs());
         }
         app.sync_detail_scroll();
@@ -162,9 +162,6 @@ pub(crate) fn tui_loop(
 const WORKSPACE_REFRESH: Duration = Duration::from_secs(3);
 const GIT_REFRESH: Duration = Duration::from_secs(30);
 
-/// Reloads the snapshot and activity every few seconds. Git identities are
-/// read again only once `GIT_REFRESH` has passed; until then they come from
-/// the last load.
 /// Keeps at most one git read in flight for the selected workspace, and stores
 /// its result once it arrives.
 fn drive_detail(app: &mut App, job: &mut Option<(String, Receiver<GitDetail>)>, now: i64) {
@@ -193,6 +190,9 @@ fn spawn_git_read(cwd: PathBuf) -> Receiver<GitDetail> {
     receiver
 }
 
+/// Reloads the snapshot and activity every few seconds. Git identities are
+/// read again only once `GIT_REFRESH` has passed; until then they come from
+/// the last load.
 fn spawn_workspace_refresh(config: Config, mut known: OpenTopology) -> Receiver<Workspaces> {
     let (sender, receiver) = mpsc::channel();
     thread::spawn(move || {
@@ -200,7 +200,7 @@ fn spawn_workspace_refresh(config: Config, mut known: OpenTopology) -> Receiver<
         loop {
             thread::sleep(WORKSPACE_REFRESH);
             let reuse_git = git_read_at.elapsed() < GIT_REFRESH;
-            let workspaces = load_workspaces(&config, reuse_git.then_some(&known));
+            let workspaces = load_workspaces(&config, reuse_git.then_some(&known), None);
             if !reuse_git {
                 git_read_at = Instant::now();
             }
@@ -1250,7 +1250,9 @@ fn bar(done: u32, total: u32, cells: usize) -> String {
 
 /// Draws the detail pane and returns the largest useful scroll offset. The header
 /// and agents sit at the top, and the changes and commits sections are anchored
-/// to the bottom with a height that depends only on the pane height.
+/// to the bottom. Their height depends only on the pane height unless the
+/// agents need the room, and never drops below `DETAIL_SECTION_MIN_ROWS` for
+/// the sake of subagents.
 fn draw_detail(f: &mut Frame, app: &App, area: Rect) -> usize {
     let Some(SelectedWorkspace {
         entry,
@@ -1269,7 +1271,11 @@ fn draw_detail(f: &mut Frame, app: &App, area: Rect) -> usize {
     let width = area.width as usize;
     let dim = Style::default().fg(app.theme.subtext0);
 
-    let chips = tab_chips(app, workspace);
+    let name_width = Span::raw(&row.name).width();
+    let chips = fit_chips(
+        tab_chips(app, workspace),
+        width.saturating_sub(name_width + 2),
+    );
     let chips_width: usize = chips.iter().map(|span| span.width()).sum();
     let name_room = width.saturating_sub(chips_width + 1);
     let name = truncate_terminal(&row.name, name_room);
@@ -1297,14 +1303,25 @@ fn draw_detail(f: &mut Frame, app: &App, area: Rect) -> usize {
     let git = app.git_detail.get(&key).map(|cached| &cached.detail);
     let changes: &[Change] = git.map_or(&[], |git| &git.changes);
     let commits: &[Commit] = git.map_or(&[], |git| &git.commits);
-    let rows = ((area.height as usize).saturating_sub(header.len() + 3) / 2)
+    // Each section is a heading plus `rows` lines, with a blank line between them.
+    let height = area.height as usize;
+    let section_lines = |rows: usize| 3 + 2 * rows;
+    let agents = agent_lines(
+        app,
+        workspace,
+        width,
+        height.saturating_sub(header.len() + section_lines(DETAIL_SECTION_MIN_ROWS)),
+    );
+    let pane_rows = (height.saturating_sub(header.len() + 3) / 2)
         .clamp(DETAIL_SECTION_MIN_ROWS, DETAIL_SECTION_MAX_ROWS);
-    let lower_height = (3 + 2 * rows).min(area.height as usize) as u16;
+    let free_rows = height.saturating_sub(header.len() + agents.len() + 3) / 2;
+    let rows = pane_rows.min(free_rows).max(1);
+    let lower_height = section_lines(rows).min(height) as u16;
     let [top, bottom] =
         Layout::vertical([Constraint::Min(0), Constraint::Length(lower_height)]).areas(area);
 
     let mut top_lines = header;
-    top_lines.extend(agent_lines(app, workspace, width));
+    top_lines.extend(agents);
     f.render_widget(Paragraph::new(top_lines), top);
 
     let changes_overflow = changes.len().saturating_sub(rows);
@@ -1337,9 +1354,8 @@ fn activity_sources(app: &App, workspace: &WorkspaceNode) -> String {
         .map(|at| format!("last commit {}", glance::age(app.now, at)));
     let focus = app
         .activity
-        .workspaces
-        .get(&workspace.id)
-        .map(|recorded| format!("focused {}", glance::age(app.now, recorded.focused_at)));
+        .focused_at(workspace.session.as_deref(), &workspace.id)
+        .map(|focused_at| format!("focused {}", glance::age(app.now, focused_at)));
     [commit, focus]
         .into_iter()
         .flatten()
@@ -1372,7 +1388,24 @@ fn tab_chips(app: &App, workspace: &WorkspaceNode) -> Vec<Span<'static>> {
     spans
 }
 
-fn agent_lines(app: &App, workspace: &WorkspaceNode, width: usize) -> Vec<Line<'static>> {
+/// Drops whole chips from the right until the chips fit in `room` cells.
+fn fit_chips(mut spans: Vec<Span<'static>>, room: usize) -> Vec<Span<'static>> {
+    while spans.iter().map(|span| span.width()).sum::<usize>() > room {
+        // A chip is a number and a label, and every chip after the first follows a gap.
+        spans.truncate(spans.len().saturating_sub(3));
+    }
+    spans
+}
+
+/// The AGENTS section in at most `max_lines` lines. The heading and every
+/// agent always show; subagents fill the lines that are left, and the rest
+/// collapse into a `+N more` line.
+fn agent_lines(
+    app: &App,
+    workspace: &WorkspaceNode,
+    width: usize,
+    max_lines: usize,
+) -> Vec<Line<'static>> {
     let panes: Vec<&PaneNode> = workspace
         .tabs
         .iter()
@@ -1383,6 +1416,7 @@ fn agent_lines(app: &App, workspace: &WorkspaceNode, width: usize) -> Vec<Line<'
         return Vec::new();
     }
     let dim = Style::default().fg(app.theme.subtext0);
+    let mut spare = max_lines.saturating_sub(1 + panes.len());
     let mut lines = vec![Line::styled("AGENTS", dim)];
     for pane in panes {
         let Some(agent) = pane.agent.as_ref() else {
@@ -1390,8 +1424,7 @@ fn agent_lines(app: &App, workspace: &WorkspaceNode, width: usize) -> Vec<Line<'
         };
         let since = app
             .activity
-            .panes
-            .get(&pane.id)
+            .pane(workspace.session.as_deref(), &pane.id)
             .filter(|recorded| AgentState::parse(&recorded.status) == agent.state)
             .map(|recorded| recorded.since);
         let elapsed = since
@@ -1415,8 +1448,22 @@ fn agent_lines(app: &App, workspace: &WorkspaceNode, width: usize) -> Vec<Line<'
             vec![Span::styled(elapsed, dim)],
             width,
         ));
-        for subagent in app.subagents.get(&pane.id).into_iter().flatten() {
+        let subagents = app.subagents.get(&pane.id).map_or(&[][..], Vec::as_slice);
+        let shown = if subagents.len() <= spare {
+            subagents.len()
+        } else {
+            spare.saturating_sub(1)
+        };
+        for subagent in &subagents[..shown] {
             lines.push(subagent_line(app, subagent, width));
+        }
+        spare -= shown;
+        if shown < subagents.len() && spare > 0 {
+            lines.push(Line::styled(
+                format!("  └ +{} more", subagents.len() - shown),
+                dim,
+            ));
+            spare -= 1;
         }
     }
     lines
@@ -2242,8 +2289,8 @@ mod tests {
     #[test]
     fn glance_groups_render_in_order_with_a_blank_line_between_them() {
         let mut activity = ActivityState::default();
-        activity.record_agent_status("p-helm", "working", NOW - 14 * 60);
-        activity.record_agent_status("p-skills", "blocked", NOW - 4 * 60);
+        activity.record_agent_status(None, "p-helm", "working", NOW - 14 * 60);
+        activity.record_agent_status(None, "p-skills", "blocked", NOW - 4 * 60);
         let app = glance_app(
             NOW,
             None,
@@ -2293,8 +2340,8 @@ mod tests {
     #[test]
     fn glance_rows_align_branch_and_signal_columns_across_rows() {
         let mut activity = ActivityState::default();
-        activity.record_agent_status("p-helm", "working", NOW - 14 * 60);
-        activity.record_agent_status("p-skills", "blocked", NOW - 4 * 60);
+        activity.record_agent_status(None, "p-helm", "working", NOW - 14 * 60);
+        activity.record_agent_status(None, "p-skills", "blocked", NOW - 4 * 60);
         let app = glance_app(
             NOW,
             None,
@@ -2391,7 +2438,7 @@ mod tests {
     #[test]
     fn search_keeps_the_group_layout_and_drops_non_matching_rows() {
         let mut activity = ActivityState::default();
-        activity.record_agent_status("p-skills", "blocked", NOW - 4 * 60);
+        activity.record_agent_status(None, "p-skills", "blocked", NOW - 4 * 60);
         let mut app = glance_app(
             NOW,
             None,
@@ -2455,7 +2502,7 @@ mod tests {
     #[test]
     fn working_agent_keeps_the_spinner_loop_active() {
         let mut activity = ActivityState::default();
-        activity.record_agent_status("p1", "working", NOW - 60);
+        activity.record_agent_status(None, "p1", "working", NOW - 60);
         let working = glance_app(
             NOW,
             None,
@@ -2486,12 +2533,12 @@ mod tests {
     #[test]
     fn glance_renders_a_realistic_list_at_160_by_40() {
         let mut activity = ActivityState::default();
-        activity.record_focus("w1", NOW - 6 * 60);
-        activity.record_agent_status("p-helm", "working", NOW - 14 * 60);
-        activity.record_agent_status("p-skills", "blocked", NOW - 4 * 60);
-        activity.record_agent_status("p-writing", "done", NOW - 12 * 60);
-        activity.record_agent_status("p-mdn", "working", NOW - 14 * 60);
-        activity.record_focus("w5", NOW - 38 * 60);
+        activity.record_focus(None, "w1", NOW - 6 * 60);
+        activity.record_agent_status(None, "p-helm", "working", NOW - 14 * 60);
+        activity.record_agent_status(None, "p-skills", "blocked", NOW - 4 * 60);
+        activity.record_agent_status(None, "p-writing", "done", NOW - 12 * 60);
+        activity.record_agent_status(None, "p-mdn", "working", NOW - 14 * 60);
+        activity.record_focus(None, "w5", NOW - 38 * 60);
         let mut app = glance_app(
             NOW,
             Some("w2"),
@@ -2631,7 +2678,7 @@ mod tests {
     #[test]
     fn group_jumps_land_on_group_starts_and_stop_at_the_edges() {
         let mut activity = ActivityState::default();
-        activity.record_agent_status("p-need", "blocked", NOW - 60);
+        activity.record_agent_status(None, "p-need", "blocked", NOW - 60);
         let mut app = glance_app(
             NOW,
             None,
@@ -2679,8 +2726,8 @@ mod tests {
     #[test]
     fn needs_you_jump_moves_to_the_next_waiting_row_and_wraps() {
         let mut activity = ActivityState::default();
-        activity.record_agent_status("p-first", "blocked", NOW - 60);
-        activity.record_agent_status("p-second", "done", NOW - 120);
+        activity.record_agent_status(None, "p-first", "blocked", NOW - 60);
+        activity.record_agent_status(None, "p-second", "done", NOW - 120);
         let mut app = glance_app(
             NOW,
             None,
@@ -2808,8 +2855,8 @@ mod tests {
     #[test]
     fn header_and_footer_render_at_160_and_100_columns() {
         let mut activity = ActivityState::default();
-        activity.record_agent_status("p-skills", "blocked", NOW - 4 * 60);
-        activity.record_agent_status("p-writing", "done", NOW - 12 * 60);
+        activity.record_agent_status(None, "p-skills", "blocked", NOW - 4 * 60);
+        activity.record_agent_status(None, "p-writing", "done", NOW - 12 * 60);
         let app = glance_app(
             NOW,
             None,
@@ -2887,7 +2934,7 @@ mod tests {
     #[test]
     fn needs_you_finds_and_counts_pinned_rows_that_wait_on_the_user() {
         let mut activity = ActivityState::default();
-        activity.record_agent_status("p-pinned", "blocked", NOW - 60);
+        activity.record_agent_status(None, "p-pinned", "blocked", NOW - 60);
         let mut app = glance_app(
             NOW,
             None,
@@ -3130,7 +3177,7 @@ mod tests {
         let mut agent = claude_pane();
         agent.title = Some("Port the glance detail pane".into());
         let mut activity = ActivityState::default();
-        activity.record_agent_status("p1", "working", NOW - 14 * 60);
+        activity.record_agent_status(None, "p1", "working", NOW - 14 * 60);
         let mut app = detail_app(vec![agent], 0, activity);
         app.subagents.insert(
             "p1".into(),
@@ -3151,5 +3198,172 @@ mod tests {
         if let Ok(path) = std::env::var("HELM_GLANCE_DUMP") {
             std::fs::write(path, lines.join("\n")).unwrap();
         }
+    }
+
+    fn agent_workspace(id: &str, label: &str, state: AgentState) -> WorkspaceNode {
+        let pane_id = format!("p-{label}");
+        glance_workspace(
+            id,
+            label,
+            false,
+            None,
+            vec![pane(&pane_id, "/repos", Some(("claude", state)))],
+        )
+    }
+
+    fn refresh_with(app: &mut App, workspaces: Vec<WorkspaceNode>, activity: ActivityState) {
+        app.apply_workspaces(
+            Workspaces {
+                topology: OpenTopology { workspaces },
+                activity,
+                previous: None,
+                subagents: Default::default(),
+            },
+            NOW,
+        );
+    }
+
+    fn row_titles(app: &App) -> Vec<String> {
+        app.filtered
+            .iter()
+            .map(|index| app.entries[*index].title.clone())
+            .collect()
+    }
+
+    fn working_since(sinces: &[(&str, i64)]) -> ActivityState {
+        let mut activity = ActivityState::default();
+        for (label, since) in sinces {
+            activity.record_agent_status(None, &format!("p-{label}"), "working", *since);
+        }
+        activity
+    }
+
+    #[test]
+    fn a_refresh_inside_one_group_keeps_rows_and_labels_in_place() {
+        let workspaces = || {
+            vec![
+                agent_workspace("w1", "alpha", AgentState::Working),
+                agent_workspace("w2", "bravo", AgentState::Working),
+                agent_workspace("w3", "charlie", AgentState::Working),
+            ]
+        };
+        let mut app = glance_app(
+            NOW,
+            None,
+            workspaces(),
+            working_since(&[
+                ("alpha", NOW - 60),
+                ("bravo", NOW - 120),
+                ("charlie", NOW - 180),
+            ]),
+        );
+        assert_eq!(row_titles(&app), ["alpha", "bravo", "charlie"]);
+        app.selected = 1;
+
+        refresh_with(
+            &mut app,
+            workspaces(),
+            working_since(&[
+                ("alpha", NOW - 60),
+                ("bravo", NOW - 120),
+                ("charlie", NOW - 5),
+            ]),
+        );
+
+        assert_eq!(row_titles(&app), ["alpha", "bravo", "charlie"]);
+        assert_eq!(selected_title(&app), "bravo");
+        let labelled: Vec<String> = app
+            .labelled_positions()
+            .into_iter()
+            .map(|position| app.entries[app.filtered[position]].title.clone())
+            .collect();
+        assert_eq!(labelled, ["alpha", "bravo", "charlie"]);
+    }
+
+    #[test]
+    fn a_refresh_moves_only_rows_that_change_group_and_appends_new_rows() {
+        let mut app = glance_app(
+            NOW,
+            None,
+            vec![
+                agent_workspace("w1", "alpha", AgentState::Working),
+                agent_workspace("w2", "bravo", AgentState::Working),
+                agent_workspace("w3", "charlie", AgentState::Working),
+            ],
+            working_since(&[
+                ("alpha", NOW - 60),
+                ("bravo", NOW - 120),
+                ("charlie", NOW - 180),
+            ]),
+        );
+        app.selected = 2;
+
+        refresh_with(
+            &mut app,
+            vec![
+                agent_workspace("w2", "bravo", AgentState::Working),
+                agent_workspace("w3", "charlie", AgentState::Blocked),
+                agent_workspace("w4", "delta", AgentState::Working),
+            ],
+            working_since(&[("bravo", NOW - 120), ("delta", NOW - 1)]),
+        );
+
+        assert_eq!(row_titles(&app), ["charlie", "bravo", "delta"]);
+        assert_eq!(selected_title(&app), "charlie");
+    }
+
+    fn many_subagents(count: u32) -> Vec<Subagent> {
+        (1..=count)
+            .map(|index| subagent(&format!("Subagent step {index}"), 1, 4, NOW - 60))
+            .collect()
+    }
+
+    fn crowded_detail_app() -> App {
+        let mut second = pane("p2", "/repos/helm.herdr", Some(("codex", AgentState::Idle)));
+        second.title = Some("Second agent".into());
+        let mut app = detail_app(vec![claude_pane(), second], 0, ActivityState::default());
+        app.subagents.insert("p1".into(), many_subagents(8));
+        app.cache_git(WORKSPACE_KEY.into(), dirty_git(), NOW);
+        app
+    }
+
+    #[test]
+    fn detail_keeps_every_agent_and_both_sections_at_120_by_24() {
+        let (lines, _) = render_app(&crowded_detail_app(), 120, 24);
+        let second = line_index(&lines, "codex · Second agent");
+        assert!(line_index(&lines, "AGENTS") < second);
+        assert!(second < line_index(&lines, "CHANGES · 3 files"));
+        assert!(line_index(&lines, "CHANGES · 3 files") < line_index(&lines, "RECENT COMMITS"));
+        assert!(lines.iter().any(|line| line.contains("└ +")));
+        assert!(lines.iter().any(|line| line.contains("3f1a9c0")));
+    }
+
+    #[test]
+    fn detail_keeps_every_agent_and_both_sections_at_120_by_30() {
+        let (lines, _) = render_app(&crowded_detail_app(), 120, 30);
+        let second = line_index(&lines, "codex · Second agent");
+        assert!(line_index(&lines, "Subagent step 1") < second);
+        assert!(second < line_index(&lines, "CHANGES · 3 files"));
+        assert!(line_index(&lines, "CHANGES · 3 files") < line_index(&lines, "RECENT COMMITS"));
+        assert!(lines.iter().any(|line| line.contains("3f1a9c0")));
+    }
+
+    #[test]
+    fn tab_chips_never_crowd_out_the_workspace_name() {
+        let mut app = detail_app(vec![claude_pane()], 0, ActivityState::default());
+        let workspace = &mut app.topology.workspaces[0];
+        workspace.label = "helm.herdr-glance-view".into();
+        for index in 0..6 {
+            workspace.tabs.push(TabNode {
+                id: format!("w1:extra{index}"),
+                label: format!("long tab label {index}"),
+                focused: false,
+                panes: Vec::new(),
+            });
+        }
+        app.rebuild_glance();
+        let (lines, _) = render_app(&app, 120, 30);
+        let header = &lines[line_index(&lines, "1  Agents")];
+        assert!(header.contains("helm.herdr-glance-view"), "{header}");
     }
 }

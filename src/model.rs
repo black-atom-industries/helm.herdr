@@ -4,6 +4,11 @@ use serde::{Deserialize, Serialize};
 
 use crate::paths::canonical_str;
 
+/// Identifies a Herdr id within its session. Herdr ids repeat across sessions.
+pub(crate) fn workspace_key(session: Option<&str>, id: &str) -> String {
+    format!("{}::{id}", session.unwrap_or("<default>"))
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub(crate) enum Source {
     Workspace,

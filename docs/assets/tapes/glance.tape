@@ -1,6 +1,7 @@
-# Topology view: open Helm, walk Workspace → Tab → Pane, land on the exact pane.
-# Record from a scratch directory: REPO=<repo> vhs "$REPO/docs/assets/tapes/topology.tape"
+# Glance: open Helm on the glance, move through the rows, jump a group, search, and close.
+# Record from a scratch directory: REPO=<repo> vhs "$REPO/docs/assets/tapes/glance.tape"
 # Herdr repaints its popup only on the next input, so every key is followed by Ctrl+y, which Helm ignores.
+# A row label opens its row and closes the popup, so the tape pauses on the labels without pressing one.
 
 Output frames/
 Set Shell zsh
@@ -25,22 +26,34 @@ Sleep 1s
 Ctrl+g
 Sleep 500ms
 Ctrl+y
-Sleep 1.5s
+Sleep 2s
 
-Type "J"
-Ctrl+y
-Sleep 1s
-Type "l"
-Ctrl+y
-Sleep 1s
-Type "l"
-Ctrl+y
-Sleep 1s
 Type "j"
 Ctrl+y
+Sleep 900ms
+Type "j"
+Ctrl+y
+Sleep 900ms
+Type "k"
+Ctrl+y
 Sleep 1.2s
-Enter
-Sleep 2s
+Type "]"
+Ctrl+y
+Sleep 1.2s
+
+Type "/"
+Ctrl+y
+Sleep 600ms
+Type "d"
+Sleep 400ms
+Type "o"
+Ctrl+y
+Sleep 1.5s
+Escape
+Ctrl+y
+Sleep 1.2s
+Escape
+Sleep 1.5s
 
 Hide
 Type "herdr server stop"

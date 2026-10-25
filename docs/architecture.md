@@ -33,7 +33,7 @@ Helm keeps its state in the plugin config directory (`HERDR_PLUGIN_CONFIG_DIR`).
 | --- | --- | --- |
 | `recent-workspaces.json` | Picker and jump back | Workspace IDs per Herdr session, most recent first |
 | `focused-workspace`, `jump-back-workspace` | `track-focus` | The last focused Workspace and the Previous workspace |
-| `activity.json` | `track-focus`, `track-agent` | When each Workspace was last focused and when each Pane's agent status last changed |
+| `activity.json` | `track-focus`, `track-agent`, Picker | When each Workspace was last focused and when each Pane's agent status last changed, per Herdr session |
 | `pinned-entries.json` | Picker (`^B`) | Marked Entries, which sit in the Pinned group |
 
 `activity.json` has this shape:
@@ -41,12 +41,14 @@ Helm keeps its state in the plugin config directory (`HERDR_PLUGIN_CONFIG_DIR`).
 ```json
 {
   "version": 1,
-  "workspaces": { "w1": { "focused_at": 1792931924 } },
-  "panes": { "w1:p1": { "status": "working", "since": 1792931924 } }
+  "workspaces": { "work::w1": { "focused_at": 1792931924 } },
+  "panes": { "work::w1:p1": { "status": "working", "since": 1792931924 } }
 }
 ```
 
-Times are Unix seconds. `since` changes only when the agent status changes. Opening the Picker drops Workspaces and Panes missing from the live Topology, and skips pruning when the Topology is empty. Each write replaces the file through a temporary file and a rename.
+Keys are the Herdr session name (`<default>` for the default session), `::`, and the Herdr ID, because Herdr IDs repeat across sessions. The hooks read the session from `HERDR_SESSION`, like the Picker. Times are Unix seconds. `since` changes only when the agent status changes.
+
+Opening the Picker drops the current session's Workspaces and Panes missing from the live Topology and leaves other sessions alone. It skips pruning when the Topology has no Workspaces, and keeps every Pane when it has no Panes. Each change reloads the file under an exclusive lock on `activity.json.lock`, then replaces the file through a temporary file and a rename.
 
 Herdr runs these commands as event hooks from `herdr-plugin.toml`. Each receives the event envelope as JSON in `HERDR_PLUGIN_EVENT_JSON`:
 
@@ -99,13 +101,13 @@ The glance has one row per open Workspace, in five Warmth groups:
 - **Recent**: activity within `recent_hours`.
 - **Quiet**: everything else.
 
-Activity is the newest of the Workspace's focus time, its last commit, and the newest agent status change whose status still matches the live state. Each group lists its rows by newest activity first. The Signal column shows only the age of that activity, such as `4m` or `9d`, left-aligned like the other columns. The detail pane names the sources, such as `last commit 6m · focused 38m`.
+Activity is the newest of the Workspace's focus time, its last commit, and the newest agent status change whose status still matches the live state. Opening the Picker lists each group's rows by newest activity first. The Signal column shows only the age of that activity, such as `4m` or `9d`, left-aligned like the other columns. The detail pane names the sources, such as `last commit 6m · focused 38m`. While the Picker stays open, a refresh keeps every row and its label in place: a row moves only when it changes group, new rows join the end of their group, and closed Workspaces drop out.
 
 `here` marks the focused Workspace, and `last` marks the Previous workspace. Search adds a Directories group for root and zoxide matches, and an Other group for quick action and plugin matches, both only while a Query is active. The glance reloads the Herdr snapshot and activity every 3 seconds on a background thread, and reads git identities at open and then every 30 seconds. It keeps the selection on the same Workspace.
 
-The detail pane sits beside the list when the popup is at least 110 columns wide, and takes 45% of the width. It shows the selected Workspace's name, branch and path, numbered tab chips with the focused tab filled, then its agents, uncommitted changes and recent commits. A main agent shows its state and the time since that state began. Running Claude subagents appear under their agent, with a `PROGRESS: n/m` bar read from their transcripts in `~/.claude/projects`; Helm only reads those files. The list's progress bar is the last column of a row. It sums the running subagents of a Workspace into an 8-cell bar, and shows only while the Workspace has a working agent.
+The detail pane sits beside the list when the popup is at least 110 columns wide, and takes 45% of the width. It shows the selected Workspace's name, branch and path, numbered tab chips with the focused tab filled (chips that do not fit drop from the right, so the name always shows), then its agents, uncommitted changes and recent commits. A main agent shows its state and the time since that state began. Running Claude subagents appear under their agent, with a `PROGRESS: n/m` bar read from their transcripts in `~/.claude/projects`; Helm only reads those files. `n/m` marks the start of step `n`, so a subagent on `m/m` still runs. A subagent has finished when its transcript ends with a turn that stops without a tool call, the result of its `SubagentHandback` call, or an interruption. Transcripts untouched for 10 minutes count as abandoned. Every agent always shows; when the pane is short, the subagents that do not fit collapse into a `└ +N more` line. The list's progress bar is the last column of a row. It sums the running subagents of a Workspace into an 8-cell bar, and shows only while the Workspace has a working agent.
 
-Changes and commits come from `git status`, `git diff --numstat` and `git log` on a background thread. Each Workspace's git read is kept for 10 seconds. The changes and commits lists each show up to 6 rows and share one scroll offset, which `Shift-J` and `Shift-K` move. The offset resets when the selection moves to another row.
+Changes and commits come from `git status`, `git diff --numstat` and `git log` on a background thread. Each Workspace's git read is kept for 10 seconds. The changes and commits lists each show up to 6 rows, fewer when the pane is short or the agents need the room, and share one scroll offset, which `Shift-J` and `Shift-K` move. The offset resets when the selection moves to another row.
 
 ## Sources and Enter actions
 

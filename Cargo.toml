@@ -2,6 +2,7 @@
 name = "helm-herdr"
 version = "0.6.0"
 edition = "2021"
+rust-version = "1.89"
 description = "Jump to anything in Herdr from one fuzzy navigator"
 license = "MIT"
 readme = "README.md"

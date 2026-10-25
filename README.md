@@ -55,7 +55,7 @@ The glance lists each open Workspace once, in one of five groups:
 - **Recent**: activity within `recent_hours`.
 - **Quiet**: everything else.
 
-Each group lists its rows by newest activity first. A row has these columns, left to right:
+When the Picker opens, each group lists its rows by newest activity first. A row has these columns, left to right:
 
 | Column   | Shows                                                                                   |
 | -------- | --------------------------------------------------------------------------------------- |
@@ -67,7 +67,7 @@ Each group lists its rows by newest activity first. A row has these columns, lef
 | age      | How long ago the activity that placed the row in its group happened, such as `4m`       |
 | progress | While an agent works, the summed progress of its running subagents, as an 8-cell bar   |
 
-The glance reloads Herdr's state every 3 seconds and keeps the selection on the same Workspace. Labels are hidden while you search.
+The glance reloads Herdr's state every 3 seconds and keeps the selection on the same Workspace. Rows and their labels stay in place while the Picker is open: a row moves only when it changes group, and new rows join the end of their group. Labels are hidden while you search.
 
 | Key                  | Action                                                                             |
 | -------------------- | ---------------------------------------------------------------------------------- |
@@ -95,17 +95,19 @@ Beside the list, the detail pane describes the selected Workspace. It appears wh
 - uncommitted changes
 - recent commits
 
-Changes and commits each show up to 6 rows, and `J` and `K` scroll them together. The scroll resets when the selection moves to another row.
+Changes and commits each show up to 6 rows, fewer when the pane is short, and `J` and `K` scroll them together. Every agent always shows; subagents that do not fit collapse into a `└ +N more` line. The scroll resets when the selection moves to another row.
 
 ### Subagent progress
 
 Subagent progress is read from Claude Code transcripts in `~/.claude/projects`. Helm reads those files and writes nothing. Other agents show no progress.
 
-A subagent counts as running while its transcript changed in the last 10 minutes and its newest progress line is short of its total. The subagent writes that line in its assistant messages:
+A subagent counts as running until its transcript ends: with a turn that stops without a tool call, its handback to the caller, or an interruption. A transcript untouched for 10 minutes counts as abandoned. The subagent writes its progress line in its assistant messages, at the start of each step:
 
 ```text
 PROGRESS: 3/6 · Research markers
 ```
+
+`3/6` means step 3 of 6 has begun, so `6/6` is the last step, still running.
 
 A `SubagentStart` hook can add the instruction to each subagent, so the line appears without anyone asking for it.
 

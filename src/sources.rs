@@ -34,9 +34,16 @@ impl SessionSpec {
     }
 }
 
+/// The open Workspace entries and the Workspaces per path. The third value is
+/// the raw `api snapshot` when Herdr answered with a usable one, so the caller
+/// can build the Topology from the same read.
 pub(crate) fn collect_open_topology(
     include_topology: bool,
-) -> (Vec<Entry>, HashMap<String, Vec<WorkspaceRef>>) {
+) -> (
+    Vec<Entry>,
+    HashMap<String, Vec<WorkspaceRef>>,
+    Option<Value>,
+) {
     let current_name = std::env::var("HERDR_SESSION")
         .ok()
         .filter(|name| !name.trim().is_empty());
@@ -44,6 +51,7 @@ pub(crate) fn collect_open_topology(
     let (ws_json, tab_json, pane_json) =
         session_state_with(&session, include_topology, herdr_json_args);
     let (topology, current_map) = topology_from_json(&session, &ws_json, &tab_json, &pane_json);
+    let snapshot = snapshot_is_usable(&ws_json, include_topology).then_some(ws_json);
 
     (
         if include_topology {
@@ -52,6 +60,7 @@ pub(crate) fn collect_open_topology(
             Vec::new()
         },
         current_map,
+        snapshot,
     )
 }
 

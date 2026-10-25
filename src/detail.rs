@@ -10,7 +10,7 @@ use std::{
 
 use crate::topology::OpenTopology;
 
-/// A subagent counts as running while its transcript changed this recently.
+/// A transcript untouched for this long belongs to an abandoned subagent.
 pub(crate) const RUNNING_WINDOW_SECS: i64 = 600;
 
 /// Bytes read from the end of a transcript. The newest PROGRESS line sits there.
@@ -162,8 +162,8 @@ pub(crate) fn subagent_dir(projects: &Path, cwd: &Path, session: &str) -> PathBu
     projects.join(project).join(session).join("subagents")
 }
 
-/// Subagents in `dir` that changed within `RUNNING_WINDOW_SECS` and whose last
-/// PROGRESS line is short of its total. Stale files are skipped unread.
+/// Subagents in `dir` whose transcript has a PROGRESS line and has not ended.
+/// Files untouched for `RUNNING_WINDOW_SECS` are skipped unread.
 pub(crate) fn running_subagents(dir: &Path, now: i64) -> Vec<Subagent> {
     let Ok(entries) = fs::read_dir(dir) else {
         return Vec::new();
@@ -187,10 +187,10 @@ pub(crate) fn running_subagents(dir: &Path, now: i64) -> Vec<Subagent> {
                 return None;
             }
             let tail = read_tail(&entry.path(), metadata.len(), TAIL_BYTES)?;
-            let (done, total, step) = last_progress(&tail)?;
-            if done >= total {
+            if transcript_ended(&tail) {
                 return None;
             }
+            let (done, total, step) = last_progress(&tail)?;
             let started_at = read_head(&entry.path())
                 .and_then(|head| first_timestamp(&head))
                 .unwrap_or_else(|| metadata.ctime());
@@ -253,6 +253,46 @@ fn read_head(path: &Path) -> Option<String> {
         .read_to_end(&mut bytes)
         .ok()?;
     Some(String::from_utf8_lossy(&bytes).into_owned())
+}
+
+/// Whether the last message of a transcript ends the subagent's run: a turn
+/// that stops without a tool call, the result of its `SubagentHandback` call,
+/// or an interruption by the User.
+fn transcript_ended(text: &str) -> bool {
+    let messages: Vec<serde_json::Value> = text
+        .lines()
+        .filter_map(|line| serde_json::from_str::<serde_json::Value>(line).ok())
+        .filter(|line| matches!(line["type"].as_str(), Some("user" | "assistant")))
+        .collect();
+    let Some(last) = messages.last() else {
+        return false;
+    };
+    let message = &last["message"];
+    if last["type"] == "assistant" {
+        return message["stop_reason"] == "end_turn";
+    }
+    let blocks = message["content"].as_array().map_or(&[][..], Vec::as_slice);
+    blocks.iter().any(|block| {
+        let interrupted = block["type"] == "text"
+            && block["text"]
+                .as_str()
+                .is_some_and(|text| text.starts_with("[Request interrupted by user"));
+        let handed_back = block["type"] == "tool_result"
+            && block["tool_use_id"]
+                .as_str()
+                .is_some_and(|id| handback_ids(&messages).any(|handback| handback == id));
+        interrupted || handed_back
+    })
+}
+
+fn handback_ids(messages: &[serde_json::Value]) -> impl Iterator<Item = &str> {
+    messages
+        .iter()
+        .filter(|line| line["type"] == "assistant")
+        .filter_map(|line| line["message"]["content"].as_array())
+        .flatten()
+        .filter(|block| block["type"] == "tool_use" && block["name"] == "SubagentHandback")
+        .filter_map(|block| block["id"].as_str())
 }
 
 fn last_progress(text: &str) -> Option<(u32, u32, String)> {
@@ -472,21 +512,45 @@ mod tests {
         fs::remove_dir_all(dir).unwrap();
     }
 
-    #[test]
-    fn running_subagents_skip_finished_and_stale_transcripts() {
-        let dir = scratch_dir("running");
-        let running = r#"{"type":"user","timestamp":"2000-03-01T00:00:00.000Z"}
-{"type":"assistant","message":{"content":"PROGRESS: 3/6 · Research markers"}}
-"#;
-        let finished = r#"{"type":"assistant","message":{"content":"PROGRESS: 4/4 · Done"}}
-"#;
-        fs::write(dir.join("agent-a.jsonl"), running).unwrap();
-        fs::write(dir.join("agent-b.jsonl"), finished).unwrap();
-        fs::write(dir.join("other.jsonl"), running).unwrap();
+    const FIRST_LINE: &str = r#"{"isSidechain":true,"type":"user","message":{"role":"user","content":"Port the tests"},"timestamp":"2000-03-01T00:00:00.000Z"}"#;
 
+    fn assistant_progress(progress: &str, tool: &str, id: &str) -> String {
+        format!(
+            r#"{{"isSidechain":true,"message":{{"role":"assistant","content":[{{"type":"text","text":"PROGRESS: {progress}"}},{{"type":"tool_use","id":"{id}","name":"{tool}","input":{{}}}}],"stop_reason":"tool_use"}},"type":"assistant"}}"#
+        )
+    }
+
+    fn tool_result(id: &str) -> String {
+        format!(
+            r#"{{"isSidechain":true,"type":"user","message":{{"role":"user","content":[{{"tool_use_id":"{id}","type":"tool_result","content":"ok"}}]}}}}"#
+        )
+    }
+
+    const END_TURN: &str = r#"{"isSidechain":true,"message":{"role":"assistant","content":[{"type":"text","text":"Report"}],"stop_reason":"end_turn"},"type":"assistant"}"#;
+
+    const ATTACHMENT: &str =
+        r#"{"isSidechain":true,"attachment":{"type":"prompt_snapshot"},"type":"attachment"}"#;
+
+    fn transcript(lines: &[&str]) -> String {
+        let mut text = lines.join("\n");
+        text.push('\n');
+        text
+    }
+
+    fn found(name: &str, lines: &[&str]) -> Vec<Subagent> {
+        let dir = scratch_dir(name);
+        fs::write(dir.join("agent-a.jsonl"), transcript(lines)).unwrap();
         let found = running_subagents(&dir, now());
+        fs::remove_dir_all(dir).unwrap();
+        found
+    }
+
+    #[test]
+    fn a_running_subagent_shows_its_current_step() {
+        let progress = assistant_progress("3/6 · Research markers", "Bash", "toolu_1");
+        let result = tool_result("toolu_1");
         assert_eq!(
-            found,
+            found("running", &[FIRST_LINE, &progress, &result]),
             vec![Subagent {
                 step: "Research markers".into(),
                 done: 3,
@@ -494,6 +558,39 @@ mod tests {
                 started_at: 951_868_800,
             }]
         );
+    }
+
+    #[test]
+    fn a_subagent_on_its_last_step_still_runs() {
+        let progress = assistant_progress("4/4 · Write the report", "Read", "toolu_1");
+        let result = tool_result("toolu_1");
+        let found = found("last-step", &[FIRST_LINE, &progress, &result]);
+        assert_eq!(found.len(), 1);
+        assert_eq!((found[0].done, found[0].total), (4, 4));
+    }
+
+    #[test]
+    fn a_finished_subagent_is_skipped() {
+        let progress = assistant_progress("3/4 · Write the report", "Read", "toolu_1");
+        let result = tool_result("toolu_1");
+        assert!(found("end-turn", &[FIRST_LINE, &progress, &result, END_TURN]).is_empty());
+
+        let handback = assistant_progress("3/4 · Write the report", "SubagentHandback", "toolu_2");
+        let delivered = tool_result("toolu_2");
+        assert!(found("handback", &[FIRST_LINE, &handback, &delivered, ATTACHMENT]).is_empty());
+
+        let interrupted = r#"{"type":"user","message":{"role":"user","content":[{"type":"text","text":"[Request interrupted by user]"}]}}"#;
+        assert!(found("interrupted", &[FIRST_LINE, &progress, interrupted]).is_empty());
+    }
+
+    #[test]
+    fn stale_and_foreign_transcripts_are_skipped() {
+        let dir = scratch_dir("stale");
+        let progress = assistant_progress("3/6 · Research markers", "Bash", "toolu_1");
+        let text = transcript(&[FIRST_LINE, &progress]);
+        fs::write(dir.join("agent-a.jsonl"), &text).unwrap();
+        fs::write(dir.join("other.jsonl"), &text).unwrap();
+        assert_eq!(running_subagents(&dir, now()).len(), 1);
         assert!(running_subagents(&dir, now() + RUNNING_WINDOW_SECS + 1).is_empty());
         fs::remove_dir_all(dir).unwrap();
     }

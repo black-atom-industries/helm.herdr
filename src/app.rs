@@ -15,7 +15,7 @@ use crate::{
     herdr::{herdr_json, herdr_json_args, notify_done, notify_error, run_herdr},
     integrations::{command, herdr_plus},
     matcher::match_score,
-    model::{Entry, EntryAction, Source, WorkspaceKind, WorkspaceRef},
+    model::{workspace_key, Entry, EntryAction, Source, WorkspaceKind, WorkspaceRef},
     paths::{self, canonical_str, herdr_plus_quick_actions_dir, plugin_config_dir},
     recent::RecentState,
     sources::{collect_open_topology, collect_roots, collect_zoxide},
@@ -55,6 +55,9 @@ pub(crate) struct App {
     pub(crate) topology_entries: Vec<Entry>,
     pub(crate) activity: ActivityState,
     pub(crate) glance: HashMap<String, GlanceRow>,
+    /// Position of each glance row within the glance, keyed by workspace key.
+    /// A refresh keeps it, so rows and their labels stay put while the Picker is open.
+    row_ranks: HashMap<String, (Group, usize)>,
     pub(crate) now: i64,
     pub(crate) detail_scroll: DetailScroll,
     /// Largest useful detail offset, set by the last render.
@@ -98,6 +101,7 @@ impl App {
             topology_entries: Vec::new(),
             activity: ActivityState::default(),
             glance: HashMap::new(),
+            row_ranks: HashMap::new(),
             now: 0,
             detail_scroll: DetailScroll::default(),
             detail_max_offset: 0,
@@ -112,16 +116,18 @@ impl App {
     pub(crate) fn refresh(&mut self) {
         let mut entries = Vec::new();
         let mut seen = HashSet::new();
-        let (open_entries, path_to_workspaces) =
+        let (open_entries, path_to_workspaces, snapshot) =
             collect_open_topology(self.config.sources.open_workspaces);
         self.path_to_workspaces = path_to_workspaces;
-        let mut workspaces = load_workspaces(&self.config, None);
+        let mut workspaces = load_workspaces(&self.config, None, snapshot.as_ref());
         self.recent_state = RecentState::load();
         if self.config.sources.open_workspaces {
             normalize_recent_state(&mut self.recent_state, &open_entries);
             self.recent_state.save();
         }
-        prune_activity(&workspaces.topology, &mut workspaces.activity);
+        if let Some(activity) = prune_activity(&workspaces.topology) {
+            workspaces.activity = activity;
+        }
 
         if self.config.sources.zoxide {
             push_unique(&mut entries, &mut seen, collect_zoxide());
@@ -143,6 +149,7 @@ impl App {
             read_pinned_entries(&plugin_config_dir().join(PINNED_ENTRIES_STATE_FILE))
                 .unwrap_or_default();
         self.set_workspace_state(workspaces, now_unix_secs());
+        self.row_ranks.clear();
         if migrate_legacy_topology_pins(&self.entries, &mut self.pinned_entries) {
             let _ = save_pinned_entries(
                 &plugin_config_dir().join(PINNED_ENTRIES_STATE_FILE),
@@ -213,6 +220,46 @@ impl App {
                 )
             })
             .collect();
+        self.rank_rows();
+    }
+
+    /// Orders the glance rows by group, then by newest activity. Rows ranked
+    /// before keep their place while they stay in their group; new rows and
+    /// rows that changed group follow at the end of their group.
+    fn rank_rows(&mut self) {
+        let mut fresh: Vec<(Group, Option<i64>, String)> = self
+            .topology
+            .workspaces
+            .iter()
+            .filter_map(|workspace| {
+                let key = workspace_key(workspace.session.as_deref(), &workspace.id);
+                let row = self.glance.get(&key)?;
+                Some((row.group, row.last_active, key))
+            })
+            .collect();
+        fresh.sort_by_key(|(group, last_active, _)| (*group, Reverse(*last_active)));
+        let mut ranked: Vec<(Group, (bool, usize), String)> = fresh
+            .into_iter()
+            .enumerate()
+            .map(|(fresh_rank, (group, _, key))| {
+                let kept = self
+                    .row_ranks
+                    .get(&key)
+                    .filter(|(old_group, _)| *old_group == group)
+                    .map(|(_, rank)| *rank);
+                (
+                    group,
+                    kept.map_or((true, fresh_rank), |rank| (false, rank)),
+                    key,
+                )
+            })
+            .collect();
+        ranked.sort();
+        self.row_ranks = ranked
+            .into_iter()
+            .enumerate()
+            .map(|(rank, (group, _, key))| (key, (group, rank)))
+            .collect();
     }
 
     pub(crate) fn glance_view(&self) -> bool {
@@ -240,16 +287,12 @@ impl App {
         }
     }
 
-    fn glance_order(
-        &self,
-        entry: &Entry,
-        score: i64,
-    ) -> (Group, Reverse<Option<i64>>, Reverse<i64>) {
-        match self.glance_row(entry) {
-            Some(row) => (row.group, Reverse(row.last_active), Reverse(0)),
+    fn glance_order(&self, entry: &Entry, score: i64) -> (Group, usize, Reverse<i64>) {
+        match self.row_ranks.get(&entry_identity(entry)) {
+            Some((group, rank)) => (*group, *rank, Reverse(0)),
             None => (
                 self.glance_group(entry).unwrap_or(Group::Directories),
-                Reverse(None),
+                0,
                 Reverse(score),
             ),
         }
@@ -1129,7 +1172,8 @@ pub(crate) fn track_focus(config: &Config) -> Result<(), String> {
     if config.jump_back.enabled {
         record_focused_workspace(focused)?;
     }
-    update_activity(|activity| activity.record_focus(focused, now_unix_secs()))
+    let session = current_session_name();
+    update_activity(|activity| activity.record_focus(session.as_deref(), focused, now_unix_secs()))
 }
 
 pub(crate) fn track_agent() -> Result<(), String> {
@@ -1137,7 +1181,10 @@ pub(crate) fn track_agent() -> Result<(), String> {
         .map_err(|_| "HERDR_PLUGIN_EVENT_JSON is not set".to_string())?;
     let (pane_id, status) = parse_agent_status_event(&event)?;
     let now = now_unix_secs();
-    update_activity(|activity| activity.record_agent_status(&pane_id, &status, now))
+    let session = current_session_name();
+    update_activity(|activity| {
+        activity.record_agent_status(session.as_deref(), &pane_id, &status, now)
+    })
 }
 
 #[derive(Default)]
@@ -1148,13 +1195,22 @@ pub(crate) struct Workspaces {
     pub(crate) subagents: HashMap<String, Vec<Subagent>>,
 }
 
-/// Reads the Herdr snapshot and activity. Git identities come from `cached`
-/// when given, and from git itself otherwise.
-pub(crate) fn load_workspaces(config: &Config, cached: Option<&OpenTopology>) -> Workspaces {
+/// Reads the Herdr snapshot and activity. A `snapshot` already read from Herdr
+/// is parsed instead of asking again. Git identities come from `cached` when
+/// given, and from git itself otherwise.
+pub(crate) fn load_workspaces(
+    config: &Config,
+    cached: Option<&OpenTopology>,
+    snapshot: Option<&serde_json::Value>,
+) -> Workspaces {
     let topology = if config.sources.open_workspaces {
         let session = current_session_name();
-        let mut topology =
-            topology::collect_topology(|args| herdr_json_args(args.iter().copied()), session);
+        let mut topology = snapshot
+            .map(|snapshot| topology::parse_snapshot(snapshot, session.clone()))
+            .filter(|topology| !topology.workspaces.is_empty())
+            .unwrap_or_else(|| {
+                topology::collect_topology(|args| herdr_json_args(args.iter().copied()), session)
+            });
         match cached {
             Some(cached) => reuse_git(&mut topology, cached),
             None => topology::enrich_git(&mut topology, &topology::NativeGitProbe),
@@ -1215,10 +1271,6 @@ pub(crate) struct SelectedWorkspace<'a> {
     pub(crate) key: String,
 }
 
-fn workspace_key(session: Option<&str>, id: &str) -> String {
-    format!("{}::{id}", session.unwrap_or("<default>"))
-}
-
 fn entry_identity(entry: &Entry) -> String {
     match &entry.action {
         EntryAction::FocusWorkspace { session, id } => workspace_key(session.as_deref(), id),
@@ -1226,31 +1278,18 @@ fn entry_identity(entry: &Entry) -> String {
     }
 }
 
-fn prune_activity(topology: &OpenTopology, activity: &mut ActivityState) {
+/// Prunes the stored activity against the live snapshot and returns it. An
+/// empty snapshot is a failed read, so it prunes nothing.
+fn prune_activity(topology: &OpenTopology) -> Option<ActivityState> {
     if topology.workspaces.is_empty() {
-        return;
+        return None;
     }
-    let workspaces = topology
-        .workspaces
-        .iter()
-        .map(|workspace| workspace.id.clone())
-        .collect::<Vec<_>>();
-    let panes = topology
-        .workspaces
-        .iter()
-        .flat_map(|workspace| &workspace.tabs)
-        .flat_map(|tab| &tab.panes)
-        .map(|pane| pane.id.clone())
-        .collect::<Vec<_>>();
-    activity.retain(&workspaces, &panes);
-    let _ = activity.save();
+    ActivityState::update(|activity| activity.retain_topology(topology)).ok()
 }
 
 fn update_activity(update: impl FnOnce(&mut ActivityState)) -> Result<(), String> {
-    let mut activity = ActivityState::load();
-    update(&mut activity);
-    activity
-        .save()
+    ActivityState::update(update)
+        .map(|_| ())
         .map_err(|e| format!("failed to save activity state: {e}"))
 }
 
