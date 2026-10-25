@@ -19,8 +19,13 @@ custom_sound = "" # Used only when sound = "custom"
 [jump_back]
 # Record workspace transitions and enable helm-herdr.jump-back.
 enabled = true
-# Pin the previous workspace first only in the initial unfiltered picker view.
-pin_previous = true
+
+[glance]
+# Activity inside these windows decides Active and Recent.
+active_minutes = 15
+recent_hours = 4
+# "unicode" (default) or "nerd" (needs a Nerd Font)
+icons = "unicode"
 
 [sources]
 open_workspaces = true

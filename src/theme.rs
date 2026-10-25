@@ -170,10 +170,6 @@ impl Theme {
         self.derived_background(19)
     }
 
-    pub(crate) fn cell_background(&self) -> Color {
-        self.derived_background(42)
-    }
-
     pub(crate) fn selection_background(&self, strong: bool) -> Color {
         if strong {
             self.depth_background()
@@ -950,14 +946,9 @@ mod tests {
             from_herdr_config_no_appearance(&theme_value("[theme]\nname = \"catppuccin-latte\"")),
             from_herdr_config_no_appearance(&theme_value("[theme]\nname = \"dracula\"")),
         ] {
-            let backgrounds = [
-                theme.group_background(),
-                theme.depth_background(),
-                theme.cell_background(),
-            ];
+            let backgrounds = [theme.group_background(), theme.depth_background()];
             assert!(backgrounds[0] != theme.panel_bg);
             assert!(backgrounds[0] != backgrounds[1]);
-            assert!(backgrounds[1] != backgrounds[2]);
         }
     }
 
@@ -1016,14 +1007,9 @@ mod tests {
             accent = "#123456"
             "##,
         ));
-        let backgrounds = [
-            theme.group_background(),
-            theme.depth_background(),
-            theme.cell_background(),
-        ];
+        let backgrounds = [theme.group_background(), theme.depth_background()];
 
         assert!(backgrounds[0] != backgrounds[1]);
-        assert!(backgrounds[1] != backgrounds[2]);
         assert!(backgrounds
             .iter()
             .all(|background| *background != theme.panel_bg));

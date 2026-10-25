@@ -70,15 +70,13 @@ Press `/` and type; until then, letters navigate. The topology turns into flat o
 | Row         | Comes from                     | Enter does                                                    |
 | ----------- | ------------------------------ | ------------------------------------------------------------- |
 | `workspace` | Open Workspaces                | Focus the Workspace                                           |
-| `tab`       | Open Tabs                      | Focus the Tab                                                 |
-| `pane`      | Open Panes                     | Focus the exact Pane ID                                       |
 | `zoxide`    | `zoxide query -l`              | Reuse or create a Workspace there                             |
 | `root`      | Configured `[[roots]]`         | Reuse or create a Workspace there                             |
 | `quick`     | Herdr Plus Quick Actions       | Open the Quick Actions picker                                 |
 | `plugin`    | Your `[[integrations]]`        | Run the integration's open command                            |
 | `bookmark`  | Entries marked with `Ctrl-B`, ranked first | Same as the Entry before it was marked             |
 
-The `workspace`, `tab`, and `pane` rows all come from the live session. Each `[sources]` entry in the config can be turned off, and missing optional tools drop out quietly.
+The `workspace` rows come from the live session. Each `[sources]` entry in the config can be turned off, and missing optional tools drop out quietly.
 
 | Key              | Action                                                               |
 | ---------------- | -------------------------------------------------------------------- |
@@ -110,7 +108,7 @@ command = "helm-herdr.jump-back"
 description = "jump to previous workspace"
 ```
 
-The previous Workspace also sits at the top of an unfiltered Picker. `[jump_back] pin_previous = false` turns that off, and `enabled = false` stops the recording altogether.
+The previous Workspace carries a `last` mark in the glance. `[jump_back] enabled = false` stops the recording altogether.
 
 ### Side pane
 

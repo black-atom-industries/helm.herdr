@@ -10,7 +10,7 @@ Herdr keybinding
   -> Herdr opens the configured dimensions
   -> binary runs its Picker UI
   -> collect live sources
-  -> project Query into Topology or flat Result list
+  -> project Query into the glance or a flat Result list
   -> Enter applies the selected Entry action
 ```
 
@@ -65,7 +65,8 @@ src/activity.rs  activity.json state and event payload parsing
 src/config.rs    plugin config loading and defaults
 src/model.rs     Source/Entry/EntryAction models
 src/sources.rs   source collectors
-src/topology.rs  live Workspace/Tab/Pane model and four-line blocks
+src/glance.rs    glance grouping, row signals, ages and status icons
+src/topology.rs  live Workspace/Tab/Pane model and Git identity
 src/herdr.rs     Herdr CLI and socket calls
 ```
 
@@ -73,24 +74,38 @@ src/herdr.rs     Herdr CLI and socket calls
 
 The projections are exclusive:
 
-- An empty Query with no Source filter or the Workspace Source filter shows the live Topology. Each Workspace is one fixed four-line block: Workspace identity, `tabs`, the selected Tab's `panes`, and selected Pane detail.
-- A typed Query, or any non-Workspace Source filter, shows a flat Result list. Each row is one terminal line in the order `destination | Source | symbol+word status`, with Source and status pinned to the right edge.
+- With no Source filter or the Workspace Source filter, the Picker shows the glance. A typed Query narrows its rows in place and keeps the group layout.
+- Any other Source filter shows a flat Result list. Each row is one terminal line in the order `destination | Source | symbol+word status`, with Source and status pinned to the right edge.
 
-The exact `agent` Query token scopes results to Panes running an agent. `!name` narrows agent names, `@text` matches agent workspace or status text, `/path` matches paths, and `#status` matches status text. Marked Entries use the visible `bookmark` Source while keeping one destination row.
+While a Query is active, quick action and plugin integration Entries match in an Other group after Directories. Without a Query they appear only under their Source filter.
+
+The exact `agent` Query token scopes results to Entries with an agent. `!name` narrows agent names, `@text` matches workspace or status text, `/path` matches paths, and `#status` matches status text. In the glance, `agent`, `!name`, `@text` and `#status` match a Workspace row when one of its agent panes matches the agent name or status. Marked Entries keep the visible `bookmark` Source label.
+
+## Glance
+
+The glance has one row per open Workspace, in five Warmth groups:
+
+- **Pinned**: Marked Workspaces only.
+- **Needs you**: an agent that is waiting, blocked or done.
+- **Active**: a working agent, or activity within `active_minutes`.
+- **Recent**: activity within `recent_hours`.
+- **Quiet**: everything else.
+
+Activity is the newest of the Workspace's focus time, its last commit, and the newest agent status change whose status still matches the live state. Each group lists its rows by newest activity first. The Signal text names the fact that placed the row in its group, such as `waiting 4m`, `commit 6m`, `focus 38m` or `9d`.
+
+`here` marks the focused Workspace, and `last` marks the Previous workspace. Search adds a Directories group for root and zoxide matches, and an Other group for quick action and plugin matches, both only while a Query is active. The glance reloads the Herdr snapshot and activity every 3 seconds on a background thread, and reads git identities at open and then every 30 seconds. It keeps the selection on the same Workspace.
 
 ## Sources and Enter actions
 
 | Source | Enter action |
 | --- | --- |
 | `workspace` | Focus the exact Workspace ID |
-| `tab` | Focus the exact Tab ID |
-| `pane` | Call Herdr `pane.focus` with the exact `pane_id` |
 | `zoxide` / `root` | Reuse or create a directory Workspace; `Alt-Enter` applies the directory template |
 | `quick` | Invoke the Herdr Plus Quick Actions picker |
 | `plugin` | Run the integration's configured open command |
 | `bookmark` | Apply the marked Entry's underlying action |
 
-Topology navigation uses Workspace, Tab, and Pane depth. `Up`/`Down` move through Workspaces and return from child depth; `Right` enters or advances child selections; `Left` returns to the parent depth; `Tab`/`Shift-Tab` advance or move back within the active child depth. `[` and `]` move between Workspaces from any depth. Enter always applies the action for the exact selected Workspace, Tab, or Pane.
+`Up`/`Down` (`k`/`j`) move through the visible rows across groups, and Enter applies the Entry action for the selected row.
 
 ## Side behavior
 
@@ -105,7 +120,7 @@ Helm integrates with Herdr Plus without copying its UI:
 
 ## Configuration boundary
 
-Current Picker keys are `reuse_existing`, `create_missing`, `engine`, `source_order`, `source_priority_boost`, `check_updates`, `directory_template`, `directory_template_key`, and `[picker.filter_keys]`. Other current sections are `[notifications]`, `[jump_back]`, `[sources]`, `[[roots]]`, and `[[integrations]]`.
+Current Picker keys are `reuse_existing`, `create_missing`, `engine`, `source_order`, `source_priority_boost`, `check_updates`, `directory_template`, `directory_template_key`, and `[picker.filter_keys]`. Other current sections are `[notifications]`, `[jump_back]`, `[glance]`, `[sources]`, `[[roots]]`, and `[[integrations]]`. `[glance]` holds `active_minutes`, `recent_hours` and `icons`.
 
 ## Color boundary
 

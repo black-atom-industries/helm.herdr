@@ -60,13 +60,17 @@ custom_sound = "" # Example: "~/sounds/helm.wav"
 # The global keybinding itself belongs in Herdr's main config; see README.md.
 enabled = true
 
-# Put the previous workspace first when the picker opens with no query or source filter.
-# This only changes the initial view; typed searches and Ctrl source filters keep normal ranking.
-pin_previous = true
+[glance]
+# Activity inside these windows decides the Active and Recent groups.
+# Older workspaces fall into Quiet.
+active_minutes = 15
+recent_hours = 4
+# "unicode" (default) or "nerd" (needs a Nerd Font)
+icons = "unicode"
 
 [sources]
-# Live Open topology for workspaces and tabs in the current session.
-# Selecting a row focuses that exact workspace or tab.
+# Open workspaces in the current session, shown in the glance.
+# Selecting a row focuses that workspace.
 open_workspaces = true
 
 # zoxide history from `zoxide query -l`.

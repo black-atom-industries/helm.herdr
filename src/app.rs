@@ -1,4 +1,5 @@
 use std::{
+    cmp::Reverse,
     collections::{HashMap, HashSet},
     env, fs,
     path::Path,
@@ -9,6 +10,7 @@ use serde::{Deserialize, Serialize};
 use crate::{
     activity::{now_unix_secs, parse_agent_status_event, ActivityState},
     config::Config,
+    glance::{self, GlanceRow, Group, Thresholds},
     herdr::{herdr_json, herdr_json_args, notify_done, notify_error, run_herdr},
     integrations::{command, herdr_plus},
     matcher::match_score,
@@ -17,7 +19,7 @@ use crate::{
     recent::RecentState,
     sources::{collect_open_topology, collect_roots, collect_zoxide},
     theme::Theme,
-    topology::{self, ChildSelection, OpenTopology, TopologyCursor, TopologyDepth},
+    topology::{self, OpenTopology},
 };
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -25,12 +27,6 @@ pub(crate) enum InputMode {
     Normal,
     Search,
     Help,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum ProjectionKind {
-    Topology,
-    Results,
 }
 
 #[cfg(test)]
@@ -56,8 +52,9 @@ pub(crate) struct App {
     pub(crate) update_available: Option<String>,
     pub(crate) topology: OpenTopology,
     pub(crate) topology_entries: Vec<Entry>,
-    pub(crate) topology_cursor: TopologyCursor,
-    pub(crate) topology_memory: HashMap<String, ChildSelection>,
+    pub(crate) activity: ActivityState,
+    pub(crate) glance: HashMap<String, GlanceRow>,
+    pub(crate) now: i64,
     #[cfg(test)]
     pub(crate) herdr_control: Option<Box<dyn HerdrControl>>,
     initial_selection_pending: bool,
@@ -83,8 +80,9 @@ impl App {
             update_available: None,
             topology: OpenTopology::default(),
             topology_entries: Vec::new(),
-            topology_cursor: TopologyCursor::default(),
-            topology_memory: HashMap::new(),
+            activity: ActivityState::default(),
+            glance: HashMap::new(),
+            now: 0,
             #[cfg(test)]
             herdr_control: None,
             initial_selection_pending: true,
@@ -97,21 +95,13 @@ impl App {
         let (open_entries, path_to_workspaces) =
             collect_open_topology(self.config.sources.open_workspaces);
         self.path_to_workspaces = path_to_workspaces;
-        self.topology = if self.config.sources.open_workspaces {
-            let session = current_session_name();
-            let mut topology =
-                topology::collect_topology(|args| herdr_json_args(args.iter().copied()), session);
-            topology::enrich_git(&mut topology, &topology::NativeGitProbe);
-            topology
-        } else {
-            OpenTopology::default()
-        };
+        let mut workspaces = load_workspaces(&self.config, None);
         self.recent_state = RecentState::load();
         if self.config.sources.open_workspaces {
             normalize_recent_state(&mut self.recent_state, &open_entries);
             self.recent_state.save();
         }
-        prune_activity(&self.topology);
+        prune_activity(&workspaces.topology, &mut workspaces.activity);
 
         if self.config.sources.zoxide {
             push_unique(&mut entries, &mut seen, collect_zoxide());
@@ -128,182 +118,126 @@ impl App {
             command::collect(&self.config.integrations),
         );
 
-        self.topology_entries = topology::query_entries(&self.topology);
-        entries.extend(self.topology_entries.iter().cloned());
         self.entries = entries;
         self.pinned_entries =
             read_pinned_entries(&plugin_config_dir().join(PINNED_ENTRIES_STATE_FILE))
                 .unwrap_or_default();
+        self.set_workspace_state(workspaces, now_unix_secs());
         if migrate_legacy_topology_pins(&self.entries, &mut self.pinned_entries) {
             let _ = save_pinned_entries(
                 &plugin_config_dir().join(PINNED_ENTRIES_STATE_FILE),
                 &self.pinned_entries,
             );
         }
-        self.previous_workspace_id =
-            if self.config.jump_back.enabled && self.config.jump_back.pin_previous {
-                read_previous_workspace().ok()
-            } else {
-                None
-            };
-        self.sort_topology();
-        self.sync_topology_cursor();
+        self.rebuild_glance();
         self.apply_filter();
     }
 
-    pub(crate) fn projection_kind(&self) -> ProjectionKind {
-        if self.query.trim().is_empty()
-            && self
-                .source_filter
-                .as_ref()
-                .is_none_or(|source| *source == Source::Workspace)
-        {
-            ProjectionKind::Topology
-        } else {
-            ProjectionKind::Results
+    /// Replaces the live workspaces from a background reload and keeps the
+    /// selected entry on the same destination.
+    pub(crate) fn apply_workspaces(&mut self, workspaces: Workspaces, now: i64) {
+        // A failed Herdr read comes back empty. Keep the last good list instead.
+        if workspaces.topology.workspaces.is_empty() && !self.topology.workspaces.is_empty() {
+            return;
+        }
+        let selected = self.selected_entry().map(entry_identity);
+        self.set_workspace_state(workspaces, now);
+        self.rebuild_glance();
+        self.apply_filter();
+        if let Some(selected) = selected {
+            if let Some(position) = self
+                .filtered
+                .iter()
+                .position(|index| entry_identity(&self.entries[*index]) == selected)
+            {
+                self.selected = position;
+            }
         }
     }
 
-    pub(crate) fn topology_view(&self) -> bool {
-        self.projection_kind() == ProjectionKind::Topology
+    fn set_workspace_state(&mut self, workspaces: Workspaces, now: i64) {
+        self.topology = workspaces.topology;
+        self.activity = workspaces.activity;
+        self.previous_workspace_id = workspaces.previous;
+        self.now = now;
+        self.topology_entries = topology::query_entries(&self.topology);
+        self.entries
+            .retain(|entry| entry.source != Source::Workspace);
+        self.entries.extend(self.topology_entries.iter().cloned());
     }
 
-    fn topology_workspace_key(workspace: &crate::topology::WorkspaceNode) -> String {
-        format!(
-            "{}::{}",
-            workspace.session.as_deref().unwrap_or("<default>"),
-            workspace.id
-        )
-    }
-
-    fn sort_topology(&mut self) {
-        let previous = self.previous_workspace_id.as_deref();
-        self.topology.workspaces.sort_by_key(|workspace| {
-            let current = workspace.focused;
-            let is_previous = !current && previous == Some(workspace.id.as_str());
-            let recent = self
-                .recent_state
-                .recent_ids(workspace.session.as_deref())
-                .iter()
-                .position(|id| id == &workspace.id)
-                .unwrap_or(usize::MAX);
-            (!current, !is_previous, recent)
-        });
-    }
-
-    pub(crate) fn sync_topology_cursor(&mut self) {
-        let live = self
+    pub(crate) fn rebuild_glance(&mut self) {
+        let thresholds = Thresholds {
+            active_secs: self.config.glance.active_minutes * 60,
+            recent_secs: self.config.glance.recent_hours * 3_600,
+        };
+        self.glance = self
             .topology
             .workspaces
             .iter()
-            .map(Self::topology_workspace_key)
-            .collect::<HashSet<_>>();
-        self.topology_memory.retain(|key, _| live.contains(key));
-        self.topology_cursor = TopologyCursor::new(&self.topology);
-        for (index, workspace) in self.topology.workspaces.iter().enumerate() {
-            if let Some(selection) = self
-                .topology_memory
-                .get(&Self::topology_workspace_key(workspace))
-            {
-                self.topology_cursor.selection[index] = *selection;
-            }
-        }
-        self.topology_cursor.clamp(&self.topology);
+            .map(|workspace| {
+                let pinned = self
+                    .topology_entries
+                    .iter()
+                    .find(|entry| {
+                        matches!(&entry.action, EntryAction::FocusWorkspace { session, id } if id == &workspace.id && session == &workspace.session)
+                    })
+                    .is_some_and(|entry| self.is_pinned(entry));
+                let evidence = glance::evidence(workspace, &self.activity, pinned);
+                let previous = self.previous_workspace_id.as_deref() == Some(workspace.id.as_str());
+                let row = glance::row(workspace, &evidence, previous, self.now, thresholds);
+                (
+                    workspace_key(workspace.session.as_deref(), &workspace.id),
+                    row,
+                )
+            })
+            .collect();
     }
 
-    pub(crate) fn remember_topology_selection(&mut self) {
-        if let Some(workspace) = self.topology.workspaces.get(self.topology_cursor.workspace) {
-            self.topology_memory.insert(
-                Self::topology_workspace_key(workspace),
-                self.topology_cursor.selection[self.topology_cursor.workspace],
-            );
+    pub(crate) fn glance_view(&self) -> bool {
+        self.source_filter
+            .as_ref()
+            .is_none_or(|source| *source == Source::Workspace)
+    }
+
+    pub(crate) fn glance_row(&self, entry: &Entry) -> Option<&GlanceRow> {
+        match (&entry.source, &entry.action) {
+            (Source::Workspace, EntryAction::FocusWorkspace { session, id }) => {
+                self.glance.get(&workspace_key(session.as_deref(), id))
+            }
+            _ => None,
         }
     }
 
-    pub(crate) fn topology_move_vertical(&mut self, delta: isize) {
-        if !self.topology_view() {
-            if delta.is_negative() {
-                self.prev();
-            } else {
-                self.next();
-            }
-            return;
+    /// The glance group of an entry shown in the glance view. Directories are
+    /// only shown while searching, so every other Source returns `None`.
+    pub(crate) fn glance_group(&self, entry: &Entry) -> Option<Group> {
+        match entry.source {
+            Source::Zoxide | Source::Root => Some(Group::Directories),
+            Source::QuickAction | Source::Integration => Some(Group::Other),
+            _ => self.glance_row(entry).map(|row| row.group),
         }
-        self.remember_topology_selection();
-        match (self.topology_cursor.depth, delta) {
-            (TopologyDepth::Workspace, _) => {
-                self.topology_cursor.move_workspace(&self.topology, delta)
-            }
-            (TopologyDepth::Tab, d) if d.is_negative() => self.topology_cursor.leave_to_workspace(),
-            (TopologyDepth::Tab, _) => self.topology_cursor.enter_pane(&self.topology),
-            (TopologyDepth::Pane, d) if d.is_negative() => self.topology_cursor.leave_to_tab(),
-            (TopologyDepth::Pane, d) if d.is_positive() => {
-                let workspace = self.topology_cursor.workspace;
-                self.topology_cursor.move_workspace(&self.topology, 1);
-                if self.topology_cursor.workspace != workspace {
-                    self.topology_cursor.leave_to_tab();
-                }
-            }
-            (TopologyDepth::Pane, _) => {}
-        }
-        self.topology_cursor.clamp(&self.topology);
     }
 
-    pub(crate) fn topology_move_horizontal(&mut self, delta: isize) {
-        if !self.topology_view() {
-            return;
+    fn glance_order(
+        &self,
+        entry: &Entry,
+        score: i64,
+    ) -> (Group, Reverse<Option<i64>>, Reverse<i64>) {
+        match self.glance_row(entry) {
+            Some(row) => (row.group, Reverse(row.last_active), Reverse(0)),
+            None => (
+                self.glance_group(entry).unwrap_or(Group::Directories),
+                Reverse(None),
+                Reverse(score),
+            ),
         }
-        self.remember_topology_selection();
-        match self.topology_cursor.depth {
-            TopologyDepth::Workspace if delta.is_positive() => {
-                self.topology_cursor.enter_tab(&self.topology)
-            }
-            TopologyDepth::Workspace => {}
-            TopologyDepth::Tab => self.topology_cursor.move_tab(&self.topology, delta),
-            TopologyDepth::Pane => self.topology_cursor.move_pane(&self.topology, delta),
-        }
-        self.topology_cursor.clamp(&self.topology);
-    }
-
-    pub(crate) fn topology_move_workspace(&mut self, delta: isize) {
-        if !self.topology_view() {
-            return;
-        }
-        self.remember_topology_selection();
-        self.topology_cursor.move_workspace(&self.topology, delta);
-        self.topology_cursor.clamp(&self.topology);
-    }
-
-    pub(crate) fn topology_selected_entry(&self) -> Option<&Entry> {
-        let workspace = self
-            .topology
-            .workspaces
-            .get(self.topology_cursor.workspace)?;
-        let entry = match self.topology_cursor.depth {
-            TopologyDepth::Workspace => self
-                .topology_entries
-                .iter()
-                .find(|entry| matches!(&entry.action, EntryAction::FocusWorkspace { session, id } if id == &workspace.id && session == &workspace.session)),
-            TopologyDepth::Tab => {
-                let tab = workspace.tabs.get(self.topology_cursor.selection[self.topology_cursor.workspace].tab)?;
-                self.topology_entries.iter().find(|entry| matches!(&entry.action, EntryAction::FocusTab { session, id } if id == &tab.id && session == &workspace.session))
-            }
-            TopologyDepth::Pane => {
-                let selected = self.topology_cursor.selection[self.topology_cursor.workspace];
-                let pane = workspace.tabs.get(selected.tab)?.panes.get(selected.pane)?;
-                self.topology_entries.iter().find(|entry| matches!(&entry.action, EntryAction::FocusPane { session, id } if id == &pane.id && session == &workspace.session))
-            }
-        }?;
-        Some(entry)
     }
 
     pub(crate) fn apply_filter(&mut self) {
         let query = Query::parse(&self.query);
         let searching = !self.query.trim().is_empty();
-        let pin_previous = self.config.jump_back.enabled
-            && self.config.jump_back.pin_previous
-            && !searching
-            && self.source_filter.is_none();
+        let glance = self.glance_view();
 
         for entry in &mut self.entries {
             if entry.source_name() == "bookmark" {
@@ -321,6 +255,13 @@ impl App {
                     continue;
                 }
             }
+            if glance {
+                match self.glance_group(entry) {
+                    Some(Group::Directories | Group::Other) if !searching => continue,
+                    Some(_) => {}
+                    None => continue,
+                }
+            }
             if !query.filters_match(entry) {
                 continue;
             }
@@ -333,29 +274,24 @@ impl App {
                 scored.push((score + bonus, idx));
             }
         }
-        scored.sort_by(|(score_a, idx_a), (score_b, idx_b)| {
-            let user_pinned_a = self.is_pinned(&self.entries[*idx_a]);
-            let user_pinned_b = self.is_pinned(&self.entries[*idx_b]);
-            let previous_pinned_a = pin_previous
-                && self.entries[*idx_a].source == Source::Workspace
-                && self.entries[*idx_a].workspace_id.as_deref()
-                    == self.previous_workspace_id.as_deref();
-            let previous_pinned_b = pin_previous
-                && self.entries[*idx_b].source == Source::Workspace
-                && self.entries[*idx_b].workspace_id.as_deref()
-                    == self.previous_workspace_id.as_deref();
-            previous_pinned_b
-                .cmp(&previous_pinned_a)
-                .then_with(|| user_pinned_b.cmp(&user_pinned_a))
-                .then_with(|| score_b.cmp(score_a))
-                .then_with(|| {
-                    self.config
-                        .picker
-                        .source_rank(&self.entries[*idx_a].source)
-                        .cmp(&self.config.picker.source_rank(&self.entries[*idx_b].source))
-                })
-                .then_with(|| idx_a.cmp(idx_b))
-        });
+        if glance {
+            scored.sort_by_key(|(score, idx)| self.glance_order(&self.entries[*idx], *score));
+        } else {
+            scored.sort_by(|(score_a, idx_a), (score_b, idx_b)| {
+                let user_pinned_a = self.is_pinned(&self.entries[*idx_a]);
+                let user_pinned_b = self.is_pinned(&self.entries[*idx_b]);
+                user_pinned_b
+                    .cmp(&user_pinned_a)
+                    .then_with(|| score_b.cmp(score_a))
+                    .then_with(|| {
+                        self.config
+                            .picker
+                            .source_rank(&self.entries[*idx_a].source)
+                            .cmp(&self.config.picker.source_rank(&self.entries[*idx_b].source))
+                    })
+                    .then_with(|| idx_a.cmp(idx_b))
+            });
+        }
 
         self.filtered = Vec::new();
         self.filtered_scores = Vec::new();
@@ -363,7 +299,7 @@ impl App {
             self.filtered.push(index);
             self.filtered_scores.push(score);
         }
-        self.selected = if searching {
+        self.selected = if searching && !glance {
             self.best_search_position(&query).unwrap_or(0)
         } else {
             0
@@ -456,12 +392,7 @@ impl App {
     }
 
     pub(crate) fn toggle_selected_pin(&mut self) -> Result<(), String> {
-        let entry = if self.topology_view() {
-            self.topology_selected_entry()
-        } else {
-            self.selected_entry()
-        }
-        .ok_or("nothing selected")?;
+        let entry = self.selected_entry().ok_or("nothing selected")?;
         let key = pin_key(entry);
         let legacy_key = legacy_current_workspace_pin_key(entry);
         let mut pinned = self.pinned_entries.clone();
@@ -477,6 +408,7 @@ impl App {
             &pinned,
         )?;
         self.pinned_entries = pinned;
+        self.rebuild_glance();
         self.apply_filter();
         Ok(())
     }
@@ -510,12 +442,7 @@ impl App {
     }
 
     pub(crate) fn open_selected(&mut self, use_directory_template: bool) -> Result<(), String> {
-        let e = if self.topology_view() {
-            self.topology_selected_entry().cloned()
-        } else {
-            self.selected_entry().cloned()
-        }
-        .ok_or("nothing selected")?;
+        let e = self.selected_entry().cloned().ok_or("nothing selected")?;
         let action_destination = recent_destination_for_entry(&e);
         let (result, notify_success, notify_failure) = match &e.action {
             EntryAction::FocusPane { .. }
@@ -851,6 +778,10 @@ fn all_match_either(tokens: &[String], left: &str, right: &str) -> bool {
 
 fn is_agent_entry(entry: &Entry) -> bool {
     entry.agent_target.is_some()
+        || entry
+            .search_terms
+            .iter()
+            .any(|term| term.starts_with("agent-name:"))
 }
 
 fn ordinary_source_label(entry: &Entry) -> &'static str {
@@ -863,29 +794,40 @@ fn ordinary_source_label(entry: &Entry) -> &'static str {
 }
 
 fn status_text(entry: &Entry) -> String {
-    entry
+    let statuses = entry
         .search_terms
         .iter()
-        .find_map(|term| term.strip_prefix("agent-status:"))
-        .map(str::to_string)
-        .unwrap_or_else(|| {
-            entry
-                .subtitle
-                .split('·')
-                .next()
-                .unwrap_or(&entry.subtitle)
-                .trim()
-                .to_lowercase()
-        })
+        .filter_map(|term| term.strip_prefix("agent-status:"))
+        .collect::<Vec<_>>();
+    if statuses.is_empty() {
+        entry
+            .subtitle
+            .split('·')
+            .next()
+            .unwrap_or(&entry.subtitle)
+            .trim()
+            .to_lowercase()
+    } else {
+        statuses.join(" ")
+    }
 }
 
 fn agent_text(entry: &Entry) -> String {
-    entry
-        .title
-        .split('·')
-        .next()
-        .unwrap_or(&entry.title)
-        .to_string()
+    let names = entry
+        .search_terms
+        .iter()
+        .filter_map(|term| term.strip_prefix("agent-name:"))
+        .collect::<Vec<_>>();
+    if names.is_empty() {
+        entry
+            .title
+            .split('·')
+            .next()
+            .unwrap_or(&entry.title)
+            .to_string()
+    } else {
+        names.join(" ")
+    }
 }
 
 fn workspace_text(entry: &Entry) -> String {
@@ -984,7 +926,79 @@ pub(crate) fn track_agent() -> Result<(), String> {
     update_activity(|activity| activity.record_agent_status(&pane_id, &status, now))
 }
 
-fn prune_activity(topology: &OpenTopology) {
+pub(crate) struct Workspaces {
+    pub(crate) topology: OpenTopology,
+    pub(crate) activity: ActivityState,
+    pub(crate) previous: Option<String>,
+}
+
+/// Reads the Herdr snapshot and activity. Git identities come from `cached`
+/// when given, and from git itself otherwise.
+pub(crate) fn load_workspaces(config: &Config, cached: Option<&OpenTopology>) -> Workspaces {
+    let topology = if config.sources.open_workspaces {
+        let session = current_session_name();
+        let mut topology =
+            topology::collect_topology(|args| herdr_json_args(args.iter().copied()), session);
+        match cached {
+            Some(cached) => reuse_git(&mut topology, cached),
+            None => topology::enrich_git(&mut topology, &topology::NativeGitProbe),
+        }
+        topology
+    } else {
+        OpenTopology::default()
+    };
+    Workspaces {
+        topology,
+        activity: ActivityState::load(),
+        previous: config
+            .jump_back
+            .enabled
+            .then(|| read_previous_workspace().ok())
+            .flatten(),
+    }
+}
+
+/// Copies git identities from `cached`. Workspaces the cache does not know
+/// are enriched right away.
+fn reuse_git(topology: &mut OpenTopology, cached: &OpenTopology) {
+    let mut unknown = Vec::new();
+    for (index, workspace) in topology.workspaces.iter_mut().enumerate() {
+        match cached
+            .workspaces
+            .iter()
+            .find(|known| known.id == workspace.id && known.session == workspace.session)
+        {
+            Some(known) => workspace.git = known.git.clone(),
+            None => unknown.push(index),
+        }
+    }
+    if unknown.is_empty() {
+        return;
+    }
+    let mut probe = OpenTopology {
+        workspaces: unknown
+            .iter()
+            .map(|index| topology.workspaces[*index].clone())
+            .collect(),
+    };
+    topology::enrich_git(&mut probe, &topology::NativeGitProbe);
+    for (index, enriched) in unknown.into_iter().zip(probe.workspaces) {
+        topology.workspaces[index].git = enriched.git;
+    }
+}
+
+fn workspace_key(session: Option<&str>, id: &str) -> String {
+    format!("{}::{id}", session.unwrap_or("<default>"))
+}
+
+fn entry_identity(entry: &Entry) -> String {
+    match &entry.action {
+        EntryAction::FocusWorkspace { session, id } => workspace_key(session.as_deref(), id),
+        _ => entry.key(),
+    }
+}
+
+fn prune_activity(topology: &OpenTopology, activity: &mut ActivityState) {
     if topology.workspaces.is_empty() {
         return;
     }
@@ -1000,7 +1014,6 @@ fn prune_activity(topology: &OpenTopology) {
         .flat_map(|tab| &tab.panes)
         .map(|pane| pane.id.clone())
         .collect::<Vec<_>>();
-    let mut activity = ActivityState::load();
     activity.retain(&workspaces, &panes);
     let _ = activity.save();
 }
@@ -1141,7 +1154,7 @@ fn migrate_legacy_topology_pins(entries: &[Entry], pins: &mut HashSet<String>) -
     changed
 }
 
-fn pin_key(entry: &Entry) -> String {
+pub(crate) fn pin_key(entry: &Entry) -> String {
     match &entry.action {
         EntryAction::FocusWorkspace { session, id, .. } => {
             topology_workspace_pin_key(session.as_deref(), id)
@@ -1190,6 +1203,10 @@ fn push_unique(entries: &mut Vec<Entry>, seen: &mut HashSet<String>, incoming: V
 
 #[cfg(test)]
 mod tests {
+    use crate::{
+        glance::Group,
+        topology::{AgentMeta, AgentState, GitHead, GitIdentity, PaneNode, TabNode, WorkspaceNode},
+    };
     use std::{
         env,
         ffi::OsString,
@@ -1201,6 +1218,8 @@ mod tests {
 
     #[cfg(unix)]
     use std::os::unix::fs::PermissionsExt;
+
+    const NOW: i64 = 1_000_000;
 
     use super::*;
     use crate::{
@@ -1355,7 +1374,6 @@ exit 0
         config.sources.zoxide = false;
         config.sources.roots = false;
         config.sources.herdr_plus_quick_actions = false;
-        config.jump_back.pin_previous = false;
         config
     }
 
@@ -1367,94 +1385,14 @@ exit 0
     }
 
     #[test]
-    fn initial_topology_selection_starts_at_workspace_depth() {
-        let mut app = App::new(Config::default(), Theme::terminal());
-        app.topology = OpenTopology {
-            workspaces: vec![
-                crate::topology::WorkspaceNode {
-                    id: "w1".into(),
-                    label: "web-ui".into(),
-                    session: Some("dev".into()),
-                    focused: true,
-                    tabs: vec![
-                        crate::topology::TabNode {
-                            id: "t1".into(),
-                            label: "Code".into(),
-                            focused: false,
-                            panes: vec![],
-                        },
-                        crate::topology::TabNode {
-                            id: "t2".into(),
-                            label: "Edit".into(),
-                            focused: true,
-                            panes: vec![],
-                        },
-                    ],
-                    git: None,
-                },
-                crate::topology::WorkspaceNode {
-                    id: "w2".into(),
-                    label: "api".into(),
-                    session: Some("dev".into()),
-                    focused: false,
-                    tabs: vec![],
-                    git: None,
-                },
-            ],
-        };
-
-        app.sync_topology_cursor();
-
-        assert_eq!(app.topology_cursor.depth, TopologyDepth::Workspace);
-        assert_eq!(app.topology_cursor.selection[0].tab, 1);
-        app.topology_move_vertical(1);
-        assert_eq!(app.topology_cursor.workspace, 1);
-    }
-
-    #[test]
-    fn first_query_character_projects_flat_direct_destinations() {
-        let mut app = App::new(Config::default(), Theme::terminal());
-        app.topology = OpenTopology {
-            workspaces: vec![crate::topology::WorkspaceNode {
-                id: "w1".into(),
-                label: "web-ui".into(),
-                session: Some("dev".into()),
-                focused: true,
-                tabs: vec![crate::topology::TabNode {
-                    id: "t1".into(),
-                    label: "Code".into(),
-                    focused: true,
-                    panes: vec![crate::topology::PaneNode {
-                        id: "p1".into(),
-                        label: "Shell".into(),
-                        cwd: "/repo".into(),
-                        focused: true,
-                        title: None,
-                        agent: None,
-                    }],
-                }],
-                git: None,
-            }],
-        };
-        app.topology_entries = topology::query_entries(&app.topology);
-        app.entries = app.topology_entries.clone();
-        app.query = "s".into();
-        app.apply_filter();
-
-        assert!(!app.topology_view());
-        let selected = app.selected_entry().expect("flat result");
-        assert_eq!(selected.source_name(), "pane");
-        assert!(matches!(selected.action, EntryAction::FocusPane { .. }));
-    }
-
-    #[test]
     fn exact_agent_token_is_a_trait_predicate_and_agents_is_plain_text() {
         let mut app = App::new(Config::default(), Theme::terminal());
-        let mut agent = entry(Source::Workspace, "/tmp", "Codex");
+        let mut agent = entry(Source::Integration, "/tmp", "Codex");
         agent.agent_target = Some("p1".into());
-        let tab = entry(Source::Workspace, "/tmp", "Agents");
+        let tab = entry(Source::Integration, "/tmp", "Agents");
         app.entries = vec![agent, tab];
 
+        app.source_filter = Some(Source::Integration);
         app.query = "agent".into();
         app.apply_filter();
         assert_eq!(app.filtered.len(), 1);
@@ -1485,50 +1423,11 @@ exit 0
         app.entries = vec![entry(Source::Root, "/tmp/project", "Project")];
         let key = pin_key(&app.entries[0]);
         app.pinned_entries.insert(key);
+        app.source_filter = Some(Source::Root);
         app.apply_filter();
 
         assert_eq!(app.filtered.len(), 1);
         assert_eq!(app.selected_entry().unwrap().source_name(), "bookmark");
-    }
-
-    #[test]
-    fn previous_workspace_is_pinned_only_on_initial_unfiltered_view() {
-        let mut app = App::new(Config::default(), Theme::terminal());
-        let mut alpha = entry(Source::Workspace, "/alpha", "alpha");
-        alpha.workspace_id = Some("w1".into());
-        alpha.action = EntryAction::FocusWorkspace {
-            session: None,
-            id: "w1".into(),
-        };
-        let mut zulu = entry(Source::Workspace, "/zulu", "zulu");
-        zulu.workspace_id = Some("w2".into());
-        zulu.action = EntryAction::FocusWorkspace {
-            session: None,
-            id: "w2".into(),
-        };
-        app.entries = vec![alpha, zulu];
-        app.previous_workspace_id = Some("w2".into());
-
-        app.apply_filter();
-        assert_eq!(
-            app.selected_entry().unwrap().workspace_id.as_deref(),
-            Some("w2")
-        );
-
-        app.source_filter = Some(Source::Workspace);
-        app.apply_filter();
-        assert_eq!(
-            app.selected_entry().unwrap().workspace_id.as_deref(),
-            Some("w1")
-        );
-
-        app.source_filter = None;
-        app.config.jump_back.pin_previous = false;
-        app.apply_filter();
-        assert_eq!(
-            app.selected_entry().unwrap().workspace_id.as_deref(),
-            Some("w1")
-        );
     }
 
     #[test]
@@ -1539,6 +1438,7 @@ exit 0
             entry(Source::Zoxide, "/alpha", "alpha"),
         ];
 
+        app.source_filter = Some(Source::Zoxide);
         app.apply_filter();
 
         assert_eq!(app.selected_entry().unwrap().title, "zulu");
@@ -1552,7 +1452,7 @@ exit 0
             entry(Source::Root, "/zulu", "zulu"),
         ];
         app.pinned_entries.insert(pin_key(&app.entries[1]));
-
+        app.source_filter = Some(Source::Root);
         app.apply_filter();
 
         assert_eq!(app.selected_entry().unwrap().title, "zulu");
@@ -1568,33 +1468,12 @@ exit 0
     }
 
     #[test]
-    fn previous_workspace_sorts_before_marked_entries() {
-        let mut app = App::new(Config::default(), Theme::terminal());
-        let marked = entry(Source::Root, "/marked", "marked");
-        let mut previous = entry(Source::Workspace, "/previous", "previous");
-        previous.workspace_id = Some("w2".into());
-        previous.action = EntryAction::FocusWorkspace {
-            session: None,
-            id: "w2".into(),
-        };
-        app.entries = vec![marked, previous];
-        app.pinned_entries.insert(pin_key(&app.entries[0]));
-        app.previous_workspace_id = Some("w2".into());
-
-        app.apply_filter();
-
-        assert_eq!(
-            app.selected_entry().unwrap().workspace_id.as_deref(),
-            Some("w2")
-        );
-    }
-
-    #[test]
     fn offers_directory_template_for_new_and_existing_directory_workspaces() {
         let mut config = Config::default();
         config.picker.directory_template = Some("default.toml".into());
         let mut app = App::new(config, Theme::terminal());
         app.entries = vec![entry(Source::Zoxide, "/tmp", "tmp")];
+        app.source_filter = Some(Source::Zoxide);
         app.apply_filter();
 
         assert_eq!(app.directory_template_for_selected(), Some("default.toml"));
@@ -1747,10 +1626,7 @@ exit 0
     fn jump_back_records_and_persists_only_after_focus_succeeds() {
         let _env = command_test_env();
         let config = Config {
-            jump_back: JumpBackConfig {
-                enabled: true,
-                pin_previous: false,
-            },
+            jump_back: JumpBackConfig { enabled: true },
             ..Config::default()
         };
         save_previous_workspace("w-previous").unwrap();
@@ -1774,10 +1650,7 @@ exit 0
         let recent_before = fs::read(recent_workspaces_state_path()).unwrap();
         let previous_before = fs::read(plugin_config_dir().join(JUMP_BACK_STATE_FILE)).unwrap();
         let config = Config {
-            jump_back: JumpBackConfig {
-                enabled: true,
-                pin_previous: false,
-            },
+            jump_back: JumpBackConfig { enabled: true },
             ..Config::default()
         };
 
@@ -1900,5 +1773,255 @@ exit 0
         assert_eq!(focused_workspace_id(&json), Some("w2"));
         assert_eq!(workspace_label(&json, "w1"), Some("one"));
         assert_eq!(workspace_label(&json, "missing"), None);
+    }
+
+    fn bare_workspace(
+        id: &str,
+        label: &str,
+        focused: bool,
+        commit_at: Option<i64>,
+    ) -> WorkspaceNode {
+        WorkspaceNode {
+            id: id.into(),
+            label: label.into(),
+            session: None,
+            focused,
+            tabs: vec![],
+            git: commit_at.map(|at| GitIdentity {
+                repo_key: label.into(),
+                label: label.into(),
+                head: GitHead::Branch("main".into()),
+                last_commit_at: Some(at),
+            }),
+        }
+    }
+
+    fn glance_titles(app: &App) -> Vec<String> {
+        app.filtered
+            .iter()
+            .map(|index| app.entries[*index].title.clone())
+            .collect()
+    }
+
+    #[test]
+    fn pinned_workspace_stays_in_the_pinned_group() {
+        let dir = env::temp_dir().join(format!("helm-pin-test-{}", std::process::id()));
+        let _lock = crate::herdr::test_env_lock();
+        let previous = env::var_os("HERDR_PLUGIN_CONFIG_DIR");
+        env::set_var("HERDR_PLUGIN_CONFIG_DIR", &dir);
+
+        let mut app = App::new(Config::default(), Theme::terminal());
+        app.apply_workspaces(
+            Workspaces {
+                topology: OpenTopology {
+                    workspaces: vec![
+                        bare_workspace("w1", "helm", true, Some(NOW - 60)),
+                        bare_workspace("w2", "dots", false, None),
+                    ],
+                },
+                activity: ActivityState::default(),
+                previous: None,
+            },
+            NOW,
+        );
+        app.selected = app
+            .filtered
+            .iter()
+            .position(|index| app.entries[*index].title == "dots")
+            .unwrap();
+        app.toggle_selected_pin().unwrap();
+
+        assert_eq!(glance_titles(&app), ["dots", "helm"]);
+        assert_eq!(
+            app.glance_group(&app.entries[app.filtered[0]]),
+            Some(Group::Pinned)
+        );
+        assert_eq!(
+            app.glance_group(&app.entries[app.filtered[1]]),
+            Some(Group::Active)
+        );
+
+        let _ = fs::remove_dir_all(&dir);
+        match previous {
+            Some(value) => env::set_var("HERDR_PLUGIN_CONFIG_DIR", value),
+            None => env::remove_var("HERDR_PLUGIN_CONFIG_DIR"),
+        }
+    }
+
+    #[test]
+    fn each_group_lists_the_most_recent_activity_first() {
+        let mut app = App::new(Config::default(), Theme::terminal());
+        app.apply_workspaces(
+            Workspaces {
+                topology: OpenTopology {
+                    workspaces: vec![
+                        bare_workspace("w1", "older", false, Some(NOW - 2 * 3_600)),
+                        bare_workspace("w2", "newer", false, Some(NOW - 3_600)),
+                    ],
+                },
+                activity: ActivityState::default(),
+                previous: None,
+            },
+            NOW,
+        );
+        assert_eq!(glance_titles(&app), ["newer", "older"]);
+    }
+
+    #[test]
+    fn reloading_workspaces_keeps_the_selection_on_the_same_workspace() {
+        let mut app = App::new(Config::default(), Theme::terminal());
+        let snapshot = |workspaces| Workspaces {
+            topology: OpenTopology { workspaces },
+            activity: ActivityState::default(),
+            previous: None,
+        };
+        app.apply_workspaces(
+            snapshot(vec![
+                bare_workspace("w1", "alpha", false, Some(NOW - 2 * 3_600)),
+                bare_workspace("w2", "beta", false, Some(NOW - 3_600)),
+            ]),
+            NOW,
+        );
+        app.selected = app
+            .filtered
+            .iter()
+            .position(|index| app.entries[*index].title == "alpha")
+            .unwrap();
+
+        app.apply_workspaces(
+            snapshot(vec![
+                bare_workspace("w1", "alpha", false, Some(NOW - 2 * 3_600)),
+                bare_workspace("w2", "beta", false, Some(NOW - 3_600)),
+                bare_workspace("w3", "gamma", true, Some(NOW - 300)),
+            ]),
+            NOW,
+        );
+
+        assert_eq!(glance_titles(&app), ["gamma", "beta", "alpha"]);
+        assert_eq!(app.selected_entry().unwrap().title, "alpha");
+    }
+
+    #[test]
+    fn empty_reload_keeps_the_last_good_workspaces_and_selection() {
+        let mut app = App::new(Config::default(), Theme::terminal());
+        let snapshot = |workspaces| Workspaces {
+            topology: OpenTopology { workspaces },
+            activity: ActivityState::default(),
+            previous: None,
+        };
+        app.apply_workspaces(
+            snapshot(vec![
+                bare_workspace("w1", "alpha", false, Some(NOW - 60)),
+                bare_workspace("w2", "beta", false, Some(NOW - 2 * 3_600)),
+            ]),
+            NOW,
+        );
+        app.selected = 1;
+
+        app.apply_workspaces(snapshot(vec![]), NOW);
+
+        assert_eq!(glance_titles(&app), ["alpha", "beta"]);
+        assert_eq!(app.selected, 1);
+    }
+
+    #[test]
+    fn workspace_filter_hides_directories_and_other_sources_leave_the_glance() {
+        let mut app = App::new(Config::default(), Theme::terminal());
+        app.apply_workspaces(
+            Workspaces {
+                topology: OpenTopology {
+                    workspaces: vec![bare_workspace("w1", "helm", true, Some(NOW - 60))],
+                },
+                activity: ActivityState::default(),
+                previous: None,
+            },
+            NOW,
+        );
+        app.entries
+            .push(entry(Source::Zoxide, "/work/helm-dir", "helm-dir"));
+        app.apply_filter();
+        assert_eq!(glance_titles(&app), ["helm"]);
+
+        app.source_filter = Some(Source::Workspace);
+        app.query = "helm".into();
+        app.apply_filter();
+        assert_eq!(glance_titles(&app), ["helm"]);
+
+        app.source_filter = Some(Source::Zoxide);
+        app.query.clear();
+        app.apply_filter();
+        assert!(!app.glance_view());
+        assert_eq!(glance_titles(&app), ["helm-dir"]);
+    }
+
+    #[test]
+    fn agent_query_tokens_match_workspaces_by_their_agent_panes() {
+        let mut helm = bare_workspace("w1", "helm", true, Some(NOW - 60));
+        helm.tabs = vec![TabNode {
+            id: "w1:t1".into(),
+            label: "Code".into(),
+            focused: true,
+            panes: vec![PaneNode {
+                id: "p1".into(),
+                label: "p1".into(),
+                cwd: PathBuf::from("/repos/helm"),
+                focused: false,
+                title: None,
+                agent: Some(AgentMeta {
+                    name: "claude".into(),
+                    state: AgentState::Working,
+                }),
+            }],
+        }];
+        let mut app = App::new(Config::default(), Theme::terminal());
+        app.apply_workspaces(
+            Workspaces {
+                topology: OpenTopology {
+                    workspaces: vec![helm, bare_workspace("w2", "skills", false, Some(NOW - 60))],
+                },
+                activity: ActivityState::default(),
+                previous: None,
+            },
+            NOW,
+        );
+
+        for (query, expected) in [
+            ("agent", vec!["helm"]),
+            ("!claude", vec!["helm"]),
+            ("!codex", vec![]),
+            ("#working", vec!["helm"]),
+            ("@working", vec!["helm"]),
+        ] {
+            app.query = query.into();
+            app.apply_filter();
+            assert_eq!(glance_titles(&app), expected, "query {query:?}");
+        }
+    }
+
+    #[test]
+    fn quick_actions_and_plugins_join_the_other_group_only_while_searching() {
+        let mut app = App::new(Config::default(), Theme::terminal());
+        app.apply_workspaces(
+            Workspaces {
+                topology: OpenTopology {
+                    workspaces: vec![bare_workspace("w1", "helm", true, Some(NOW - 60))],
+                },
+                activity: ActivityState::default(),
+                previous: None,
+            },
+            NOW,
+        );
+        app.entries
+            .push(entry(Source::QuickAction, "/quick/notes", "Quick: notes"));
+        app.apply_filter();
+        assert_eq!(glance_titles(&app), ["helm"]);
+
+        app.query = "notes".into();
+        app.apply_filter();
+        assert_eq!(glance_titles(&app), ["Quick: notes"]);
+        assert_eq!(
+            app.glance_group(&app.entries[app.filtered[0]]),
+            Some(Group::Other)
+        );
     }
 }

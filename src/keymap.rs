@@ -13,8 +13,6 @@ pub(crate) enum Command {
     OpenTemplate,
     MoveUp,
     MoveDown,
-    Collapse,
-    Expand,
     StartSearch,
     DeleteChar,
     DeleteWord,
@@ -97,14 +95,9 @@ impl Keybind {
     pub(crate) fn is_active(&self, app: &App) -> bool {
         match &self.command {
             Command::StartSearch => app.input_mode == InputMode::Search,
-            Command::ToggleMark => {
-                let entry = if app.topology_view() {
-                    app.topology_selected_entry()
-                } else {
-                    app.selected_entry()
-                };
-                entry.is_some_and(|entry| app.is_pinned(entry))
-            }
+            Command::ToggleMark => app
+                .selected_entry()
+                .is_some_and(|entry| app.is_pinned(entry)),
             Command::ToggleHelp => app.input_mode == InputMode::Help,
             Command::Filter(source) => app.source_filter.as_ref() == Some(source),
             _ => false,
@@ -202,26 +195,6 @@ pub(crate) fn keybindings(app: &App) -> Vec<Keybind> {
             "move down",
             "Navigation",
             Some("up/down"),
-        ),
-        binding(
-            Command::Collapse,
-            vec![
-                key(KeyCode::Left, KeyModifiers::NONE, "←"),
-                normal_key(KeyCode::Char('h'), "h"),
-            ],
-            "collapse / parent",
-            "Navigation",
-            Some("collapse"),
-        ),
-        binding(
-            Command::Expand,
-            vec![
-                key(KeyCode::Right, KeyModifiers::NONE, "→"),
-                normal_key(KeyCode::Char('l'), "l"),
-            ],
-            "expand",
-            "Navigation",
-            Some("expand"),
         ),
     ];
 
@@ -336,7 +309,7 @@ pub(crate) fn keybindings(app: &App) -> Vec<Keybind> {
 
 fn source_help_label(source: &Source) -> &'static str {
     match source {
-        Source::Workspace => "Workspaces / Tabs / Panes",
+        Source::Workspace => "Workspaces",
         Source::Zoxide => "zoxide",
         Source::Root => "roots",
         Source::QuickAction => "quick actions",
@@ -346,7 +319,7 @@ fn source_help_label(source: &Source) -> &'static str {
 
 fn source_compact_label(source: &Source) -> &'static str {
     match source {
-        Source::Workspace => "Workspaces / Tabs / Panes",
+        Source::Workspace => "Workspaces",
         Source::Zoxide => "zoxide",
         Source::Root => "root",
         Source::QuickAction => "quick",

@@ -1,7 +1,8 @@
 use std::{
     io,
-    sync::mpsc::{Receiver, TryRecvError},
-    time::Duration,
+    sync::mpsc::{self, Receiver, TryRecvError},
+    thread,
+    time::{Duration, Instant},
 };
 
 use crossterm::{
@@ -22,13 +23,16 @@ use ratatui::{
 };
 
 use crate::{
-    app::{App, InputMode},
+    activity::now_unix_secs,
+    app::{load_workspaces, App, InputMode, Workspaces},
+    config::Config,
+    glance::{self, Group, Mark},
     keymap::{keybindings, Command},
-    model::{Entry, EntryAction, Source},
+    model::{Entry, Source},
     paths::home,
     sources::status_icon_at,
     theme::Theme,
-    topology::{repository_color, topology_lines_selected, TopologyDepth, WorkspaceNode},
+    topology::{repository_color, AgentState, OpenTopology},
 };
 
 fn open_action_error(error: String, persist: bool) -> io::Result<()> {
@@ -51,6 +55,7 @@ pub(crate) fn tui_loop(
     execute!(out, EnterAlternateScreen, EnableMouseCapture)?;
     let mut terminal = Terminal::new(CrosstermBackend::new(out))?;
     let mut list_hits = ListHits::default();
+    let workspace_refresh = spawn_workspace_refresh(app.config.clone(), app.topology.clone());
     let result = loop {
         if let Some(result) = update_check.as_ref().map(Receiver::try_recv) {
             match result {
@@ -62,9 +67,17 @@ pub(crate) fn tui_loop(
                 Err(TryRecvError::Empty) => {}
             }
         }
+        if let Ok(workspaces) = workspace_refresh.try_recv() {
+            app.apply_workspaces(workspaces, now_unix_secs());
+        }
         terminal.draw(|f| list_hits = draw(f, app))?;
         let animate = has_working_entry(app);
-        if (animate || update_check.is_some()) && !event::poll(Duration::from_millis(125))? {
+        let frame = if animate || update_check.is_some() {
+            Duration::from_millis(125)
+        } else {
+            Duration::from_secs(1)
+        };
+        if !event::poll(frame)? {
             if animate {
                 app.spinner_tick = app.spinner_tick.wrapping_add(1);
             }
@@ -132,6 +145,34 @@ pub(crate) fn tui_loop(
     result
 }
 
+const WORKSPACE_REFRESH: Duration = Duration::from_secs(3);
+const GIT_REFRESH: Duration = Duration::from_secs(30);
+
+/// Reloads the snapshot and activity every few seconds. Git identities are
+/// read again only once `GIT_REFRESH` has passed; until then they come from
+/// the last load.
+fn spawn_workspace_refresh(config: Config, mut known: OpenTopology) -> Receiver<Workspaces> {
+    let (sender, receiver) = mpsc::channel();
+    thread::spawn(move || {
+        let mut git_read_at = Instant::now();
+        loop {
+            thread::sleep(WORKSPACE_REFRESH);
+            let reuse_git = git_read_at.elapsed() < GIT_REFRESH;
+            let workspaces = load_workspaces(&config, reuse_git.then_some(&known));
+            if !reuse_git {
+                git_read_at = Instant::now();
+            }
+            if !workspaces.topology.workspaces.is_empty() {
+                known = workspaces.topology.clone();
+            }
+            if sender.send(workspaces).is_err() {
+                break;
+            }
+        }
+    });
+    receiver
+}
+
 fn cleanup_terminal(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> io::Result<()> {
     disable_raw_mode()?;
     execute!(
@@ -172,16 +213,6 @@ enum Action {
 struct ListHits {
     area: Rect,
     rows: Vec<(std::ops::Range<u16>, usize)>,
-    topology: Vec<TopologyHit>,
-}
-
-struct TopologyHit {
-    y: std::ops::Range<u16>,
-    x: std::ops::Range<u16>,
-    workspace: usize,
-    line: usize,
-    tab: usize,
-    child: Option<usize>,
 }
 
 fn handle_mouse(app: &mut App, mouse: MouseEvent, hits: &ListHits) -> Action {
@@ -190,64 +221,8 @@ fn handle_mouse(app: &mut App, mouse: MouseEvent, hits: &ListHits) -> Action {
     }
 
     match mouse.kind {
-        MouseEventKind::ScrollUp => {
-            if app.topology_view() {
-                app.topology_move_vertical(-1);
-            } else {
-                app.prev();
-            }
-        }
-        MouseEventKind::ScrollDown => {
-            if app.topology_view() {
-                app.topology_move_vertical(1);
-            } else {
-                app.next();
-            }
-        }
-        MouseEventKind::Down(MouseButton::Left) if app.topology_view() => {
-            let Some(hit) = hits
-                .topology
-                .iter()
-                .find(|hit| hit.y.contains(&mouse.row) && hit.x.contains(&mouse.column))
-            else {
-                return Action::Continue;
-            };
-            let before = (
-                app.topology_cursor.workspace,
-                app.topology_cursor.depth,
-                app.topology_cursor.selection[app.topology_cursor.workspace],
-            );
-            app.topology_cursor.workspace = hit.workspace;
-            match hit.line {
-                0 => app.topology_cursor.leave_to_workspace(),
-                1 => {
-                    app.topology_cursor.depth = TopologyDepth::Tab;
-                    if let Some(tab) = hit.child {
-                        app.topology_cursor.selection[hit.workspace].tab = tab;
-                    }
-                }
-                2 | 3 => {
-                    app.topology_cursor.depth = TopologyDepth::Pane;
-                    app.topology_cursor.selection[hit.workspace].tab = hit.tab;
-                    if let Some(pane) = hit.child {
-                        app.topology_cursor.selection[hit.workspace].pane = pane;
-                    }
-                }
-                _ => {}
-            }
-            app.topology_cursor.clamp(&app.topology);
-            app.remember_topology_selection();
-            let after = (
-                app.topology_cursor.workspace,
-                app.topology_cursor.depth,
-                app.topology_cursor.selection[app.topology_cursor.workspace],
-            );
-            return if before == after {
-                Action::Open
-            } else {
-                Action::Continue
-            };
-        }
+        MouseEventKind::ScrollUp => app.prev(),
+        MouseEventKind::ScrollDown => app.next(),
         MouseEventKind::Down(MouseButton::Left) => {
             let Some((_, row)) = hits
                 .rows
@@ -267,60 +242,6 @@ fn handle_mouse(app: &mut App, mouse: MouseEvent, hits: &ListHits) -> Action {
 }
 
 fn handle_key(app: &mut App, key: KeyEvent) -> Action {
-    if app.input_mode != InputMode::Help
-        && !app.topology_view()
-        && matches!(key.code, KeyCode::Tab | KeyCode::BackTab)
-    {
-        return Action::Continue;
-    }
-
-    if app.input_mode == InputMode::Normal && app.topology_view() {
-        match (key.code, key.modifiers) {
-            (KeyCode::Char('['), KeyModifiers::NONE) => {
-                app.topology_move_workspace(-1);
-                return Action::Continue;
-            }
-            (KeyCode::Char(']'), KeyModifiers::NONE) => {
-                app.topology_move_workspace(1);
-                return Action::Continue;
-            }
-            (KeyCode::Char('K'), KeyModifiers::SHIFT) => {
-                app.topology_move_workspace(-1);
-                return Action::Continue;
-            }
-            (KeyCode::Char('J'), KeyModifiers::SHIFT) => {
-                app.topology_move_workspace(1);
-                return Action::Continue;
-            }
-            (KeyCode::Char('h'), KeyModifiers::NONE) => {
-                app.topology_move_horizontal(-1);
-                return Action::Continue;
-            }
-            (KeyCode::Char('l'), KeyModifiers::NONE) => {
-                app.topology_move_horizontal(1);
-                return Action::Continue;
-            }
-            (KeyCode::Char('j'), KeyModifiers::NONE) => {
-                app.topology_move_vertical(1);
-                return Action::Continue;
-            }
-            (KeyCode::Char('k'), KeyModifiers::NONE) => {
-                app.topology_move_vertical(-1);
-                return Action::Continue;
-            }
-            (KeyCode::Tab, KeyModifiers::NONE) => {
-                app.topology_move_horizontal(1);
-                return Action::Continue;
-            }
-            (KeyCode::BackTab, KeyModifiers::SHIFT) | (KeyCode::Tab, KeyModifiers::SHIFT) => {
-                app.topology_move_horizontal(-1);
-                return Action::Continue;
-            }
-            (KeyCode::Enter, KeyModifiers::NONE) => return Action::Open,
-            _ => {}
-        }
-    }
-
     let command = keybindings(app)
         .into_iter()
         .find(|binding| binding.matches(app, key))
@@ -361,47 +282,21 @@ fn execute_command(app: &mut App, command: Command, key: KeyEvent) -> Action {
                 Action::Quit
             }
         }
-        Command::Open => {
-            if app.topology_view() {
-                Action::Open
-            } else {
-                app.selected_entry()
-                    .map(|_| Action::Open)
-                    .unwrap_or(Action::Continue)
-            }
-        }
-        Command::OpenTemplate => {
-            if app.topology_view() {
-                Action::OpenTemplate
-            } else {
-                app.selected_entry()
-                    .map(|_| Action::OpenTemplate)
-                    .unwrap_or(Action::Continue)
-            }
-        }
+        Command::Open => app
+            .selected_entry()
+            .map(|_| Action::Open)
+            .unwrap_or(Action::Continue),
+        Command::OpenTemplate => app
+            .selected_entry()
+            .map(|_| Action::OpenTemplate)
+            .unwrap_or(Action::Continue),
         Command::Update => Action::Update,
         Command::MoveUp => {
-            app.topology_move_vertical(-1);
+            app.prev();
             Action::Continue
         }
         Command::MoveDown => {
-            app.topology_move_vertical(1);
-            Action::Continue
-        }
-        Command::Collapse => {
-            if app.topology_view() {
-                match app.topology_cursor.depth {
-                    TopologyDepth::Workspace => {}
-                    TopologyDepth::Tab => app.topology_cursor.leave_to_workspace(),
-                    TopologyDepth::Pane => app.topology_cursor.leave_to_tab(),
-                }
-            }
-            Action::Continue
-        }
-        Command::Expand => {
-            if app.topology_view() {
-                app.topology_move_horizontal(1);
-            }
+            app.next();
             Action::Continue
         }
         Command::StartSearch => {
@@ -631,10 +526,13 @@ fn draw_keybindings_help(f: &mut Frame, app: &App, area: Rect) {
 }
 
 fn has_working_entry(app: &App) -> bool {
-    app.entries.iter().filter_map(entry_status).any(|status| {
-        let status = status.to_lowercase();
-        status.contains("work") || status.contains("run")
-    })
+    app.glance
+        .values()
+        .any(|row| row.state == AgentState::Working)
+        || app.entries.iter().filter_map(entry_status).any(|status| {
+            let status = status.to_lowercase();
+            status.contains("work") || status.contains("run")
+        })
 }
 
 fn agent_status_color(theme: &Theme, status: &str) -> Color {
@@ -656,15 +554,6 @@ fn agent_status_color(theme: &Theme, status: &str) -> Color {
     } else {
         theme.overlay0
     }
-}
-
-fn is_topology_entry(entry: &Entry) -> bool {
-    matches!(
-        &entry.action,
-        EntryAction::FocusWorkspace { .. }
-            | EntryAction::FocusTab { .. }
-            | EntryAction::FocusPane { .. }
-    )
 }
 
 fn display_title(entry: &Entry) -> &str {
@@ -809,59 +698,6 @@ fn source_spans(app: &App, entry: &Entry, width: usize) -> Vec<Span<'static>> {
     ]
 }
 
-fn entry_repository_key(entry: &Entry) -> Option<&str> {
-    entry
-        .search_terms
-        .iter()
-        .find_map(|term| term.strip_prefix("repo-key:"))
-}
-
-fn repository_keys(app: &App, entry: &Entry) -> Vec<String> {
-    let mut keys = app
-        .topology
-        .workspaces
-        .iter()
-        .filter_map(|workspace| workspace.git.as_ref().map(|git| git.repo_key.clone()))
-        .collect::<Vec<_>>();
-    if let Some(key) = entry_repository_key(entry) {
-        keys.push(key.into());
-    }
-    keys.sort();
-    keys.dedup();
-    keys
-}
-
-fn breadcrumb_spans(app: &App, entry: &Entry, value: &str) -> Vec<Span<'static>> {
-    let Some(repository_key) = entry_repository_key(entry) else {
-        return vec![Span::styled(
-            value.to_string(),
-            Style::default().fg(app.theme.overlay0),
-        )];
-    };
-    let Some((parent, rest)) = value.split_once(" › ") else {
-        return vec![Span::styled(
-            value.to_string(),
-            Style::default().fg(app.theme.overlay0),
-        )];
-    };
-    vec![
-        Span::styled(
-            parent.to_string(),
-            Style::default()
-                .fg(repository_color(
-                    repository_key,
-                    &repository_keys(app, entry),
-                    &app.theme,
-                ))
-                .add_modifier(Modifier::BOLD),
-        ),
-        Span::styled(
-            format!(" › {rest}"),
-            Style::default().fg(app.theme.overlay0),
-        ),
-    ]
-}
-
 #[derive(Clone, Copy)]
 struct DetailedLayout {
     status_width: usize,
@@ -899,217 +735,218 @@ fn detailed_layout(app: &App, row_width: usize, source_width: usize) -> Detailed
     }
 }
 
-fn topology_child_ranges(
-    workspace: &WorkspaceNode,
-    line: usize,
-    selected_tab: usize,
-    selected_child: Option<usize>,
-    width: usize,
-    start: u16,
-    spinner_tick: u32,
-) -> Vec<(std::ops::Range<u16>, usize)> {
-    let values = if line == 1 {
-        workspace
-            .tabs
-            .iter()
-            .map(|tab| {
-                if tab.label.is_empty() {
-                    "unnamed".into()
-                } else {
-                    tab.label.clone()
-                }
-            })
-            .collect::<Vec<_>>()
-    } else {
-        let Some(tab) = workspace.tabs.get(selected_tab) else {
-            return Vec::new();
-        };
-        tab.panes
-            .iter()
-            .map(|pane| crate::topology::pane_value(pane, spinner_tick))
-            .collect::<Vec<_>>()
-    };
-    let decorated = values
-        .iter()
-        .enumerate()
-        .map(|(index, value)| crate::topology::selection_slot(value, selected_child == Some(index)))
-        .collect::<Vec<_>>();
-    let full = decorated.join(" ");
-    let selected_value = selected_child.and_then(|index| decorated.get(index).map(String::as_str));
-    let visible =
-        crate::topology::clip_selected_for_hits(&full, width.saturating_sub(17), selected_value);
-    let mut search_from = 0usize;
-    decorated
-        .into_iter()
-        .enumerate()
-        .filter_map(|(index, value)| {
-            let search_value = if selected_child == Some(index)
-                && Span::raw(&value).width() > width.saturating_sub(17)
-            {
-                visible.as_str()
-            } else {
-                value.as_str()
-            };
-            let offset = visible[search_from..]
-                .find(search_value)
-                .map(|offset| search_from + offset)?;
-            search_from = offset + search_value.len();
-            let prefix = Span::raw(&visible[..offset]).width() as u16;
-            let value_width = Span::raw(search_value).width() as u16;
-            Some((start + prefix..start + prefix + value_width, index))
-        })
-        .collect()
+/// Columns left of the signal: margin, label, icon, name, branch, progress
+/// and mark, with a two-column gap after each of the six inner cells.
+const GLANCE_FIXED_WIDTH: usize = 1 + 2 + 1 + 8 + 4 + 6 * 2;
+const GLANCE_PROGRESS_WIDTH: usize = 8;
+const GLANCE_MARK_WIDTH: usize = 4;
+const GLANCE_SIGNAL_MAX: usize = 24;
+
+struct GlanceCells {
+    icon: &'static str,
+    icon_color: Color,
+    name: String,
+    name_color: Color,
+    branch: String,
+    mark: Mark,
+    signal: String,
 }
 
-fn draw_topology_list(f: &mut Frame, app: &App, area: Rect) -> ListHits {
-    let block = Block::default()
-        .title(" WORKSPACES ")
-        .borders(Borders::RIGHT)
-        .style(Style::default().bg(app.theme.base_background));
-    let list_area = block.inner(area);
-    let width = list_area.width as usize;
-    let mut lines = Vec::new();
-    let selected_workspace = app.topology_cursor.workspace;
-    let repositories = app
-        .topology
-        .workspaces
-        .iter()
-        .filter_map(|workspace| workspace.git.as_ref().map(|git| git.repo_key.clone()))
-        .collect::<Vec<_>>();
-    for (workspace_index, workspace) in app.topology.workspaces.iter().enumerate() {
-        let selection = (workspace_index == selected_workspace)
-            .then_some(app.topology_cursor.selection[workspace_index]);
-        let mut rendered = topology_lines_selected(
-            workspace,
-            width,
-            selection,
-            app.topology_cursor.depth,
-            &app.theme,
-            &repositories,
-            app.spinner_tick,
-        );
-        if workspace.id == app.previous_workspace_id.as_deref().unwrap_or("") {
-            rendered[0].spans[0] = Span::styled("  ←  ", Style::default().fg(app.theme.red));
-        }
-        for (line_index, mut line) in rendered.into_iter().enumerate() {
-            let mut style = if workspace_index == selected_workspace {
-                Style::default()
-                    .bg(app.theme.group_background())
-                    .fg(app.theme.text)
-            } else {
-                Style::default().fg(app.theme.text)
-            };
-            if workspace_index == selected_workspace
-                && ((app.topology_cursor.depth == TopologyDepth::Workspace && line_index == 0)
-                    || (app.topology_cursor.depth == TopologyDepth::Tab && line_index == 1)
-                    || (app.topology_cursor.depth == TopologyDepth::Pane && line_index == 2))
-            {
-                style = Style::default()
-                    .bg(app.theme.depth_background())
-                    .fg(app.theme.accent)
-                    .add_modifier(Modifier::BOLD);
-            }
-            line = line.style(style);
-            lines.push(ListItem::new(line));
-        }
+fn glance_cells(app: &App, entry: &Entry) -> GlanceCells {
+    match app.glance_row(entry) {
+        Some(row) => GlanceCells {
+            icon: glance::status_icon(row.state, app.config.glance.icons, app.spinner_tick),
+            icon_color: agent_state_color(&app.theme, row.state),
+            name: row.name.clone(),
+            name_color: repository_color(&row.repository, &[], &app.theme),
+            branch: row.branch.clone(),
+            mark: row.mark,
+            signal: glance::signal_text(&row.signal, app.now),
+        },
+        None => GlanceCells {
+            icon: "",
+            icon_color: app.theme.text,
+            name: display_title(entry).to_string(),
+            name_color: app.theme.text,
+            branch: display_path(entry),
+            mark: Mark::None,
+            signal: String::new(),
+        },
     }
-    if lines.is_empty() {
-        lines.push(ListItem::new(Line::styled(
-            "no open workspaces",
+}
+
+fn agent_state_color(theme: &Theme, state: AgentState) -> Color {
+    match state {
+        AgentState::Blocked => theme.red,
+        AgentState::Done => theme.teal,
+        AgentState::Working => theme.yellow,
+        AgentState::Idle => theme.green,
+        AgentState::Unknown => theme.overlay0,
+    }
+}
+
+fn group_color(theme: &Theme, group: Group) -> Color {
+    match group {
+        Group::Pinned => theme.accent,
+        Group::NeedsYou => theme.red,
+        Group::Active => theme.yellow,
+        Group::Recent => theme.green,
+        Group::Quiet => theme.overlay0,
+        Group::Directories | Group::Other => theme.subtext0,
+    }
+}
+
+fn fit_cell(value: &str, width: usize) -> String {
+    let clipped = truncate_terminal(value, width);
+    let padding = width.saturating_sub(Span::raw(&clipped).width());
+    format!("{clipped}{}", " ".repeat(padding))
+}
+
+fn draw_glance(f: &mut Frame, app: &App, area: Rect) -> ListHits {
+    let visible: Vec<(usize, Group, GlanceCells)> = app
+        .filtered
+        .iter()
+        .enumerate()
+        .filter_map(|(position, index)| {
+            let entry = &app.entries[*index];
+            let group = app.glance_group(entry)?;
+            Some((position, group, glance_cells(app, entry)))
+        })
+        .collect();
+
+    let name_width = visible
+        .iter()
+        .map(|(_, _, cells)| Span::raw(&cells.name).width())
+        .max()
+        .unwrap_or(0);
+    let branch_width = visible
+        .iter()
+        .map(|(_, _, cells)| Span::raw(&cells.branch).width())
+        .max()
+        .unwrap_or(0);
+    let signal_width = visible
+        .iter()
+        .map(|(_, _, cells)| Span::raw(&cells.signal).width())
+        .max()
+        .unwrap_or(0)
+        .min(GLANCE_SIGNAL_MAX);
+    let flex = (area.width as usize).saturating_sub(GLANCE_FIXED_WIDTH + signal_width);
+    let name_width = name_width.min(flex * 3 / 5);
+    let branch_width = branch_width.min(flex.saturating_sub(name_width));
+
+    let mut items = Vec::new();
+    let mut hit_rows = Vec::new();
+    let mut selected_item = None;
+    let mut current: Option<Group> = None;
+    for (position, group, cells) in &visible {
+        if current != Some(*group) {
+            if current.is_some() {
+                items.push(ListItem::new(Line::raw("")));
+                hit_rows.push(None);
+            }
+            let count = visible.iter().filter(|(_, g, _)| g == group).count();
+            items.push(ListItem::new(Line::from(vec![
+                Span::styled(
+                    format!(" {}", group.label().to_uppercase()),
+                    Style::default()
+                        .fg(group_color(&app.theme, *group))
+                        .add_modifier(Modifier::BOLD),
+                ),
+                Span::styled(
+                    format!(" · {count}"),
+                    Style::default().fg(app.theme.subtext0),
+                ),
+            ])));
+            hit_rows.push(None);
+            current = Some(*group);
+        }
+        if *position == app.selected {
+            selected_item = Some(items.len());
+        }
+        let mark_color = match cells.mark {
+            Mark::Here => app.theme.accent,
+            Mark::Last | Mark::None => app.theme.subtext0,
+        };
+        let mark = match cells.mark {
+            Mark::Here => "here",
+            Mark::Last => "last",
+            Mark::None => "",
+        };
+        items.push(ListItem::new(Line::from(vec![
+            Span::raw(" "),
+            Span::raw("  "),
+            Span::raw("  "),
+            Span::styled(
+                fit_cell(cells.icon, 1),
+                Style::default().fg(cells.icon_color),
+            ),
+            Span::raw("  "),
+            Span::styled(
+                fit_cell(&cells.name, name_width),
+                Style::default()
+                    .fg(cells.name_color)
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::raw("  "),
+            Span::styled(
+                fit_cell(&cells.branch, branch_width),
+                Style::default().fg(app.theme.subtext0),
+            ),
+            Span::raw("  "),
+            Span::raw(" ".repeat(GLANCE_PROGRESS_WIDTH)),
+            Span::raw("  "),
+            Span::styled(
+                fit_cell(mark, GLANCE_MARK_WIDTH),
+                Style::default().fg(mark_color),
+            ),
+            Span::raw("  "),
+            Span::styled(
+                format!(
+                    "{}{}",
+                    " ".repeat(signal_width.saturating_sub(Span::raw(&cells.signal).width())),
+                    truncate_terminal(&cells.signal, signal_width)
+                ),
+                Style::default().fg(app.theme.subtext0),
+            ),
+        ])));
+        hit_rows.push(Some(*position));
+    }
+
+    if items.is_empty() {
+        let message = if app.query.trim().is_empty() {
+            "no open workspaces"
+        } else {
+            "no destination matches that query"
+        };
+        items.push(ListItem::new(Line::styled(
+            message,
             Style::default().fg(app.theme.overlay0),
         )));
+        hit_rows.push(None);
     }
-    let item_heights: Vec<u16> = lines.iter().map(|item| item.height() as u16).collect();
-    let selected_item = if app.topology.workspaces.is_empty() {
-        None
-    } else {
-        Some(selected_workspace * 4)
-    };
+
     let mut state = ListState::default();
     state.select(selected_item);
-    let list = List::new(lines).block(block);
+    let list =
+        List::new(items).highlight_style(Style::default().bg(app.theme.selection_background(true)));
     f.render_stateful_widget(list, area, &mut state);
-    let mut hits = Vec::new();
-    let mut topology_hits = Vec::new();
-    let mut y = list_area.y;
-    for (index, height) in item_heights.into_iter().enumerate().skip(state.offset()) {
-        if y.saturating_add(height) > list_area.bottom() {
+
+    let mut rows = Vec::new();
+    for (line, hit) in hit_rows.into_iter().enumerate().skip(state.offset()) {
+        let y = area.y + (line - state.offset()) as u16;
+        if y >= area.bottom() {
             break;
         }
-        let workspace = index / 4;
-        if workspace >= app.topology.workspaces.len() {
-            y += height;
-            continue;
+        if let Some(position) = hit {
+            rows.push((y..y + 1, position));
         }
-        let line = index % 4;
-        let workspace_node = &app.topology.workspaces[workspace];
-        if line == 0 {
-            hits.push((y..y + height.saturating_add(3), workspace));
-        }
-        let selected_tab = if workspace == selected_workspace {
-            app.topology_cursor.selection[workspace].tab
-        } else {
-            workspace_node
-                .tabs
-                .iter()
-                .position(|tab| tab.focused)
-                .unwrap_or(0)
-        };
-        let ranges = if line == 1 || line == 2 {
-            let selected_child = if workspace == selected_workspace {
-                Some(if line == 1 {
-                    app.topology_cursor.selection[workspace].tab
-                } else {
-                    app.topology_cursor.selection[workspace].pane
-                })
-            } else {
-                None
-            };
-            topology_child_ranges(
-                workspace_node,
-                line,
-                selected_tab,
-                selected_child,
-                width,
-                list_area.x + 17,
-                app.spinner_tick,
-            )
-        } else {
-            Vec::new()
-        };
-        if ranges.is_empty() {
-            topology_hits.push(TopologyHit {
-                y: y..y + 1,
-                x: list_area.x..list_area.right(),
-                workspace,
-                line,
-                tab: selected_tab,
-                child: None,
-            });
-        } else {
-            for (x, child) in ranges {
-                topology_hits.push(TopologyHit {
-                    y: y..y + 1,
-                    x,
-                    workspace,
-                    line,
-                    tab: selected_tab,
-                    child: Some(child),
-                });
-            }
-        }
-        y += height;
     }
-    ListHits {
-        area: list_area,
-        rows: hits,
-        topology: topology_hits,
-    }
+    ListHits { area, rows }
 }
 
 fn draw_list(f: &mut Frame, app: &App, area: Rect) -> ListHits {
-    if app.topology_view() {
-        return draw_topology_list(f, app, area);
+    if app.glance_view() {
+        return draw_glance(f, app, area);
     }
     let row_width = area.width.saturating_sub(3) as usize;
     let source_width = source_column_width(app);
@@ -1141,13 +978,8 @@ fn draw_list(f: &mut Frame, app: &App, area: Rect) -> ListHits {
                     )
                 })
                 .unwrap_or_default();
-            let topology_entry = is_topology_entry(e);
             let raw_path = e.path.display().to_string();
-            let raw_metadata = if topology_entry {
-                String::new()
-            } else {
-                entry_metadata(e)
-            };
+            let raw_metadata = entry_metadata(e);
             let show_metadata = !matches!(e.source, Source::Zoxide | Source::Root)
                 && detailed_layout.right_width > 0
                 && !raw_metadata.is_empty()
@@ -1165,46 +997,31 @@ fn draw_list(f: &mut Frame, app: &App, area: Rect) -> ListHits {
                 .saturating_sub(2)
                 .saturating_sub(detailed_layout.right_width)
                 .saturating_sub(usize::from(detailed_layout.right_width > 0));
-            let destination_width = detailed_layout
-                .title_width
-                .saturating_add(2)
-                .saturating_add(path_width);
             let title = truncate_end(display_title(e), detailed_layout.title_width);
             let path = truncate_end(&display_path(e), path_width);
-            let destination = if topology_entry {
-                truncate_breadcrumb(&e.subtitle, destination_width)
-            } else {
-                title.clone()
-            };
             let status_color = status
                 .map(|status| agent_status_color(&app.theme, status))
                 .unwrap_or(color);
-            let mut title_spans = Vec::new();
-            if topology_entry {
-                let destination_width_used = Span::raw(&destination).width();
-                title_spans.extend(breadcrumb_spans(app, e, &destination));
-                title_spans.push(Span::raw(
-                    " ".repeat(destination_width.saturating_sub(destination_width_used)),
-                ));
-            } else {
-                title_spans.extend([
-                    Span::styled(title.clone(), Style::default().fg(app.theme.text)),
-                    Span::raw(
-                        " ".repeat(
-                            detailed_layout
-                                .title_width
-                                .saturating_sub(title.chars().count()),
-                        ),
+            let mut title_spans = vec![
+                Span::styled(title.clone(), Style::default().fg(app.theme.text)),
+                Span::raw(
+                    " ".repeat(
+                        detailed_layout
+                            .title_width
+                            .saturating_sub(title.chars().count()),
                     ),
-                    Span::raw("  "),
-                    Span::styled(path.clone(), Style::default().fg(app.theme.subtext0)),
-                    Span::raw(" ".repeat(path_width.saturating_sub(path.chars().count()))),
-                ]);
-            }
+                ),
+                Span::raw("  "),
+                Span::styled(path.clone(), Style::default().fg(app.theme.subtext0)),
+                Span::raw(" ".repeat(path_width.saturating_sub(path.chars().count()))),
+            ];
             if detailed_layout.right_width > 0 {
                 title_spans.push(Span::raw(" "));
                 if !metadata.is_empty() {
-                    title_spans.extend(breadcrumb_spans(app, e, &metadata));
+                    title_spans.push(Span::styled(
+                        metadata.clone(),
+                        Style::default().fg(app.theme.overlay0),
+                    ));
                 }
                 title_spans.push(Span::raw(
                     " ".repeat(detailed_layout.right_width.saturating_sub(metadata_width)),
@@ -1257,7 +1074,6 @@ fn draw_list(f: &mut Frame, app: &App, area: Rect) -> ListHits {
     ListHits {
         area: list_area,
         rows,
-        topology: Vec::new(),
     }
 }
 
@@ -1279,11 +1095,17 @@ mod tests {
 
     use super::*;
     use crate::{
+        activity::ActivityState,
+        app::{pin_key, Workspaces},
         config::Config,
         model::EntryAction,
         theme::Theme,
-        topology::{OpenTopology, PaneNode, TabNode, TopologyCursor},
+        topology::{
+            AgentMeta, AgentState, GitHead, GitIdentity, OpenTopology, PaneNode, TabNode,
+            WorkspaceNode,
+        },
     };
+    use crossterm::event::{MouseButton, MouseEventKind};
 
     fn key(code: KeyCode) -> KeyEvent {
         KeyEvent::new(code, KeyModifiers::NONE)
@@ -1302,166 +1124,6 @@ mod tests {
         );
     }
 
-    #[test]
-    fn projected_topology_rows_use_breadcrumb_destinations_without_cwd_columns() {
-        let mut app = App::new(Config::default(), Theme::terminal());
-        let mut workspace = entry(Source::Workspace, "old-workspace");
-        workspace.source_label = Some("workspace".into());
-        workspace.subtitle = "repo › main".into();
-        workspace.path = PathBuf::from("/old/workspace-cwd");
-        workspace.action = EntryAction::FocusWorkspace {
-            session: Some("session".into()),
-            id: "w1".into(),
-        };
-        workspace.search_terms.push("repo-key:/repo/.git".into());
-
-        let mut tab = entry(Source::Workspace, "old-tab");
-        tab.source_label = Some("tab".into());
-        tab.subtitle = "repo › main › Tab".into();
-        tab.path = PathBuf::from("/old/tab-cwd");
-        tab.action = EntryAction::FocusTab {
-            session: Some("session".into()),
-            id: "w1:t1".into(),
-        };
-        tab.search_terms.push("repo-key:/repo/.git".into());
-
-        let mut pane = entry(Source::Workspace, "old-pane");
-        pane.source_label = Some("pane".into());
-        pane.agent_target = Some("p1".into());
-        pane.subtitle = "repo › main › Tab › Pane".into();
-        pane.path = PathBuf::from("/old/pane-cwd");
-        pane.action = EntryAction::FocusPane {
-            session: Some("session".into()),
-            id: "w1:p1".into(),
-        };
-        pane.search_terms.push("repo-key:/repo/.git".into());
-        pane.search_terms.push("agent-status:done".into());
-
-        app.entries = vec![workspace, tab, pane];
-        app.filtered = (0..app.entries.len()).collect();
-        app.filtered_scores = vec![0; app.entries.len()];
-        app.selected = usize::MAX;
-        app.query = "repo".into();
-
-        let backend = TestBackend::new(120, 8);
-        let mut terminal = Terminal::new(backend).unwrap();
-        terminal
-            .draw(|f| {
-                draw_list(f, &app, f.area());
-            })
-            .unwrap();
-        let text = buffer_text(&terminal);
-        let buffer = terminal.backend().buffer();
-        let repository_color = repository_color("/repo/.git", &["/repo/.git".into()], &app.theme);
-        let rows = [
-            ("workspace", "repo › main"),
-            ("tab", "repo › main › Tab"),
-            ("pane", "repo › main › Tab › Pane"),
-        ];
-        let mut source_column = None;
-        for (source, destination) in rows {
-            let (row_index, line) = text
-                .lines()
-                .enumerate()
-                .find(|(_, line)| line.contains(destination))
-                .unwrap();
-            assert!(!line.contains("old-"));
-            assert!(!line.contains("/old/"));
-            assert!(line.starts_with(destination));
-            let column = text_column(line, &format!(" {source} "));
-            assert_eq!(*source_column.get_or_insert(column), column);
-            let repository_start = line.find("repo").unwrap() as u16;
-            let repository_cell = &buffer[(repository_start, row_index as u16)];
-            assert_eq!(repository_cell.fg, repository_color);
-            assert!(repository_cell.modifier.contains(Modifier::BOLD));
-            assert!(!buffer[(repository_start + 5, row_index as u16)]
-                .modifier
-                .contains(Modifier::BOLD));
-        }
-        assert!(text.contains("✓ done"));
-    }
-
-    #[test]
-    fn ctrl_w_filters_to_workspaces_tabs_and_panes() {
-        let mut app = App::new(Config::default(), Theme::terminal());
-
-        assert!(matches!(
-            handle_key(
-                &mut app,
-                KeyEvent::new(KeyCode::Char('w'), KeyModifiers::CONTROL)
-            ),
-            Action::Continue
-        ));
-        assert_eq!(app.source_filter, Some(Source::Workspace));
-        assert!(app.topology_view());
-    }
-
-    #[test]
-    fn topology_help_names_workspaces_tabs_and_panes() {
-        let app = App::new(Config::default(), Theme::terminal());
-        let binding = keybindings(&app)
-            .into_iter()
-            .find(|binding| binding.command == Command::Filter(Source::Workspace))
-            .unwrap();
-
-        assert_eq!(binding.label, "Workspaces / Tabs / Panes");
-        assert_eq!(
-            binding.compact_hint(&app).unwrap().1,
-            "Workspaces / Tabs / Panes"
-        );
-        assert!(!binding.label.contains("open"));
-        assert!(!binding.label.contains("topology"));
-    }
-
-    #[test]
-    fn collapse_and_expand_keep_topology_depth_navigation() {
-        let mut app = topology_test_app();
-        app.topology_cursor.enter_tab(&app.topology);
-        assert_eq!(app.topology_cursor.depth, TopologyDepth::Tab);
-
-        execute_command(&mut app, Command::Collapse, key(KeyCode::Left));
-        assert_eq!(app.topology_cursor.depth, TopologyDepth::Workspace);
-        execute_command(&mut app, Command::Expand, key(KeyCode::Right));
-        assert_eq!(app.topology_cursor.depth, TopologyDepth::Tab);
-    }
-
-    #[test]
-    fn topology_navigation_restores_workspace_child_memory() {
-        let topology = OpenTopology {
-            workspaces: vec![WorkspaceNode {
-                id: "w1".into(),
-                label: "Workspace".into(),
-                session: Some("session".into()),
-                focused: true,
-                tabs: vec![TabNode {
-                    id: "t1".into(),
-                    label: "Tab".into(),
-                    focused: true,
-                    panes: vec![PaneNode {
-                        id: "p1".into(),
-                        label: "Pane".into(),
-                        cwd: PathBuf::new(),
-                        focused: true,
-                        title: None,
-                        agent: None,
-                    }],
-                }],
-                git: None,
-            }],
-        };
-        let mut cursor = TopologyCursor::new(&topology);
-        cursor.enter_tab(&topology);
-        cursor.enter_pane(&topology);
-        assert_eq!(cursor.depth, TopologyDepth::Pane);
-        cursor.leave_to_workspace();
-        cursor.enter_tab(&topology);
-        assert_eq!(cursor.depth, TopologyDepth::Tab);
-    }
-
-    fn text_column(line: &str, needle: &str) -> usize {
-        Span::raw(&line[..line.find(needle).unwrap()]).width()
-    }
-
     fn entry(source: Source, title: &str) -> Entry {
         Entry {
             source,
@@ -1475,500 +1137,6 @@ mod tests {
             source_label: None,
             search_terms: vec![],
         }
-    }
-
-    #[test]
-    fn selected_flat_rows_preserve_semantic_text_styling() {
-        let mut app = App::new(Config::default(), Theme::terminal());
-        let mut workspace = entry(Source::Workspace, "Destination");
-        workspace.source_label = Some("workspace".into());
-        workspace.subtitle = "repo › main".into();
-        workspace.search_terms.push("repo-key:/repo/.git".into());
-        app.entries = vec![workspace];
-        app.filtered = vec![0];
-        app.filtered_scores = vec![0];
-        app.selected = 0;
-        app.query = "repo".into();
-
-        let backend = TestBackend::new(80, 8);
-        let mut terminal = Terminal::new(backend).unwrap();
-        terminal
-            .draw(|f| {
-                draw_list(f, &app, f.area());
-            })
-            .unwrap();
-        let text = buffer_text(&terminal);
-        let buffer = terminal.backend().buffer();
-        let (row, line) = text
-            .lines()
-            .enumerate()
-            .find(|(_, line)| line.contains("repo › main"))
-            .unwrap();
-        let repository_x = line.find("repo").unwrap() as u16;
-        let main_x = line.find("main").unwrap() as u16;
-
-        assert_eq!(
-            buffer[(repository_x, row as u16)].fg,
-            repository_color("/repo/.git", &["/repo/.git".into()], &app.theme)
-        );
-        assert!(buffer[(repository_x, row as u16)]
-            .modifier
-            .contains(Modifier::BOLD));
-        assert!(!buffer[(main_x, row as u16)]
-            .modifier
-            .contains(Modifier::BOLD));
-    }
-
-    #[test]
-    fn flat_rows_put_destination_before_aligned_type_and_status() {
-        let mut app = App::new(Config::default(), Theme::terminal());
-        let mut idle = entry(Source::Workspace, "first-destination");
-        idle.source_label = Some("pane".into());
-        idle.agent_target = Some("p1".into());
-        idle.search_terms.push("agent-status:idle".into());
-        let mut blocked = entry(Source::Workspace, "second-destination");
-        blocked.source_label = Some("pane".into());
-        blocked.agent_target = Some("p2".into());
-        blocked.search_terms.push("agent-status:blocked".into());
-        let mut working = entry(Source::Workspace, "third-destination");
-        working.source_label = Some("pane".into());
-        working.agent_target = Some("p3".into());
-        working.search_terms.push("agent-status:working".into());
-        let mut ordinary = entry(Source::Workspace, "ordinary");
-        ordinary.subtitle = "remaining metadata".into();
-        app.entries = vec![idle, blocked, working, ordinary];
-        app.filtered = (0..app.entries.len()).collect();
-        app.filtered_scores = vec![0; app.entries.len()];
-        app.selected = usize::MAX;
-        app.query = "status".into();
-
-        let backend = TestBackend::new(100, 8);
-        let mut terminal = Terminal::new(backend).unwrap();
-        terminal
-            .draw(|f| {
-                draw_list(f, &app, f.area());
-            })
-            .unwrap();
-        let text = buffer_text(&terminal);
-        let buffer = terminal.backend().buffer();
-        let expected = [
-            ("first-destination", "○", "idle", app.theme.green),
-            ("second-destination", "!", "blocked", app.theme.red),
-            ("third-destination", "⠋", "working", app.theme.yellow),
-        ];
-
-        let mut type_column = None;
-        for (destination, symbol, status, color) in expected {
-            let (row, line) = text
-                .lines()
-                .enumerate()
-                .find(|(_, line)| line.contains(destination))
-                .unwrap();
-            assert_eq!(line.matches(status).count(), 1);
-            assert!(line.starts_with(destination));
-            let column = text_column(line, "pane");
-            assert_eq!(*type_column.get_or_insert(column), column);
-            let symbol_x = column + 10;
-            assert_eq!(line.chars().nth(symbol_x), symbol.chars().next());
-            assert_eq!(
-                line.chars()
-                    .skip(symbol_x + 2)
-                    .take(status.len())
-                    .collect::<String>(),
-                status
-            );
-            assert_eq!(buffer[(symbol_x as u16, row as u16)].fg, color);
-            assert_eq!(buffer[(symbol_x as u16 + 2, row as u16)].fg, color);
-        }
-
-        let (_row, ordinary_line) = text
-            .lines()
-            .enumerate()
-            .find(|(_, line)| line.contains("ordinary"))
-            .unwrap();
-        assert!(ordinary_line.starts_with("ordinary"));
-        assert!(ordinary_line.contains("remaining metadata"));
-        assert_eq!(
-            text_column(ordinary_line, " open "),
-            type_column.unwrap() - 1
-        );
-    }
-
-    fn topology_test_app() -> App {
-        let topology = OpenTopology {
-            workspaces: vec![WorkspaceNode {
-                id: "w1".into(),
-                label: "Workspace".into(),
-                session: Some("s".into()),
-                focused: true,
-                tabs: vec![TabNode {
-                    id: "t1".into(),
-                    label: "Tab".into(),
-                    focused: true,
-                    panes: vec![
-                        PaneNode {
-                            id: "p1".into(),
-                            label: "One".into(),
-                            cwd: PathBuf::new(),
-                            focused: true,
-                            title: None,
-                            agent: None,
-                        },
-                        PaneNode {
-                            id: "p2".into(),
-                            label: "Two".into(),
-                            cwd: PathBuf::new(),
-                            focused: false,
-                            title: None,
-                            agent: None,
-                        },
-                    ],
-                }],
-                git: None,
-            }],
-        };
-        let mut app = App::new(Config::default(), Theme::terminal());
-        app.topology_entries = crate::topology::query_entries(&topology);
-        app.topology = topology;
-        app.topology_cursor = TopologyCursor::new(&app.topology);
-        app
-    }
-
-    #[test]
-    fn vertical_navigation_crosses_workspace_boundaries() {
-        let mut app = topology_test_app();
-        let mut other = app.topology.workspaces[0].clone();
-        other.id = "w2".into();
-        other.label = "Other".into();
-        app.topology.workspaces.push(other);
-        app.topology_cursor.depth = TopologyDepth::Pane;
-
-        handle_key(&mut app, key(KeyCode::Char('j')));
-        assert_eq!(app.topology_cursor.workspace, 1);
-        assert_eq!(app.topology_cursor.depth, TopologyDepth::Tab);
-
-        handle_key(&mut app, key(KeyCode::Char('j')));
-        assert_eq!(app.topology_cursor.depth, TopologyDepth::Pane);
-
-        app.topology_cursor.depth = TopologyDepth::Workspace;
-        handle_key(&mut app, key(KeyCode::Char('k')));
-        assert_eq!(app.topology_cursor.workspace, 0);
-    }
-
-    #[test]
-    fn topology_mouse_selects_and_remembers_exact_pane_span() {
-        let mut app = topology_test_app();
-        let backend = TestBackend::new(80, 8);
-        let mut terminal = Terminal::new(backend).unwrap();
-        let mut hits = ListHits::default();
-        terminal
-            .draw(|frame| hits = draw_list(frame, &app, frame.area()))
-            .unwrap();
-        let text = buffer_text(&terminal);
-        let (row, line) = text
-            .lines()
-            .enumerate()
-            .find(|(_, line)| line.contains("Two"))
-            .unwrap();
-        let displayed_column = line.find("Two").unwrap() as u16;
-        let displayed_row = row as u16;
-        let hit = hits
-            .topology
-            .iter()
-            .find(|hit| hit.line == 2 && hit.child == Some(1))
-            .unwrap();
-        assert!(hit.x.contains(&displayed_column));
-        let action = handle_mouse(
-            &mut app,
-            MouseEvent {
-                kind: MouseEventKind::Down(MouseButton::Left),
-                column: displayed_column,
-                row: displayed_row,
-                modifiers: KeyModifiers::NONE,
-            },
-            &hits,
-        );
-        assert!(matches!(action, Action::Continue));
-        assert_eq!(app.topology_cursor.depth, TopologyDepth::Pane);
-        assert_eq!(app.topology_cursor.selection[0].pane, 1);
-        app.sync_topology_cursor();
-        assert_eq!(app.topology_cursor.selection[0].pane, 1);
-    }
-
-    #[test]
-    fn working_topology_entries_keep_the_spinner_loop_active() {
-        let mut app = topology_test_app();
-        app.topology.workspaces[0].tabs[0].panes[1].agent = Some(crate::topology::AgentMeta {
-            name: "claude".into(),
-            state: crate::topology::AgentState::Working,
-        });
-        app.entries = crate::topology::query_entries(&app.topology);
-        assert!(has_working_entry(&app));
-    }
-
-    #[test]
-    fn mouse_target_matches_the_current_animated_pane_glyph() {
-        let mut app = topology_test_app();
-        app.topology.workspaces[0].tabs[0].panes[1].agent = Some(crate::topology::AgentMeta {
-            name: "claude".into(),
-            state: crate::topology::AgentState::Working,
-        });
-        app.spinner_tick = 1;
-        let backend = TestBackend::new(80, 8);
-        let mut terminal = Terminal::new(backend).unwrap();
-        let mut hits = ListHits::default();
-        terminal
-            .draw(|frame| hits = draw_list(frame, &app, frame.area()))
-            .unwrap();
-        let text = buffer_text(&terminal);
-        let (row, line) = text
-            .lines()
-            .enumerate()
-            .find(|(_, line)| line.contains("⠙ claude"))
-            .unwrap();
-        let column = line.find("⠙").unwrap() as u16;
-        let action = handle_mouse(
-            &mut app,
-            MouseEvent {
-                kind: MouseEventKind::Down(MouseButton::Left),
-                column,
-                row: row as u16,
-                modifiers: KeyModifiers::NONE,
-            },
-            &hits,
-        );
-        assert!(matches!(action, Action::Continue));
-        assert_eq!(app.topology_cursor.selection[0].pane, 1);
-    }
-
-    #[test]
-    fn topology_mouse_uses_screen_coordinates_after_workspace_scroll() {
-        let mut app = topology_test_app();
-        for index in 1..6 {
-            let mut workspace = app.topology.workspaces[0].clone();
-            workspace.id = format!("w{index}");
-            workspace.label = format!("Workspace {index}");
-            app.topology.workspaces.push(workspace);
-        }
-        app.topology_cursor = TopologyCursor::new(&app.topology);
-        app.topology_cursor.workspace = 5;
-        app.topology_cursor.clamp(&app.topology);
-
-        let backend = TestBackend::new(80, 8);
-        let mut terminal = Terminal::new(backend).unwrap();
-        let mut hits = ListHits::default();
-        terminal
-            .draw(|frame| hits = draw_list(frame, &app, frame.area()))
-            .unwrap();
-        let text = buffer_text(&terminal);
-        let (row, line) = text
-            .lines()
-            .enumerate()
-            .find(|(_, line)| line.contains("Workspace 4"))
-            .unwrap();
-        let displayed_column = line.find("Workspace 4").unwrap() as u16;
-        let displayed_row = row as u16;
-        assert!(hits
-            .topology
-            .iter()
-            .any(|hit| hit.workspace == 4 && hit.line == 0 && hit.y.contains(&displayed_row)));
-
-        let action = handle_mouse(
-            &mut app,
-            MouseEvent {
-                kind: MouseEventKind::Down(MouseButton::Left),
-                column: displayed_column,
-                row: displayed_row,
-                modifiers: KeyModifiers::NONE,
-            },
-            &hits,
-        );
-        assert!(matches!(action, Action::Continue));
-        assert_eq!(app.topology_cursor.workspace, 4);
-    }
-
-    #[test]
-    fn topology_mouse_keeps_non_selected_workspace_tab_context() {
-        let mut app = topology_test_app();
-        app.topology.workspaces.push(WorkspaceNode {
-            id: "w2".into(),
-            label: "Other".into(),
-            session: Some("s".into()),
-            focused: false,
-            tabs: vec![
-                TabNode {
-                    id: "t2a".into(),
-                    label: "First".into(),
-                    focused: false,
-                    panes: vec![PaneNode {
-                        id: "p2a".into(),
-                        label: "Wrong".into(),
-                        cwd: PathBuf::new(),
-                        focused: false,
-                        title: None,
-                        agent: None,
-                    }],
-                },
-                TabNode {
-                    id: "t2b".into(),
-                    label: "Focused".into(),
-                    focused: true,
-                    panes: vec![PaneNode {
-                        id: "p2b".into(),
-                        label: "Right".into(),
-                        cwd: PathBuf::new(),
-                        focused: true,
-                        title: None,
-                        agent: None,
-                    }],
-                },
-            ],
-            git: None,
-        });
-        app.topology_entries = crate::topology::query_entries(&app.topology);
-        app.topology_cursor = TopologyCursor::new(&app.topology);
-        let backend = TestBackend::new(80, 12);
-        let mut terminal = Terminal::new(backend).unwrap();
-        let mut hits = ListHits::default();
-        terminal
-            .draw(|frame| hits = draw_list(frame, &app, frame.area()))
-            .unwrap();
-        let hit = hits
-            .topology
-            .iter()
-            .find(|hit| hit.workspace == 1 && hit.line == 2 && hit.child == Some(0))
-            .unwrap();
-        let _ = handle_mouse(
-            &mut app,
-            MouseEvent {
-                kind: MouseEventKind::Down(MouseButton::Left),
-                column: hit.x.start,
-                row: hit.y.start,
-                modifiers: KeyModifiers::NONE,
-            },
-            &hits,
-        );
-        assert_eq!(app.topology_cursor.selection[1].tab, 1);
-        assert_eq!(app.topology_cursor.selection[1].pane, 0);
-    }
-
-    #[test]
-    fn topology_rows_reserve_selection_slots_for_tabs_and_panes() {
-        let mut app = topology_test_app();
-        app.topology.workspaces[0].tabs.push(TabNode {
-            id: "t2".into(),
-            label: "Other".into(),
-            focused: false,
-            panes: vec![PaneNode {
-                id: "p3".into(),
-                label: "Three".into(),
-                cwd: PathBuf::new(),
-                focused: false,
-                title: None,
-                agent: None,
-            }],
-        });
-        let rows = crate::topology::topology_rows_selected(
-            &app.topology.workspaces[0],
-            80,
-            Some(crate::topology::ChildSelection { tab: 0, pane: 1 }),
-        );
-
-        assert!(rows[1].contains(" Tab   Other "));
-        assert!(rows[2].contains(" One   Two "));
-        assert!(rows
-            .iter()
-            .all(|row| !row.contains('[') && !row.contains(']')));
-    }
-
-    #[test]
-    fn topology_rows_keep_exact_terminal_widths() {
-        let app = topology_test_app();
-        for width in [44, 60, 110] {
-            let rows = crate::topology::topology_rows_selected(
-                &app.topology.workspaces[0],
-                width,
-                Some(app.topology_cursor.selection[0]),
-            );
-            assert!(rows.iter().all(|row| Span::raw(row).width() == width));
-            assert!(rows.iter().all(|row| !row.contains('\n')));
-        }
-    }
-
-    #[test]
-    fn topology_mouse_hits_selected_child_when_value_exceeds_span() {
-        let mut app = topology_test_app();
-        app.topology.workspaces[0].tabs[0].label = "A selected tab label 123456789012".into();
-        let backend = TestBackend::new(44, 8);
-        let mut terminal = Terminal::new(backend).unwrap();
-        let mut hits = ListHits::default();
-        terminal
-            .draw(|frame| hits = draw_list(frame, &app, frame.area()))
-            .unwrap();
-        assert!(hits
-            .topology
-            .iter()
-            .any(|hit| hit.workspace == 0 && hit.line == 1 && hit.child == Some(0)));
-    }
-
-    #[test]
-    fn topology_rows_keep_selected_far_right_child_visible() {
-        let mut app = topology_test_app();
-        for index in 0..10 {
-            app.topology.workspaces[0].tabs.push(TabNode {
-                id: format!("t{index}"),
-                label: format!("Tab-{index}"),
-                focused: false,
-                panes: vec![PaneNode {
-                    id: format!("p{index}"),
-                    label: format!("Pane-{index}"),
-                    cwd: PathBuf::new(),
-                    focused: false,
-                    title: None,
-                    agent: None,
-                }],
-            });
-        }
-        app.topology_cursor.selection[0].tab = 10;
-        app.topology_cursor.selection[0].pane = 0;
-        let rows = crate::topology::topology_rows_selected(
-            &app.topology.workspaces[0],
-            44,
-            Some(app.topology_cursor.selection[0]),
-        );
-        assert!(rows[1].contains("Tab-9") || rows[1].contains("Tab-10"));
-        assert!(rows[2].contains("Pane-9") || rows[2].contains("Pane-10"));
-        assert!(rows
-            .iter()
-            .all(|row| !row.contains('[') && !row.contains(']')));
-    }
-
-    #[test]
-    fn topology_cursor_clamps_to_deepest_existing_target() {
-        let mut app = topology_test_app();
-        app.topology.workspaces[0].tabs[0].panes.clear();
-        app.topology_cursor.depth = TopologyDepth::Pane;
-        app.topology_cursor.clamp(&app.topology);
-        assert_eq!(app.topology_cursor.depth, TopologyDepth::Tab);
-        app.topology.workspaces[0].tabs.clear();
-        app.topology_cursor.clamp(&app.topology);
-        assert_eq!(app.topology_cursor.depth, TopologyDepth::Workspace);
-    }
-
-    #[test]
-    fn topology_actions_keep_exact_workspace_tab_and_pane_ids() {
-        let mut app = topology_test_app();
-        assert!(
-            matches!(app.topology_selected_entry().unwrap().action, EntryAction::FocusWorkspace { ref id, .. } if id == "w1")
-        );
-        app.topology_cursor.enter_tab(&app.topology);
-        assert!(
-            matches!(app.topology_selected_entry().unwrap().action, EntryAction::FocusTab { ref id, .. } if id == "t1")
-        );
-        app.topology_cursor.enter_pane(&app.topology);
-        assert!(
-            matches!(app.topology_selected_entry().unwrap().action, EntryAction::FocusPane { ref id, .. } if id == "p1")
-        );
     }
 
     fn buffer_text(terminal: &Terminal<TestBackend>) -> String {
@@ -1989,6 +1157,7 @@ mod tests {
         config.picker.directory_template = Some("default.toml".into());
         let mut app = App::new(config, Theme::terminal());
         app.entries = vec![entry(Source::Zoxide, "/tmp")];
+        app.source_filter = Some(Source::Zoxide);
         app.apply_filter();
 
         assert!(matches!(
@@ -2092,155 +1261,6 @@ mod tests {
     }
 
     #[test]
-    fn topology_visual_columns_and_partial_styles_match_design() {
-        let mut app = topology_test_app();
-        app.topology.workspaces[0].git = Some(crate::topology::GitIdentity {
-            repo_key: "/repo/.git".into(),
-            label: "repo".into(),
-            head: crate::topology::GitHead::Branch("main".into()),
-            last_commit_at: None,
-        });
-        app.topology_cursor.depth = TopologyDepth::Tab;
-        let backend = TestBackend::new(80, 8);
-        let mut terminal = Terminal::new(backend).unwrap();
-        terminal
-            .draw(|f| {
-                draw_list(f, &app, f.area());
-            })
-            .unwrap();
-        let buffer = terminal.backend().buffer();
-        assert_eq!(buffer[(9, 2)].symbol(), "t");
-        assert_eq!(buffer[(9, 3)].symbol(), "p");
-        assert_eq!(buffer[(9, 4)].symbol(), "p");
-        let repository_x = buffer_text(&terminal)
-            .lines()
-            .nth(1)
-            .unwrap()
-            .find("repo")
-            .unwrap() as u16;
-        assert_eq!(buffer[(repository_x, 1)].fg, app.theme.teal);
-        assert!(buffer[(repository_x, 1)].modifier.contains(Modifier::BOLD));
-        assert!(!buffer[(repository_x + 6, 1)]
-            .modifier
-            .contains(Modifier::BOLD));
-
-        let mut flat = App::new(Config::default(), Theme::terminal());
-        let mut result = entry(Source::Workspace, "Destination");
-        result.source_label = Some("open".into());
-        result.subtitle = "repo › main › Tab".into();
-        result.search_terms.push("repo-key:/repo/.git".into());
-        flat.entries = vec![result];
-        flat.query = "repo".into();
-        flat.apply_filter();
-        flat.selected = usize::MAX;
-        let backend = TestBackend::new(80, 8);
-        let mut terminal = Terminal::new(backend).unwrap();
-        terminal
-            .draw(|f| {
-                draw_list(f, &flat, f.area());
-            })
-            .unwrap();
-        let buffer = terminal.backend().buffer();
-        let rendered = buffer_text(&terminal);
-        let (row, line) = rendered
-            .lines()
-            .enumerate()
-            .find(|(_, line)| line.contains("Destination"))
-            .unwrap();
-        let line = line.to_string();
-        let source_x = text_column(&line, "open") as u16;
-        let parent_x = text_column(&line, "repo") as u16;
-        assert_eq!(buffer[(source_x, row as u16)].fg, flat.theme.overlay0);
-        assert!(!buffer[(source_x, row as u16)]
-            .modifier
-            .contains(Modifier::BOLD));
-        assert_eq!(buffer[(parent_x, row as u16)].fg, flat.theme.teal);
-        assert!(buffer[(parent_x, row as u16)]
-            .modifier
-            .contains(Modifier::BOLD));
-        assert!(!buffer[(parent_x + 7, row as u16)]
-            .modifier
-            .contains(Modifier::BOLD));
-    }
-
-    #[test]
-    fn topology_selection_uses_derived_group_depth_and_cell_backgrounds() {
-        let mut app = topology_test_app();
-        app.topology_cursor.depth = TopologyDepth::Tab;
-        let backend = TestBackend::new(80, 8);
-        let mut terminal = Terminal::new(backend).unwrap();
-        terminal
-            .draw(|f| {
-                draw_list(f, &app, f.area());
-            })
-            .unwrap();
-        let buffer = terminal.backend().buffer();
-        let text = buffer_text(&terminal);
-
-        assert!(!text.contains('['));
-        assert!(!text.contains(']'));
-        assert!(app.theme.group_background() != app.theme.base_background);
-        assert!(app.theme.depth_background() != app.theme.group_background());
-        assert!(app.theme.cell_background() != app.theme.depth_background());
-        assert_eq!(buffer[(0, 1)].bg, app.theme.group_background());
-        assert_eq!(buffer[(0, 2)].bg, app.theme.depth_background());
-        assert_eq!(buffer[(0, 3)].bg, app.theme.group_background());
-        assert_eq!(buffer[(0, 4)].bg, app.theme.group_background());
-
-        let tab_row = text.lines().nth(2).unwrap();
-        let tab_x = tab_row.find("Tab").unwrap() as u16;
-        assert_eq!(buffer[(tab_x, 2)].bg, app.theme.cell_background());
-        assert_eq!(buffer[(tab_x - 1, 2)].bg, app.theme.depth_background());
-        assert_eq!(buffer[(tab_x + 3, 2)].bg, app.theme.depth_background());
-    }
-
-    #[test]
-    fn only_the_current_topology_depth_cell_looks_selected() {
-        let mut app = topology_test_app();
-        app.topology_cursor.depth = TopologyDepth::Tab;
-        app.topology_cursor.selection[0].pane = 1;
-        let backend = TestBackend::new(80, 8);
-        let mut terminal = Terminal::new(backend).unwrap();
-        terminal
-            .draw(|f| {
-                draw_list(f, &app, f.area());
-            })
-            .unwrap();
-        let buffer = terminal.backend().buffer();
-        let text = buffer_text(&terminal);
-        let tab_x = text.lines().nth(2).unwrap().find("Tab").unwrap() as u16;
-        let pane_x = text.lines().nth(3).unwrap().find("Two").unwrap() as u16;
-
-        assert_eq!(buffer[(tab_x, 2)].bg, app.theme.cell_background());
-        assert_ne!(buffer[(pane_x, 3)].bg, app.theme.cell_background());
-        assert!(!buffer[(pane_x, 3)].modifier.contains(Modifier::BOLD));
-    }
-
-    #[test]
-    fn pane_cells_use_compact_backgrounds_without_brackets() {
-        let mut app = topology_test_app();
-        app.topology_cursor.depth = TopologyDepth::Pane;
-        app.topology_cursor.selection[0].pane = 1;
-        let backend = TestBackend::new(80, 8);
-        let mut terminal = Terminal::new(backend).unwrap();
-        terminal
-            .draw(|f| {
-                draw_list(f, &app, f.area());
-            })
-            .unwrap();
-        let buffer = terminal.backend().buffer();
-        let text = buffer_text(&terminal);
-        let pane_row = text.lines().nth(3).unwrap();
-        let pane_x = pane_row.find("Two").unwrap() as u16;
-
-        assert_eq!(buffer[(pane_x, 3)].bg, app.theme.cell_background());
-        assert_eq!(buffer[(pane_x - 1, 3)].bg, app.theme.depth_background());
-        assert_eq!(buffer[(pane_x + 3, 3)].bg, app.theme.depth_background());
-        assert!(!pane_row.contains('['));
-        assert!(!pane_row.contains(']'));
-    }
-
-    #[test]
     fn picker_default_surfaces_use_the_base_background() {
         let app = App::new(Config::default(), Theme::terminal());
         let backend = TestBackend::new(80, 8);
@@ -2255,25 +1275,6 @@ mod tests {
         assert_eq!(buffer[(0, 0)].bg, app.theme.base_background);
         assert_eq!(buffer[(0, 1)].bg, app.theme.base_background);
         assert_eq!(buffer[(0, 6)].bg, app.theme.base_background);
-    }
-
-    #[test]
-    fn selected_depth_is_distinct_from_the_workspace_group() {
-        let mut app = topology_test_app();
-        app.topology_cursor.depth = TopologyDepth::Tab;
-        let backend = TestBackend::new(80, 8);
-        let mut terminal = Terminal::new(backend).unwrap();
-        terminal
-            .draw(|f| {
-                draw_list(f, &app, f.area());
-            })
-            .unwrap();
-        let buffer = terminal.backend().buffer();
-
-        assert_eq!(buffer[(0, 1)].bg, app.theme.group_background());
-        assert_eq!(buffer[(0, 2)].bg, app.theme.depth_background());
-        assert!(buffer[(0, 2)].modifier.contains(Modifier::BOLD));
-        assert_eq!(buffer[(9, 2)].symbol(), "t");
     }
 
     #[test]
@@ -2460,7 +1461,6 @@ mod tests {
         let hits = ListHits {
             area: Rect::new(0, 3, 40, 10),
             rows: vec![(4..5, 0), (5..6, 1)],
-            topology: Vec::new(),
         };
 
         handle_mouse(
@@ -2474,28 +1474,6 @@ mod tests {
             &hits,
         );
         assert_eq!(app.selected, 0);
-    }
-
-    #[test]
-    fn uppercase_j_and_k_switch_workspaces_at_nested_depth() {
-        let mut app = topology_test_app();
-        let mut other = app.topology.workspaces[0].clone();
-        other.id = "w2".into();
-        other.label = "Other".into();
-        app.topology.workspaces.push(other);
-        app.topology_cursor.depth = TopologyDepth::Pane;
-
-        handle_key(
-            &mut app,
-            KeyEvent::new(KeyCode::Char('J'), KeyModifiers::SHIFT),
-        );
-        assert_eq!(app.topology_cursor.workspace, 1);
-
-        handle_key(
-            &mut app,
-            KeyEvent::new(KeyCode::Char('K'), KeyModifiers::SHIFT),
-        );
-        assert_eq!(app.topology_cursor.workspace, 0);
     }
 
     #[test]
@@ -2524,5 +1502,408 @@ mod tests {
 
         handle_key(&mut app, key(KeyCode::Esc));
         assert_eq!(app.input_mode, InputMode::Normal);
+    }
+
+    fn pane(id: &str, cwd: &str, agent: Option<(&str, AgentState)>) -> PaneNode {
+        PaneNode {
+            id: id.into(),
+            label: id.into(),
+            cwd: PathBuf::from(cwd),
+            focused: false,
+            title: None,
+            agent: agent.map(|(name, state)| AgentMeta {
+                name: name.into(),
+                state,
+            }),
+        }
+    }
+
+    fn glance_workspace(
+        id: &str,
+        label: &str,
+        focused: bool,
+        last_commit_at: Option<i64>,
+        panes: Vec<PaneNode>,
+    ) -> WorkspaceNode {
+        WorkspaceNode {
+            id: id.into(),
+            label: label.into(),
+            session: None,
+            focused,
+            tabs: vec![TabNode {
+                id: format!("{id}:t1"),
+                label: "Code".into(),
+                focused: true,
+                panes,
+            }],
+            git: Some(GitIdentity {
+                repo_key: format!("/repos/{label}/.git"),
+                label: label.into(),
+                head: GitHead::Branch(format!("{label}-branch")),
+                last_commit_at,
+            }),
+        }
+    }
+
+    fn glance_app(
+        now: i64,
+        previous: Option<&str>,
+        workspaces: Vec<WorkspaceNode>,
+        activity: ActivityState,
+    ) -> App {
+        let mut app = App::new(Config::default(), Theme::terminal());
+        app.apply_workspaces(
+            Workspaces {
+                topology: OpenTopology { workspaces },
+                activity,
+                previous: previous.map(str::to_string),
+            },
+            now,
+        );
+        app
+    }
+
+    fn render_app(app: &App, width: u16, height: u16) -> (Vec<String>, ListHits) {
+        let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
+        let mut hits = ListHits::default();
+        terminal.draw(|f| hits = draw(f, app)).unwrap();
+        let text = buffer_text(&terminal);
+        (text.lines().map(str::to_string).collect(), hits)
+    }
+
+    fn line_index(lines: &[String], needle: &str) -> usize {
+        lines
+            .iter()
+            .position(|line| line.contains(needle))
+            .unwrap_or_else(|| panic!("no line contains {needle:?}"))
+    }
+
+    fn column_of(line: &str, needle: &str) -> usize {
+        let byte = line.find(needle).unwrap();
+        line[..byte].chars().count()
+    }
+
+    const NOW: i64 = 1_000_000;
+
+    #[test]
+    fn glance_groups_render_in_order_with_a_blank_line_between_them() {
+        let mut activity = ActivityState::default();
+        activity.record_agent_status("p-helm", "working", NOW - 14 * 60);
+        activity.record_agent_status("p-skills", "blocked", NOW - 4 * 60);
+        let app = glance_app(
+            NOW,
+            None,
+            vec![
+                glance_workspace(
+                    "w1",
+                    "helm",
+                    true,
+                    None,
+                    vec![pane(
+                        "p-helm",
+                        "/repos/helm",
+                        Some(("claude", AgentState::Working)),
+                    )],
+                ),
+                glance_workspace(
+                    "w2",
+                    "skills",
+                    false,
+                    None,
+                    vec![pane(
+                        "p-skills",
+                        "/repos/skills",
+                        Some(("claude", AgentState::Blocked)),
+                    )],
+                ),
+                glance_workspace("w3", "koyo", false, Some(NOW - 3 * 86_400), vec![]),
+                glance_workspace("w4", "lazyjira", false, Some(NOW - 2 * 3_600), vec![]),
+            ],
+            activity,
+        );
+
+        let (lines, _) = render_app(&app, 110, 20);
+        let headings = ["NEEDS YOU · 1", "ACTIVE · 1", "RECENT · 1", "QUIET · 1"]
+            .map(|label| line_index(&lines, label));
+        assert!(headings.windows(2).all(|pair| pair[0] < pair[1]));
+        for heading in &headings[1..] {
+            assert!(lines[heading - 1].trim().is_empty());
+        }
+        assert!(lines[headings[0] + 1].contains("skills"));
+        assert!(lines[headings[1] + 1].contains("helm"));
+        assert!(lines[headings[2] + 1].contains("lazyjira"));
+        assert!(lines[headings[3] + 1].contains("koyo"));
+        assert!(!lines.iter().any(|line| line.contains('→')));
+    }
+
+    #[test]
+    fn glance_rows_align_branch_and_signal_columns_across_rows() {
+        let mut activity = ActivityState::default();
+        activity.record_agent_status("p-skills", "blocked", NOW - 4 * 60);
+        let app = glance_app(
+            NOW,
+            None,
+            vec![
+                glance_workspace(
+                    "w1",
+                    "helm",
+                    true,
+                    None,
+                    vec![pane(
+                        "p-helm",
+                        "/repos/helm",
+                        Some(("claude", AgentState::Working)),
+                    )],
+                ),
+                glance_workspace(
+                    "w2",
+                    "skills",
+                    false,
+                    None,
+                    vec![pane(
+                        "p-skills",
+                        "/repos/skills",
+                        Some(("claude", AgentState::Blocked)),
+                    )],
+                ),
+                glance_workspace("w3", "lazyjira", false, Some(NOW - 2 * 3_600), vec![]),
+            ],
+            activity,
+        );
+
+        let (lines, _) = render_app(&app, 110, 20);
+        let rows = [
+            ("helm-branch", "helm", "working"),
+            ("skills-branch", "skills", "waiting 4m"),
+            ("lazyjira-branch", "lazyjira", "commit 2h"),
+        ];
+        let branch_columns: Vec<usize> = rows
+            .iter()
+            .map(|(branch, _, _)| column_of(&lines[line_index(&lines, branch)], branch))
+            .collect();
+        assert!(branch_columns.windows(2).all(|pair| pair[0] == pair[1]));
+        let signal_ends: Vec<usize> = rows
+            .iter()
+            .map(|(_, name, signal)| {
+                let line = &lines[line_index(&lines, name)];
+                column_of(line, signal) + signal.chars().count()
+            })
+            .collect();
+        assert!(signal_ends.windows(2).all(|pair| pair[0] == pair[1]));
+    }
+
+    #[test]
+    fn here_and_last_marks_the_focused_and_previous_workspace() {
+        let app = glance_app(
+            NOW,
+            Some("w2"),
+            vec![
+                glance_workspace("w1", "helm", true, Some(NOW - 60), vec![]),
+                glance_workspace("w2", "skills", false, Some(NOW - 120), vec![]),
+                glance_workspace("w3", "koyo", false, Some(NOW - 180), vec![]),
+            ],
+            ActivityState::default(),
+        );
+
+        let (lines, _) = render_app(&app, 110, 20);
+        assert!(lines[line_index(&lines, "helm")].contains("here"));
+        assert!(lines[line_index(&lines, "skills")].contains("last"));
+        assert!(!lines[line_index(&lines, "koyo")].contains("here"));
+        assert!(!lines[line_index(&lines, "koyo")].contains("last"));
+    }
+
+    #[test]
+    fn directories_group_appears_only_while_a_query_is_active() {
+        let mut app = glance_app(
+            NOW,
+            None,
+            vec![glance_workspace("w1", "helm", true, Some(NOW - 60), vec![])],
+            ActivityState::default(),
+        );
+        app.entries.push(entry(Source::Zoxide, "projects-dir"));
+        app.apply_filter();
+        let (lines, _) = render_app(&app, 110, 20);
+        assert!(!lines.iter().any(|line| line.contains("DIRECTORIES")));
+
+        app.query = "projects".into();
+        app.apply_filter();
+        let (lines, _) = render_app(&app, 110, 20);
+        let heading = line_index(&lines, "DIRECTORIES · 1");
+        assert!(lines[heading + 1].contains("projects-dir"));
+        assert!(!lines.iter().any(|line| line.contains("helm")));
+    }
+
+    #[test]
+    fn search_keeps_the_group_layout_and_drops_non_matching_rows() {
+        let mut activity = ActivityState::default();
+        activity.record_agent_status("p-skills", "blocked", NOW - 4 * 60);
+        let mut app = glance_app(
+            NOW,
+            None,
+            vec![
+                glance_workspace("w1", "helm", true, Some(NOW - 60), vec![]),
+                glance_workspace(
+                    "w2",
+                    "skills",
+                    false,
+                    None,
+                    vec![pane(
+                        "p-skills",
+                        "/repos/skills",
+                        Some(("claude", AgentState::Blocked)),
+                    )],
+                ),
+            ],
+            activity,
+        );
+        app.query = "skills".into();
+        app.apply_filter();
+
+        let (lines, _) = render_app(&app, 110, 20);
+        assert!(lines[line_index(&lines, "NEEDS YOU · 1")].contains("NEEDS YOU"));
+        assert!(!lines.iter().any(|line| line.contains("helm")));
+    }
+
+    #[test]
+    fn clicking_a_glance_row_selects_that_workspace() {
+        let mut app = glance_app(
+            NOW,
+            None,
+            vec![
+                glance_workspace("w1", "helm", true, Some(NOW - 60), vec![]),
+                glance_workspace("w2", "lazyjira", false, Some(NOW - 2 * 3_600), vec![]),
+            ],
+            ActivityState::default(),
+        );
+        let (lines, hits) = render_app(&app, 110, 20);
+        let row = line_index(&lines, "lazyjira") as u16;
+        let (_, position) = hits
+            .rows
+            .iter()
+            .find(|(range, _)| range.contains(&row))
+            .unwrap();
+        assert_eq!(*position, 1);
+
+        handle_mouse(
+            &mut app,
+            MouseEvent {
+                kind: MouseEventKind::Down(MouseButton::Left),
+                column: 5,
+                row,
+                modifiers: KeyModifiers::NONE,
+            },
+            &hits,
+        );
+        assert_eq!(app.selected_entry().unwrap().title, "lazyjira");
+    }
+
+    #[test]
+    fn working_agent_keeps_the_spinner_loop_active() {
+        let mut activity = ActivityState::default();
+        activity.record_agent_status("p1", "working", NOW - 60);
+        let working = glance_app(
+            NOW,
+            None,
+            vec![glance_workspace(
+                "w1",
+                "helm",
+                true,
+                None,
+                vec![pane(
+                    "p1",
+                    "/repos/helm",
+                    Some(("claude", AgentState::Working)),
+                )],
+            )],
+            activity,
+        );
+        assert!(has_working_entry(&working));
+
+        let idle = glance_app(
+            NOW,
+            None,
+            vec![glance_workspace("w1", "helm", true, Some(NOW - 60), vec![])],
+            ActivityState::default(),
+        );
+        assert!(!has_working_entry(&idle));
+    }
+
+    #[test]
+    fn glance_renders_a_realistic_list_at_160_by_40() {
+        let mut activity = ActivityState::default();
+        activity.record_focus("w1", NOW - 6 * 60);
+        activity.record_agent_status("p-helm", "working", NOW - 14 * 60);
+        activity.record_agent_status("p-skills", "blocked", NOW - 4 * 60);
+        activity.record_agent_status("p-writing", "done", NOW - 12 * 60);
+        activity.record_agent_status("p-mdn", "working", NOW - 14 * 60);
+        activity.record_focus("w5", NOW - 38 * 60);
+        let mut app = glance_app(
+            NOW,
+            Some("w2"),
+            vec![
+                glance_workspace(
+                    "w1",
+                    "helm.herdr",
+                    true,
+                    Some(NOW - 6 * 60),
+                    vec![pane(
+                        "p-helm",
+                        "/repos/helm",
+                        Some(("claude", AgentState::Working)),
+                    )],
+                ),
+                glance_workspace("w2", "dots", false, Some(NOW - 3 * 3_600), vec![]),
+                glance_workspace(
+                    "w3",
+                    "skills",
+                    false,
+                    None,
+                    vec![pane(
+                        "p-skills",
+                        "/repos/skills",
+                        Some(("claude", AgentState::Blocked)),
+                    )],
+                ),
+                glance_workspace(
+                    "w4",
+                    "writing",
+                    false,
+                    None,
+                    vec![pane(
+                        "p-writing",
+                        "/repos/writing",
+                        Some(("claude", AgentState::Done)),
+                    )],
+                ),
+                glance_workspace(
+                    "w5",
+                    "mdn.nvim",
+                    false,
+                    None,
+                    vec![pane(
+                        "p-mdn",
+                        "/repos/mdn",
+                        Some(("claude", AgentState::Working)),
+                    )],
+                ),
+                glance_workspace("w6", "lazyjira", false, Some(NOW - 2 * 3_600), vec![]),
+                glance_workspace("w7", "koyo", false, Some(NOW - 3 * 86_400), vec![]),
+                glance_workspace("w8", "fonts", false, Some(NOW - 9 * 86_400), vec![]),
+            ],
+            activity,
+        );
+        let dots = app
+            .topology_entries
+            .iter()
+            .find(|entry| entry.title == "dots")
+            .unwrap()
+            .clone();
+        app.pinned_entries.insert(pin_key(&dots));
+        app.rebuild_glance();
+        app.apply_filter();
+
+        let (lines, _) = render_app(&app, 160, 40);
+        assert!(line_index(&lines, "PINNED") < line_index(&lines, "NEEDS YOU"));
+        assert!(lines[line_index(&lines, "fonts")].contains("9d"));
     }
 }

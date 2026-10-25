@@ -50,7 +50,11 @@
 | **Workspace** | A Herdr container for related Tabs and their Panes. | Project, session |
 | **Tab** | A named view within a Workspace containing one or more Panes. | Workspace tab, window |
 | **Pane** | A terminal area within a Tab. | Panel, split |
-| **Topology** | The live Workspace → Tab → Pane structure shown as fixed four-line Workspace blocks. | Workspace list |
+| **Glance** | The default Picker view: one row per open Workspace, grouped by Warmth group. | Topology view, workspace list |
+| **Warmth group** | One of Pinned, Needs you, Active, Recent, or Quiet, which places a Workspace in the Glance. | Bucket, section |
+| **Other group** | The group of quick action and plugin Entries, shown in the Glance only while a Query is active. | Other source |
+| **Signal** | The fact that placed a row in its Warmth group, shown as text such as `waiting 4m`. | Reason, badge |
+| **Topology** | The live Workspace → Tab → Pane structure read from Herdr. | Workspace list |
 | **Current workspace** | The local Workspace that currently owns the focused Herdr surface. | Active project, current project |
 | **Previous workspace** | The local Workspace visited immediately before the Current workspace. | Last workspace, previous project |
 
@@ -70,8 +74,7 @@
 | Term | Definition | Aliases to avoid |
 | --- | --- | --- |
 | **Status glyph** | A symbol that communicates the current state of an agent or Workspace. | Status icon, indicator |
-| **Selection marker** | The `→` symbol identifying the Selected entry. | Cursor, pointer |
-| **Topology depth** | The selected level in a Topology block: Workspace, Tab, or Pane. | Navigation level |
+| **Selection marker** | The row background that identifies the Selected entry. | Cursor, pointer, arrow |
 
 ## Relationships
 
@@ -81,7 +84,8 @@
 - An **Entry row** renders exactly one **Entry**; the **Selected entry** is one Entry in the current Result list.
 - An **Entry action** is applied to the **Selected entry**.
 - A **Topology** contains **Workspaces**; each **Workspace** contains one or more **Tabs**, and each **Tab** contains one or more **Panes**.
-- A **Marked entry** is ordered ahead of unmarked Entries within its Source ordering.
+- A **Glance** lists each open **Workspace** once, in its **Warmth group**.
+- A **Marked entry** of a **Workspace** sits in the **Pinned** Warmth group, ahead of every other group.
 
 ## Example dialogue
 
@@ -91,8 +95,8 @@
 > **Agent:** "The **Entry** is the destination. The **Entry row** is its visual representation in the Result list."
 > **User:** "What happens when I press Enter?"
 > **Agent:** "The Picker applies the **Entry action** for the **Selected entry**, such as focusing a Workspace or running an integration command."
-> **User:** "How do I reach a Pane?"
-> **Agent:** "The **Topology** shows the Workspace, its Tabs, the selected Tab's Panes, and the selected Pane detail. Enter focuses the exact Pane ID."
+> **User:** "How do I see what needs me?"
+> **Agent:** "The **Glance** puts Workspaces that need you in the Needs you group, at the top after Pinned."
 
 ## Flagged ambiguities
 

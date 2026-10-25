@@ -3,6 +3,7 @@ use std::{collections::HashMap, fs};
 use serde::Deserialize;
 
 use crate::{
+    glance::IconStyle,
     model::Source,
     paths::{migrate_legacy_plugin_config, plugin_config_dir},
 };
@@ -15,6 +16,8 @@ pub(crate) struct Config {
     pub(crate) picker: PickerConfig,
     #[serde(default)]
     pub(crate) jump_back: JumpBackConfig,
+    #[serde(default)]
+    pub(crate) glance: GlanceConfig,
     #[serde(default)]
     pub(crate) notifications: NotificationsConfig,
     #[serde(default)]
@@ -53,8 +56,16 @@ pub(crate) struct PickerConfig {
 pub(crate) struct JumpBackConfig {
     #[serde(default = "yes")]
     pub(crate) enabled: bool,
-    #[serde(default = "yes")]
-    pub(crate) pin_previous: bool,
+}
+
+#[derive(Clone, Deserialize)]
+pub(crate) struct GlanceConfig {
+    #[serde(default = "default_active_minutes")]
+    pub(crate) active_minutes: i64,
+    #[serde(default = "default_recent_hours")]
+    pub(crate) recent_hours: i64,
+    #[serde(default)]
+    pub(crate) icons: IconStyle,
 }
 
 #[derive(Clone, Deserialize)]
@@ -139,6 +150,12 @@ fn default_source_priority_boost() -> i64 {
 }
 fn default_directory_template_key() -> String {
     "alt-enter".into()
+}
+fn default_active_minutes() -> i64 {
+    15
+}
+fn default_recent_hours() -> i64 {
+    4
 }
 fn default_notification_sound() -> String {
     "default".into()
@@ -238,9 +255,15 @@ impl PickerConfig {
 }
 impl Default for JumpBackConfig {
     fn default() -> Self {
+        Self { enabled: true }
+    }
+}
+impl Default for GlanceConfig {
+    fn default() -> Self {
         Self {
-            enabled: true,
-            pin_previous: true,
+            active_minutes: default_active_minutes(),
+            recent_hours: default_recent_hours(),
+            icons: IconStyle::default(),
         }
     }
 }
@@ -276,6 +299,7 @@ impl Default for Config {
         Self {
             picker: PickerConfig::default(),
             jump_back: JumpBackConfig::default(),
+            glance: GlanceConfig::default(),
             notifications: NotificationsConfig::default(),
             sources: SourcesConfig::default(),
             theme: ThemeConfig::default(),
@@ -425,11 +449,28 @@ mod tests {
     }
 
     #[test]
-    fn jump_back_defaults_to_enabled_and_pinned() {
-        let config = Config::default();
+    fn jump_back_defaults_to_enabled() {
+        assert!(Config::default().jump_back.enabled);
+    }
 
-        assert!(config.jump_back.enabled);
-        assert!(config.jump_back.pin_previous);
+    #[test]
+    fn glance_defaults_and_overrides() {
+        let default = Config::default().glance;
+        assert_eq!(default.active_minutes, 15);
+        assert_eq!(default.recent_hours, 4);
+        assert_eq!(default.icons, IconStyle::Unicode);
+
+        let custom: Config = toml::from_str(
+            r#"
+            [glance]
+            active_minutes = 5
+            icons = "nerd"
+            "#,
+        )
+        .unwrap();
+        assert_eq!(custom.glance.active_minutes, 5);
+        assert_eq!(custom.glance.recent_hours, 4);
+        assert_eq!(custom.glance.icons, IconStyle::Nerd);
     }
 
     #[test]
@@ -438,13 +479,11 @@ mod tests {
             r#"
             [jump_back]
             enabled = false
-            pin_previous = false
             "#,
         )
         .unwrap();
 
         assert!(!config.jump_back.enabled);
-        assert!(!config.jump_back.pin_previous);
     }
 
     #[test]
@@ -498,6 +537,9 @@ mod tests {
             agent = "ctrl-g"
             project = "ctrl-h"
 
+            [jump_back]
+            pin_previous = true
+
             [sources]
             agents = true
             herdr_plus_projects = true
@@ -509,6 +551,7 @@ mod tests {
         )
         .unwrap();
 
+        assert!(config.jump_back.enabled);
         let sources = config.enabled_sources_in_order();
         assert_eq!(sources[0], Source::Workspace);
         assert_eq!(sources[1], Source::Zoxide);
