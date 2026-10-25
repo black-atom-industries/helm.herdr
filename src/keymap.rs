@@ -308,7 +308,7 @@ pub(crate) fn keybindings(app: &App) -> Vec<Keybind> {
         )],
         "pin to the top",
         "Act",
-        Some("pin"),
+        None,
     ));
 
     bindings.push(

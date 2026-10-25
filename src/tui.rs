@@ -293,7 +293,9 @@ fn handle_key(app: &mut App, key: KeyEvent) -> Action {
         .find_map(|binding| binding.command_for(app, key));
 
     if app.input_mode == InputMode::Help {
-        if matches!(command, Some(Command::Back | Command::ToggleHelp)) {
+        if matches!(command, Some(Command::Back | Command::ToggleHelp))
+            || key.code == KeyCode::Char('q')
+        {
             app.input_mode = InputMode::Normal;
         }
         return Action::Continue;
@@ -2144,6 +2146,13 @@ mod tests {
 
         handle_key(&mut app, key(KeyCode::Char('?')));
         assert_eq!(app.input_mode, InputMode::Normal);
+
+        handle_key(&mut app, key(KeyCode::Char('?')));
+        assert_eq!(
+            handle_key(&mut app, key(KeyCode::Char('q'))),
+            Action::Continue
+        );
+        assert_eq!(app.input_mode, InputMode::Normal);
     }
 
     #[test]
@@ -3073,7 +3082,7 @@ mod tests {
         assert!(footer.contains("] [ group"));
         assert!(footer.contains("! needs you"));
         assert!(footer.contains("/ search"));
-        assert!(footer.contains("^B pin"));
+        assert!(!footer.contains("^B pin"));
         assert!(footer.trim_end().ends_with("? keys   q quit"));
 
         let (narrow, _) = render_app(&app, 100, 40);
