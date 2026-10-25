@@ -269,6 +269,11 @@ impl PickerConfig {
             .unwrap_or_else(|| Source::all().len())
     }
 
+    /// The threshold in a glance search assumes nucleo's score scale.
+    pub(crate) fn engine_is_nucleo(&self) -> bool {
+        !matches!(self.engine.as_str(), "skim" | "simple")
+    }
+
     pub(crate) fn source_bonus(&self, source: &Source) -> i64 {
         let rank = self.source_rank(source) as i64;
         let total = Source::all().len() as i64;

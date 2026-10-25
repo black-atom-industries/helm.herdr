@@ -114,7 +114,7 @@ A `SubagentStart` hook can add the instruction to each subagent, so the line app
 
 ## Search
 
-Press `/` and type. Search keeps the group layout and narrows the rows in place. A few tokens narrow the match further:
+Press `/` and type. Search keeps the group layout and narrows the rows in place. Rows that match far worse than the best match drop out, so `lag` leaves `lager` and not every name with an `l`, `a` and `g` in it. The cursor sits on the best match and follows it as you type, until you move it yourself. A few tokens narrow the match further:
 
 | Token    | Matches                                                   |
 | -------- | --------------------------------------------------------- |

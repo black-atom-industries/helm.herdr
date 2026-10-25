@@ -71,6 +71,9 @@ pub(crate) struct App {
     #[cfg(test)]
     pub(crate) herdr_control: Option<Box<dyn HerdrControl>>,
     initial_selection_pending: bool,
+    /// The row a glance search selected on its own. While the selection stays
+    /// there, it follows the best match as the Query changes.
+    search_pick: Option<String>,
 }
 
 /// Scroll offset of the detail pane. It belongs to one entry, so it resets
@@ -114,6 +117,7 @@ impl App {
             #[cfg(test)]
             herdr_control: None,
             initial_selection_pending: true,
+            search_pick: None,
         }
     }
 
@@ -174,7 +178,7 @@ impl App {
         let selected = self.selected_entry().map(entry_identity);
         self.set_workspace_state(workspaces, now);
         self.rebuild_glance();
-        self.apply_filter();
+        self.filter_entries(selected.clone());
         if let Some(selected) = selected {
             if let Some(position) = self
                 .filtered
@@ -302,7 +306,17 @@ impl App {
         }
     }
 
+    /// Re-runs the Query. In a glance search the selection follows the best
+    /// match until the user moves it, then stays on that row while it is visible.
     pub(crate) fn apply_filter(&mut self) {
+        let current = self.selected_entry().map(entry_identity);
+        let moved = self.search_pick.is_some() && current != self.search_pick;
+        self.filter_entries(current.filter(|_| moved));
+    }
+
+    /// Filters and orders the entries. `keep` names an entry to keep selected
+    /// in a glance search while it stays visible.
+    fn filter_entries(&mut self, keep: Option<String>) {
         let query = Query::parse(&self.query);
         let searching = !self.query.trim().is_empty();
         let glance = self.glance_view();
@@ -335,13 +349,21 @@ impl App {
             }
             let bonus = self.config.picker.source_bonus(&entry.source);
             if query.plain.is_empty() {
-                scored.push((bonus, idx));
+                scored.push((0, bonus, idx));
             } else if let Some(score) =
                 match_score(&self.config.picker.engine, &entry.haystack(), &query.plain)
             {
-                scored.push((score + bonus, idx));
+                scored.push((score, bonus, idx));
             }
         }
+        if glance && !query.plain.is_empty() && self.config.picker.engine_is_nucleo() {
+            let best = scored.iter().map(|(score, ..)| *score).max().unwrap_or(0);
+            scored.retain(|(score, ..)| near_best(*score, best));
+        }
+        let mut scored: Vec<(i64, usize)> = scored
+            .into_iter()
+            .map(|(score, bonus, idx)| (score + bonus, idx))
+            .collect();
         if glance {
             scored.sort_by_key(|(score, idx)| self.glance_order(&self.entries[*idx], *score));
         } else {
@@ -367,11 +389,25 @@ impl App {
             self.filtered.push(index);
             self.filtered_scores.push(score);
         }
-        self.selected = if searching && !glance {
+        self.selected = if searching {
             self.best_search_position(&query).unwrap_or(0)
         } else {
             0
         };
+        let pick = self.search_pick.take();
+        if searching && glance {
+            match keep.and_then(|keep| {
+                self.filtered
+                    .iter()
+                    .position(|index| entry_identity(&self.entries[*index]) == keep)
+            }) {
+                Some(position) => {
+                    self.selected = position;
+                    self.search_pick = pick;
+                }
+                None => self.search_pick = self.selected_entry().map(entry_identity),
+            }
+        }
         if self.initial_selection_pending {
             self.initial_selection_pending = false;
             if self.query.trim().is_empty() && self.source_filter.is_none() {
@@ -437,6 +473,7 @@ impl App {
             source
         };
         self.selected = 0;
+        self.search_pick = None;
     }
 
     fn glance_row_at(&self, position: usize) -> Option<&GlanceRow> {
@@ -1016,6 +1053,12 @@ impl Query {
             && all_match(&self.path, &entry.path.display().to_string())
             && all_match(&self.status, &status_text(entry))
     }
+}
+
+/// Whether a glance search keeps a row: its match score is within 90% of the
+/// best one. Loose fuzzy hits score well below a match on word starts.
+fn near_best(score: i64, best: i64) -> bool {
+    score * 10 >= best * 9
 }
 
 fn push_token(tokens: &mut Vec<String>, value: &str) {
@@ -2302,5 +2345,165 @@ exit 0
             app.glance_group(&app.entries[app.filtered[0]]),
             Some(Group::Other)
         );
+    }
+
+    fn repo_workspace(id: &str, repo: &str, group_age: i64) -> WorkspaceNode {
+        let name = repo.rsplit('/').next().unwrap();
+        let mut workspace = bare_workspace(id, name, false, Some(NOW - group_age));
+        if let Some(git) = workspace.git.as_mut() {
+            git.repo_key = repo.into();
+        }
+        workspace.tabs = vec![TabNode {
+            id: format!("{id}:t1"),
+            label: "Code".into(),
+            focused: true,
+            panes: vec![PaneNode {
+                id: format!("{id}:p1"),
+                label: "p1".into(),
+                cwd: PathBuf::from(format!("/Users/brunner/repos/{repo}")),
+                focused: false,
+                title: None,
+                agent_session: None,
+                agent: Some(AgentMeta {
+                    name: "claude".into(),
+                    state: AgentState::Idle,
+                }),
+            }],
+        }];
+        workspace
+    }
+
+    fn directory(source: Source, path: &str) -> Entry {
+        let mut entry = entry(source, path, path.rsplit('/').next().unwrap());
+        entry.subtitle = path.into();
+        entry
+    }
+
+    fn search_app(workspaces: Vec<WorkspaceNode>, directories: Vec<Entry>) -> App {
+        let mut app = App::new(Config::default(), Theme::terminal());
+        app.apply_workspaces(
+            Workspaces {
+                topology: OpenTopology { workspaces },
+                activity: ActivityState::default(),
+                previous: None,
+                subagents: HashMap::new(),
+            },
+            NOW,
+        );
+        app.entries.extend(directories);
+        app.apply_filter();
+        app
+    }
+
+    fn search(app: &mut App, query: &str) {
+        app.query = query.into();
+        app.apply_filter();
+    }
+
+    fn owner_glance() -> App {
+        search_app(
+            vec![
+                repo_workspace("w1", "black-atom-industries/black-atom", 60),
+                repo_workspace("w2", "black-atom-industries/helm.herdr", 120),
+                repo_workspace("w3", "black-atom-industries/iter.nvim", 2 * 3_600),
+                repo_workspace("w4", "black-atom-industries/radar.nvim", 9 * 86_400),
+                repo_workspace("w5", "nikbrunner/mdn.nvim", 9 * 86_400),
+            ],
+            vec![
+                directory(Source::Zoxide, "/Users/brunner/repos/nikbrunner/lager"),
+                directory(
+                    Source::Zoxide,
+                    "/Users/brunner/repos/imfusion/cp/labels-web/.git",
+                ),
+                directory(
+                    Source::Zoxide,
+                    "/Users/brunner/repos/black-atom-industries/shiplog",
+                ),
+                directory(
+                    Source::Zoxide,
+                    "/Users/brunner/repos/nikbrunner/dots/common/.agents/skills",
+                ),
+                directory(
+                    Source::Zoxide,
+                    "/Users/brunner/repos/nikbrunner/dots/common/.agents/skills/nbr-plan",
+                ),
+                directory(Source::Zoxide, "/Users/brunner/.config/nvim"),
+            ],
+        )
+    }
+
+    fn selected_title(app: &App) -> &str {
+        &app.selected_entry().unwrap().title
+    }
+
+    #[test]
+    fn glance_search_drops_loose_fuzzy_matches_far_below_the_best() {
+        let mut app = owner_glance();
+
+        search(&mut app, "lag");
+        assert_eq!(glance_titles(&app), ["lager"]);
+        assert_eq!(selected_title(&app), "lager");
+
+        search(&mut app, "lager");
+        assert_eq!(glance_titles(&app), ["lager"]);
+    }
+
+    #[test]
+    fn broad_glance_search_keeps_every_close_match() {
+        let mut app = owner_glance();
+        search(&mut app, "nvim");
+        assert_eq!(
+            glance_titles(&app),
+            ["iter.nvim", "radar.nvim", "mdn.nvim", "nvim"]
+        );
+    }
+
+    #[test]
+    fn query_tokens_without_text_keep_every_matching_row() {
+        let mut app = owner_glance();
+        search(&mut app, "#idle");
+        assert_eq!(glance_titles(&app).len(), 5);
+    }
+
+    #[test]
+    fn glance_search_selects_the_best_match_as_the_query_changes() {
+        let mut app = search_app(
+            vec![
+                repo_workspace("w1", "black-atom-industries/helm.herdr", 60),
+                repo_workspace("w2", "nikbrunner/herdr-plus", 9 * 86_400),
+            ],
+            vec![],
+        );
+
+        search(&mut app, "herdr");
+        assert_eq!(glance_titles(&app), ["helm.herdr", "herdr-plus"]);
+        assert_eq!(selected_title(&app), "herdr-plus");
+
+        search(&mut app, "helm");
+        assert_eq!(selected_title(&app), "helm.herdr");
+    }
+
+    #[test]
+    fn a_moved_selection_stays_on_its_row_while_it_is_visible() {
+        let mut app = search_app(
+            vec![
+                repo_workspace("w1", "black-atom-industries/helm.herdr", 60),
+                repo_workspace("w2", "nikbrunner/herdr-plus", 9 * 86_400),
+            ],
+            vec![],
+        );
+        search(&mut app, "herdr");
+        app.prev();
+        assert_eq!(selected_title(&app), "helm.herdr");
+
+        search(&mut app, "herd");
+        assert_eq!(selected_title(&app), "helm.herdr");
+
+        search(&mut app, "plus");
+        assert_eq!(glance_titles(&app), ["herdr-plus"]);
+        assert_eq!(selected_title(&app), "herdr-plus");
+
+        search(&mut app, "herdr");
+        assert_eq!(selected_title(&app), "herdr-plus");
     }
 }
