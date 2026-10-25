@@ -1364,8 +1364,9 @@ fn draw_detail(f: &mut Frame, app: &App, area: Rect) -> usize {
     };
     let area = Rect {
         x: area.x + 2,
+        y: area.y + 1.min(area.height),
         width: area.width.saturating_sub(3),
-        ..area
+        height: area.height.saturating_sub(2),
     };
     let width = area.width as usize;
     let dim = Style::default().fg(app.theme.subtext0);
