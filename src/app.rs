@@ -1055,10 +1055,12 @@ impl Query {
     }
 }
 
-/// Whether a glance search keeps a row: its match score is within 90% of the
-/// best one. Loose fuzzy hits score well below a match on word starts.
+/// The share of the best match score, in percent, that a row needs to stay in
+/// a glance search. Loose fuzzy hits score well below a match on word starts.
+const NEAR_BEST_PERCENT: i64 = 85;
+
 fn near_best(score: i64, best: i64) -> bool {
-    score * 10 >= best * 9
+    score * 100 >= best * NEAR_BEST_PERCENT
 }
 
 fn push_token(tokens: &mut Vec<String>, value: &str) {
@@ -2312,6 +2314,8 @@ exit 0
             ("!codex", vec![]),
             ("#working", vec!["helm"]),
             ("@working", vec!["helm"]),
+            ("claude", vec![]),
+            ("working", vec![]),
         ] {
             app.query = query.into();
             app.apply_filter();
@@ -2505,5 +2509,33 @@ exit 0
 
         search(&mut app, "herdr");
         assert_eq!(selected_title(&app), "herdr-plus");
+    }
+
+    #[test]
+    fn near_best_keeps_rows_from_85_percent_of_the_best_score() {
+        assert!(near_best(72, 84));
+        assert!(!near_best(71, 84));
+    }
+
+    #[test]
+    fn glance_search_keeps_word_start_hits_for_a_single_letter() {
+        let mut app = owner_glance();
+        search(&mut app, "l");
+        assert_eq!(glance_titles(&app), [".git", "lager"]);
+
+        search(&mut app, "dots");
+        assert_eq!(glance_titles(&app), ["skills", "nbr-plan"]);
+    }
+
+    #[test]
+    fn query_tokens_keep_working_on_flat_lists() {
+        let mut app = owner_glance();
+        app.set_filter(Some(Source::Zoxide));
+        search(&mut app, "/.config");
+        assert_eq!(glance_titles(&app), ["nvim"]);
+        search(&mut app, "#idle");
+        assert!(glance_titles(&app).is_empty());
+        search(&mut app, "!claude");
+        assert!(glance_titles(&app).is_empty());
     }
 }

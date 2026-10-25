@@ -133,10 +133,26 @@ impl Entry {
             self.subtitle,
             self.workspace_label.as_deref().unwrap_or(""),
             self.path.display(),
-            self.search_terms.join(" ")
+            self.search_terms
+                .iter()
+                .filter(|term| !is_machine_term(term))
+                .map(String::as_str)
+                .collect::<Vec<_>>()
+                .join(" ")
         )
         .to_lowercase()
     }
+}
+
+/// Prefixes of machine-only search terms: agent names and statuses that Query
+/// tokens read, and identity keys. They stay out of the fuzzy haystack, where
+/// their keys and ids would match loose text.
+const MACHINE_TERM_PREFIXES: [&str; 4] = ["agent-name:", "agent-status:", "repo-key:", "pane:"];
+
+fn is_machine_term(term: &str) -> bool {
+    MACHINE_TERM_PREFIXES
+        .iter()
+        .any(|prefix| term.starts_with(prefix))
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -186,5 +202,37 @@ impl ProjectTab {
                 pane
             })
             .collect()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn haystack_leaves_out_machine_only_search_terms() {
+        let entry = Entry {
+            source: Source::Workspace,
+            title: "lager".into(),
+            subtitle: String::new(),
+            path: PathBuf::from("/repos/lager"),
+            workspace_id: Some("w1".into()),
+            workspace_label: Some("lager".into()),
+            agent_target: None,
+            action: EntryAction::FocusOrCreateDir,
+            source_label: None,
+            search_terms: vec![
+                "w1".into(),
+                "agent-name:claude".into(),
+                "agent-status:idle".into(),
+                "repo-key:/repos/lager/.git".into(),
+                "pane:session:p1".into(),
+            ],
+        };
+        let haystack = entry.haystack();
+        assert!(haystack.contains("w1"));
+        for hidden in ["claude", "idle", "repo-key", ".git", "pane:"] {
+            assert!(!haystack.contains(hidden), "{hidden:?} in {haystack:?}");
+        }
     }
 }

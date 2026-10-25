@@ -84,7 +84,7 @@ src/integrations/ built-in Herdr Plus adapter and command integrations
 
 The projections are exclusive:
 
-- With no Source filter or the Workspace Source filter, the Picker shows the glance. A typed Query narrows its rows in place and keeps the group layout. With the nucleo engine, a row stays only while its match score reaches 90% of the best visible score, before Source bonuses; Queries made only of tokens keep every matching row. The cursor lands on the best match, Source bonus included, and follows it as the Query changes. Once the user moves the cursor, it stays on that row while the row is visible.
+- With no Source filter or the Workspace Source filter, the Picker shows the glance. A typed Query narrows its rows in place and keeps the group layout. With the nucleo engine, a row stays only while its match score reaches 85% of the best visible score, before Source bonuses; Queries made only of tokens keep every matching row. Plain text matches what a row shows, never the agent names and statuses that only Query tokens read. The cursor lands on the best match, Source bonus included, and follows it as the Query changes. Once the user moves the cursor, it stays on that row while the row is visible.
 - Any other Source filter shows a flat Result list. Each row is one terminal line in the order `destination | Source | symbol+word status`, with Source and status pinned to the right edge.
 
 While a Query is active, quick action and plugin integration Entries match in an Other group after Directories. Without a Query they appear only under their Source filter.
