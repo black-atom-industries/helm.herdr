@@ -7,7 +7,7 @@
 **Display name:** Helm for Herdr
 **Technical plugin ID:** `helm-herdr`
 **One-liner:** One glance at every Herdr workspace: what needs you, what is working, and one key to get there.
-**What it does:** Helm opens on the glance: one row per open workspace, grouped by warmth (Pinned, Needs you, Active, Recent, Quiet) from agent state, last focus and last commit. Home-row labels open the top rows in one key, and a detail pane shows tabs, agents with subagent progress, uncommitted changes and recent commits. Typing searches the same list plus roots, zoxide, Quick Actions and command integrations; Enter performs the right Herdr action: focus, create, invoke, or run.
+**What it does:** Helm opens on the glance: one row per open workspace, grouped by warmth (Pinned, Needs you, Hot, Warm, Cold) from agent state, last focus and last commit. Home-row labels open the top rows in one key, and a detail pane shows tabs, agents with subagent progress, uncommitted changes and recent commits. Typing searches the same list plus roots, zoxide, Quick Actions and command integrations; Enter performs the right Herdr action: focus, create, invoke, or run.
 **Product category:** Herdr plugin; workspace overview and switcher; terminal fuzzy navigator.
 **Product type:** Free, MIT-licensed open-source developer tool.
 

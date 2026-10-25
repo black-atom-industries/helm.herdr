@@ -61,10 +61,10 @@ custom_sound = "" # Example: "~/sounds/helm.wav"
 enabled = true
 
 [glance]
-# Activity inside these windows decides the Active and Recent groups.
-# Older workspaces fall into Quiet.
-active_minutes = 15
-recent_hours = 4
+# Activity inside these windows decides the Hot and Warm groups.
+# Older workspaces fall into Cold.
+hot_minutes = 15
+warm_hours = 4
 # "nerd" (default, needs a Nerd Font) or "unicode"
 icons = "nerd"
 # Keys that select the first visible rows in Normal mode. j, k, l, q and x are reserved.

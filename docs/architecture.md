@@ -35,6 +35,7 @@ Helm keeps its state in the plugin config directory (`HERDR_PLUGIN_CONFIG_DIR`).
 | `focused-workspace`, `jump-back-workspace` | `track-focus` | The last focused Workspace and the Previous workspace |
 | `activity.json` | `track-focus`, `track-agent`, Picker | When each Workspace was last focused and when each Pane's agent status last changed, per Herdr session |
 | `pinned-entries.json` | Picker (`^B`) | Marked Entries, which sit in the Pinned group |
+| `cold-entries.json` | Picker (`c`) | Workspaces sent to the Cold group; pinning one takes it out |
 
 `activity.json` has this shape:
 
@@ -97,9 +98,9 @@ The glance has one row per open Workspace, in five Warmth groups:
 
 - **Pinned**: Marked Workspaces only.
 - **Needs you**: an agent that is waiting, blocked or done.
-- **Active**: a working agent, or activity within `active_minutes`.
-- **Recent**: activity within `recent_hours`.
-- **Quiet**: everything else.
+- **Hot**: a working agent, or activity within `hot_minutes`.
+- **Warm**: activity within `warm_hours`.
+- **Cold**: everything else, and Workspaces sent there with `c`. A cold Workspace still rises to Needs you when an agent waits on you.
 
 Activity is the newest of the Workspace's focus time, its last commit, and the newest agent status change whose status still matches the live state. Opening the Picker lists each group's rows by newest activity first. The Signal column shows only the age of that activity, such as `4m` or `9d`, left-aligned like the other columns. The detail pane names the sources, such as `last commit 6m · focused 38m`. While the Picker stays open, a refresh keeps every row and its label in place: a row moves only when it changes group, new rows join the end of their group, and closed Workspaces drop out.
 
@@ -121,7 +122,7 @@ Changes and commits come from `git status`, `git diff --numstat` and `git log` o
 
 In Normal mode, `j`/`k` and `Up`/`Down` move through the visible rows across groups. The first visible Workspace rows carry the letters from `[glance] labels` (`asdfg` by default, never `j`, `k`, `l`, `q` or `x`), and pressing one selects that row. Pressing the same label again right away opens it, so `aa` opens the first row and `a3` its third Tab. Search mode hides the labels, and they return after `Esc`.
 
-`Enter` opens the selected Workspace at its last active Tab, and `1`–`9` open that Tab of the selected Workspace. `]` jumps to the first row of the next group. `[` jumps to the first row of the current group, or to the previous group's first row when it is already on that row. `!` jumps to the next row that needs you, including pinned rows. `l` opens the Previous workspace, and `q` closes Helm. `x` arms closing the selected Workspace and the footer asks for a second `x`; any other key cancels, and `^X` closes at once. `Shift-J` and `Shift-K` scroll the detail pane, and the offset resets when the selection moves to another row.
+`Enter` opens the selected Workspace at its last active Tab, and `1`–`9` open that Tab of the selected Workspace. `]` jumps to the first row of the next group. `[` jumps to the first row of the current group, or to the previous group's first row when it is already on that row. `!` jumps to the next row that needs you, including pinned rows. `l` opens the Previous workspace, and `q` closes Helm. `x` arms closing the selected Workspace and the footer asks for a second `x`; any other key cancels, and `^X` closes at once. `c` arms sending the selected Workspace to Cold and a second `c` confirms; on a cold Workspace a single `c` warms it up again. `Shift-J` and `Shift-K` scroll the detail pane, and the offset resets when the selection moves to another row.
 
 ## Side behavior
 
@@ -136,7 +137,7 @@ Helm integrates with Herdr Plus without copying its UI:
 
 ## Configuration boundary
 
-Current Picker keys are `reuse_existing`, `create_missing`, `engine`, `source_order`, `source_priority_boost`, `check_updates`, `directory_template`, `directory_template_key`, and `[picker.filter_keys]`. Other current sections are `[theme]`, `[notifications]`, `[jump_back]`, `[glance]`, `[sources]`, `[[roots]]`, and `[[integrations]]`. `[glance]` holds `active_minutes`, `recent_hours`, `icons` and `labels`.
+Current Picker keys are `reuse_existing`, `create_missing`, `engine`, `source_order`, `source_priority_boost`, `check_updates`, `directory_template`, `directory_template_key`, and `[picker.filter_keys]`. Other current sections are `[theme]`, `[notifications]`, `[jump_back]`, `[glance]`, `[sources]`, `[[roots]]`, and `[[integrations]]`. `[glance]` holds `hot_minutes`, `warm_hours`, `icons` and `labels`.
 
 ## Color boundary
 

@@ -293,6 +293,7 @@ fn handle_mouse(app: &mut App, mouse: MouseEvent, hits: &ListHits) -> Action {
 fn handle_key(app: &mut App, key: KeyEvent) -> Action {
     let previous_label = app.last_label.take();
     let close_armed = std::mem::take(&mut app.close_armed);
+    let cold_armed = std::mem::take(&mut app.cold_armed);
     let command = keybindings(app)
         .into_iter()
         .find_map(|binding| binding.command_for(app, key));
@@ -312,6 +313,15 @@ fn handle_key(app: &mut App, key: KeyEvent) -> Action {
                 return Action::CloseWorkspace;
             }
             app.close_armed = app.selected_entry().is_some();
+            return Action::Continue;
+        }
+        if command == Command::ToggleCold
+            && !cold_armed
+            && app
+                .selected_entry()
+                .is_some_and(|entry| !app.is_cold(entry))
+        {
+            app.cold_armed = true;
             return Action::Continue;
         }
         if command == Command::SelectLabel {
@@ -448,6 +458,15 @@ fn execute_command(app: &mut App, command: Command, key: KeyEvent) -> Action {
             if let Err(error) = app.toggle_selected_pin() {
                 crate::herdr::notify_error(
                     &format!("Mark failed: {error}"),
+                    &app.config.notifications,
+                );
+            }
+            Action::Continue
+        }
+        Command::ToggleCold => {
+            if let Err(error) = app.toggle_selected_cold() {
+                crate::herdr::notify_error(
+                    &format!("Cold failed: {error}"),
                     &app.config.notifications,
                 );
             }
@@ -667,26 +686,26 @@ fn group_count_spans(app: &App) -> Vec<Span<'static>> {
         (
             app.glance
                 .values()
-                .filter(|row| row.group == Group::Active)
+                .filter(|row| row.group == Group::Hot)
                 .count(),
-            "active",
-            Group::Active,
+            "hot",
+            Group::Hot,
         ),
         (
             app.glance
                 .values()
-                .filter(|row| row.group == Group::Recent)
+                .filter(|row| row.group == Group::Warm)
                 .count(),
-            "recent",
-            Group::Recent,
+            "warm",
+            Group::Warm,
         ),
         (
             app.glance
                 .values()
-                .filter(|row| row.group == Group::Quiet)
+                .filter(|row| row.group == Group::Cold)
                 .count(),
-            "quiet",
-            Group::Quiet,
+            "cold",
+            Group::Cold,
         ),
     ];
     let mut spans = Vec::new();
@@ -771,18 +790,20 @@ fn draw_key_hints(f: &mut Frame, app: &App, area: Rect) {
         height: area.height.saturating_sub(1),
         ..area
     };
-    if app.close_armed {
+    let armed = if app.close_armed {
+        Some(("x", "close", app.theme.red))
+    } else if app.cold_armed {
+        Some(("c", "send to cold", app.theme.blue))
+    } else {
+        None
+    };
+    if let Some((key, verb, color)) = armed {
         let name = app.selected_entry().map(display_title).unwrap_or_default();
         let line = Line::from(vec![
+            Span::styled(key, Style::default().fg(color).add_modifier(Modifier::BOLD)),
             Span::styled(
-                "x",
-                Style::default()
-                    .fg(app.theme.red)
-                    .add_modifier(Modifier::BOLD),
-            ),
-            Span::styled(
-                format!(" again to close {name} · any other key cancels"),
-                Style::default().fg(app.theme.red),
+                format!(" again to {verb} {name} · any other key cancels"),
+                Style::default().fg(color),
             ),
         ]);
         f.render_widget(
@@ -1144,9 +1165,9 @@ fn group_color(theme: &Theme, group: Group) -> Color {
     match group {
         Group::Pinned => theme.accent,
         Group::NeedsYou => theme.red,
-        Group::Active => theme.yellow,
-        Group::Recent => theme.green,
-        Group::Quiet => theme.overlay0,
+        Group::Hot => theme.yellow,
+        Group::Warm => theme.green,
+        Group::Cold => theme.overlay0,
         Group::Directories | Group::Other => theme.subtext0,
     }
 }
@@ -2548,7 +2569,7 @@ mod tests {
         );
 
         let (lines, _) = render_app(&app, 100, 20);
-        let headings = ["NEEDS YOU · 1", "ACTIVE · 1", "RECENT · 1", "QUIET · 1"]
+        let headings = ["NEEDS YOU · 1", "HOT · 1", "WARM · 1", "COLD · 1"]
             .map(|label| line_index(&lines, label));
         assert!(headings.windows(2).all(|pair| pair[0] < pair[1]));
         for heading in &headings[1..] {
@@ -2843,6 +2864,54 @@ mod tests {
 
     fn commit_workspace(id: &str, label: &str, last_commit_at: i64) -> WorkspaceNode {
         glance_workspace(id, label, false, Some(last_commit_at), vec![])
+    }
+
+    #[test]
+    fn c_twice_sends_the_workspace_to_cold_and_any_other_key_cancels() {
+        let dir = std::env::temp_dir().join(format!("helm-cold-key-test-{}", std::process::id()));
+        let _lock = crate::herdr::test_env_lock();
+        let previous = std::env::var_os("HERDR_PLUGIN_CONFIG_DIR");
+        std::env::set_var("HERDR_PLUGIN_CONFIG_DIR", &dir);
+
+        let mut app = glance_app(
+            NOW,
+            None,
+            vec![
+                commit_workspace("w1", "alpha", NOW - 60),
+                commit_workspace("w2", "beta", NOW - 120),
+            ],
+            ActivityState::default(),
+        );
+        handle_key(&mut app, key(KeyCode::Char('c')));
+        assert!(app.cold_armed);
+        let (lines, _) = render_app(&app, 160, 40);
+        assert!(lines
+            .last()
+            .unwrap()
+            .contains("c again to send to cold alpha"));
+        handle_key(&mut app, key(KeyCode::Char('j')));
+        assert!(!app.cold_armed);
+        assert!(app.cold_entries.is_empty());
+
+        handle_key(&mut app, key(KeyCode::Char('k')));
+        let alpha = app.selected_entry().unwrap().clone();
+        handle_key(&mut app, key(KeyCode::Char('c')));
+        handle_key(&mut app, key(KeyCode::Char('c')));
+        assert!(app.is_cold(&alpha));
+
+        app.selected = app
+            .filtered
+            .iter()
+            .position(|index| app.entries[*index].title == alpha.title)
+            .unwrap();
+        handle_key(&mut app, key(KeyCode::Char('c')));
+        assert!(!app.is_cold(&alpha));
+
+        let _ = std::fs::remove_dir_all(&dir);
+        match previous {
+            Some(value) => std::env::set_var("HERDR_PLUGIN_CONFIG_DIR", value),
+            None => std::env::remove_var("HERDR_PLUGIN_CONFIG_DIR"),
+        }
     }
 
     #[test]
@@ -3179,9 +3248,9 @@ mod tests {
         assert!(wide[0].contains("Helm"));
         assert!(wide[0].contains("/ type to search"));
         assert!(wide[0].contains("2 need you"));
-        assert!(wide[0].contains("1 active"));
-        assert!(wide[0].contains("1 quiet"));
-        assert!(!wide[0].contains("recent"));
+        assert!(wide[0].contains("1 hot"));
+        assert!(wide[0].contains("1 cold"));
+        assert!(!wide[0].contains("warm"));
         assert!(wide[1].contains("^W workspaces"));
         assert!(wide[1].contains("^R roots"));
         assert!(wide[1].contains("^Z zoxide"));

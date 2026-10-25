@@ -17,9 +17,9 @@ pub(crate) enum IconStyle {
 pub(crate) enum Group {
     Pinned,
     NeedsYou,
-    Active,
-    Recent,
-    Quiet,
+    Hot,
+    Warm,
+    Cold,
     Directories,
     Other,
 }
@@ -29,9 +29,9 @@ impl Group {
         match self {
             Self::Pinned => "Pinned",
             Self::NeedsYou => "Needs you",
-            Self::Active => "Active",
-            Self::Recent => "Recent",
-            Self::Quiet => "Quiet",
+            Self::Hot => "Hot",
+            Self::Warm => "Warm",
+            Self::Cold => "Cold",
             Self::Directories => "Directories",
             Self::Other => "Other",
         }
@@ -47,8 +47,8 @@ pub(crate) enum Mark {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct Thresholds {
-    pub(crate) active_secs: i64,
-    pub(crate) recent_secs: i64,
+    pub(crate) hot_secs: i64,
+    pub(crate) warm_secs: i64,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -61,6 +61,7 @@ pub(crate) struct PaneEvidence {
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub(crate) struct Evidence {
     pub(crate) pinned: bool,
+    pub(crate) cold: bool,
     pub(crate) agents: Vec<PaneEvidence>,
     pub(crate) focused_at: Option<i64>,
     pub(crate) last_commit_at: Option<i64>,
@@ -103,6 +104,7 @@ pub(crate) fn evidence(
     workspace: &WorkspaceNode,
     activity: &ActivityState,
     pinned: bool,
+    cold: bool,
 ) -> Evidence {
     let agents = workspace
         .tabs
@@ -122,6 +124,7 @@ pub(crate) fn evidence(
         .collect();
     Evidence {
         pinned,
+        cold,
         agents,
         focused_at: activity.focused_at(workspace.session.as_deref(), &workspace.id),
         last_commit_at: workspace.git.as_ref().and_then(|git| git.last_commit_at),
@@ -188,36 +191,43 @@ pub(crate) fn classify(evidence: &Evidence, now: i64, thresholds: Thresholds) ->
             last_active,
         };
     }
+    if evidence.cold {
+        return Verdict {
+            group: Group::Cold,
+            signal: last_active.map_or(Signal::None, Signal::Age),
+            last_active,
+        };
+    }
     if let Some(signal) = working_signal(evidence) {
         return Verdict {
-            group: Group::Active,
+            group: Group::Hot,
             signal,
             last_active,
         };
     }
     let Some(at) = last_active else {
         return Verdict {
-            group: Group::Quiet,
+            group: Group::Cold,
             signal: Signal::None,
             last_active,
         };
     };
     let age = (now - at).max(0);
-    if age <= thresholds.active_secs {
+    if age <= thresholds.hot_secs {
         Verdict {
-            group: Group::Active,
+            group: Group::Hot,
             signal: activity_signal,
             last_active,
         }
-    } else if age <= thresholds.recent_secs {
+    } else if age <= thresholds.warm_secs {
         Verdict {
-            group: Group::Recent,
+            group: Group::Warm,
             signal: activity_signal,
             last_active,
         }
     } else {
         Verdict {
-            group: Group::Quiet,
+            group: Group::Cold,
             signal: Signal::Age(at),
             last_active,
         }
@@ -328,8 +338,8 @@ mod tests {
     use super::*;
 
     const THRESHOLDS: Thresholds = Thresholds {
-        active_secs: 15 * 60,
-        recent_secs: 4 * 3_600,
+        hot_secs: 15 * 60,
+        warm_secs: 4 * 3_600,
     };
     const NOW: i64 = 1_000_000;
 
@@ -351,6 +361,23 @@ mod tests {
             ..evidence_with(vec![agent(AgentState::Blocked, Some(NOW))])
         };
         assert_eq!(classify(&evidence, NOW, THRESHOLDS).group, Group::Pinned);
+    }
+
+    #[test]
+    fn cold_workspace_stays_cold_while_working_but_rises_when_an_agent_needs_you() {
+        let working = Evidence {
+            cold: true,
+            ..evidence_with(vec![agent(AgentState::Working, Some(NOW - 60))])
+        };
+        let verdict = classify(&working, NOW, THRESHOLDS);
+        assert_eq!(verdict.group, Group::Cold);
+        assert_eq!(signal_text(&verdict.signal, NOW), "1m");
+
+        let blocked = Evidence {
+            cold: true,
+            ..evidence_with(vec![agent(AgentState::Blocked, Some(NOW))])
+        };
+        assert_eq!(classify(&blocked, NOW, THRESHOLDS).group, Group::NeedsYou);
     }
 
     #[test]
@@ -391,13 +418,13 @@ mod tests {
     }
 
     #[test]
-    fn working_agent_is_active_and_carries_its_own_signal() {
+    fn working_agent_is_hot_and_carries_its_own_signal() {
         let verdict = classify(
             &evidence_with(vec![agent(AgentState::Working, Some(NOW - 14 * 60))]),
             NOW,
             THRESHOLDS,
         );
-        assert_eq!(verdict.group, Group::Active);
+        assert_eq!(verdict.group, Group::Hot);
         assert_eq!(signal_text(&verdict.signal, NOW), "14m");
     }
 
@@ -408,17 +435,17 @@ mod tests {
             NOW,
             THRESHOLDS,
         );
-        assert_eq!(verdict.group, Group::Active);
+        assert_eq!(verdict.group, Group::Hot);
         let stale = classify(
             &evidence_with(vec![agent(AgentState::Idle, Some(NOW - 2 * 3_600))]),
             NOW,
             THRESHOLDS,
         );
-        assert_eq!(stale.group, Group::Recent);
+        assert_eq!(stale.group, Group::Warm);
     }
 
     #[test]
-    fn activity_at_the_active_boundary_is_active_and_one_second_later_is_recent() {
+    fn activity_at_the_hot_boundary_is_hot_and_one_second_later_is_warm() {
         let at_limit = Evidence {
             last_commit_at: Some(NOW - 15 * 60),
             ..Evidence::default()
@@ -427,12 +454,12 @@ mod tests {
             last_commit_at: Some(NOW - 15 * 60 - 1),
             ..Evidence::default()
         };
-        assert_eq!(classify(&at_limit, NOW, THRESHOLDS).group, Group::Active);
-        assert_eq!(classify(&past_limit, NOW, THRESHOLDS).group, Group::Recent);
+        assert_eq!(classify(&at_limit, NOW, THRESHOLDS).group, Group::Hot);
+        assert_eq!(classify(&past_limit, NOW, THRESHOLDS).group, Group::Warm);
     }
 
     #[test]
-    fn activity_at_the_recent_boundary_is_recent_and_one_second_later_is_quiet() {
+    fn activity_at_the_warm_boundary_is_warm_and_one_second_later_is_cold() {
         let at_limit = Evidence {
             focused_at: Some(NOW - 4 * 3_600),
             ..Evidence::default()
@@ -441,8 +468,8 @@ mod tests {
             focused_at: Some(NOW - 4 * 3_600 - 1),
             ..Evidence::default()
         };
-        assert_eq!(classify(&at_limit, NOW, THRESHOLDS).group, Group::Recent);
-        assert_eq!(classify(&past_limit, NOW, THRESHOLDS).group, Group::Quiet);
+        assert_eq!(classify(&at_limit, NOW, THRESHOLDS).group, Group::Warm);
+        assert_eq!(classify(&past_limit, NOW, THRESHOLDS).group, Group::Cold);
     }
 
     #[test]
@@ -468,20 +495,20 @@ mod tests {
     }
 
     #[test]
-    fn quiet_rows_show_only_the_age_of_their_last_activity() {
+    fn cold_rows_show_only_the_age_of_their_last_activity() {
         let evidence = Evidence {
             last_commit_at: Some(NOW - 9 * 86_400),
             ..Evidence::default()
         };
         let verdict = classify(&evidence, NOW, THRESHOLDS);
-        assert_eq!(verdict.group, Group::Quiet);
+        assert_eq!(verdict.group, Group::Cold);
         assert_eq!(signal_text(&verdict.signal, NOW), "9d");
     }
 
     #[test]
-    fn workspace_without_any_timestamp_is_quiet_with_no_signal() {
+    fn workspace_without_any_timestamp_is_cold_with_no_signal() {
         let verdict = classify(&Evidence::default(), NOW, THRESHOLDS);
-        assert_eq!(verdict.group, Group::Quiet);
+        assert_eq!(verdict.group, Group::Cold);
         assert_eq!(verdict.signal, Signal::None);
         assert_eq!(verdict.last_active, None);
     }
@@ -493,7 +520,7 @@ mod tests {
             ..Evidence::default()
         };
         let verdict = classify(&evidence, NOW, THRESHOLDS);
-        assert_eq!(verdict.group, Group::Active);
+        assert_eq!(verdict.group, Group::Hot);
         assert_eq!(signal_text(&verdict.signal, NOW), "0s");
     }
 

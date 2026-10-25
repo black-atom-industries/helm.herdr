@@ -60,10 +60,10 @@ pub(crate) struct JumpBackConfig {
 
 #[derive(Clone, Deserialize)]
 pub(crate) struct GlanceConfig {
-    #[serde(default = "default_active_minutes")]
-    pub(crate) active_minutes: i64,
-    #[serde(default = "default_recent_hours")]
-    pub(crate) recent_hours: i64,
+    #[serde(default = "default_hot_minutes", alias = "active_minutes")]
+    pub(crate) hot_minutes: i64,
+    #[serde(default = "default_warm_hours", alias = "recent_hours")]
+    pub(crate) warm_hours: i64,
     #[serde(default)]
     pub(crate) icons: IconStyle,
     #[serde(default = "default_labels")]
@@ -77,7 +77,7 @@ impl GlanceConfig {
         let mut labels: Vec<char> = Vec::new();
         for ch in self.labels.chars().map(|ch| ch.to_ascii_lowercase()) {
             if ch.is_ascii_lowercase()
-                && !matches!(ch, 'j' | 'k' | 'l' | 'q' | 'x')
+                && !matches!(ch, 'c' | 'j' | 'k' | 'l' | 'q' | 'x')
                 && !labels.contains(&ch)
             {
                 labels.push(ch);
@@ -170,10 +170,10 @@ fn default_source_priority_boost() -> i64 {
 fn default_directory_template_key() -> String {
     "alt-enter".into()
 }
-fn default_active_minutes() -> i64 {
+fn default_hot_minutes() -> i64 {
     15
 }
-fn default_recent_hours() -> i64 {
+fn default_warm_hours() -> i64 {
     4
 }
 fn default_labels() -> String {
@@ -288,8 +288,8 @@ impl Default for JumpBackConfig {
 impl Default for GlanceConfig {
     fn default() -> Self {
         Self {
-            active_minutes: default_active_minutes(),
-            recent_hours: default_recent_hours(),
+            hot_minutes: default_hot_minutes(),
+            warm_hours: default_warm_hours(),
             icons: IconStyle::default(),
             labels: default_labels(),
         }
@@ -484,21 +484,32 @@ mod tests {
     #[test]
     fn glance_defaults_and_overrides() {
         let default = Config::default().glance;
-        assert_eq!(default.active_minutes, 15);
-        assert_eq!(default.recent_hours, 4);
+        assert_eq!(default.hot_minutes, 15);
+        assert_eq!(default.warm_hours, 4);
         assert_eq!(default.icons, IconStyle::Nerd);
 
         let custom: Config = toml::from_str(
             r#"
             [glance]
-            active_minutes = 5
+            hot_minutes = 5
             icons = "unicode"
             "#,
         )
         .unwrap();
-        assert_eq!(custom.glance.active_minutes, 5);
-        assert_eq!(custom.glance.recent_hours, 4);
+        assert_eq!(custom.glance.hot_minutes, 5);
+        assert_eq!(custom.glance.warm_hours, 4);
         assert_eq!(custom.glance.icons, IconStyle::Unicode);
+
+        let older: Config = toml::from_str(
+            r#"
+            [glance]
+            active_minutes = 10
+            recent_hours = 2
+            "#,
+        )
+        .unwrap();
+        assert_eq!(older.glance.hot_minutes, 10);
+        assert_eq!(older.glance.warm_hours, 2);
     }
 
     #[test]

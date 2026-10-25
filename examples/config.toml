@@ -21,9 +21,9 @@ custom_sound = "" # Used only when sound = "custom"
 enabled = true
 
 [glance]
-# Activity inside these windows decides Active and Recent.
-active_minutes = 15
-recent_hours = 4
+# Activity inside these windows decides Hot and Warm.
+hot_minutes = 15
+warm_hours = 4
 # "nerd" (default, needs a Nerd Font) or "unicode"
 icons = "nerd"
 labels = "asdfg"

@@ -52,7 +52,8 @@
 | **Pane** | A terminal area within a Tab. | Panel, split |
 | **Glance** | The default Picker view: one row per open Workspace, grouped by Warmth group. | Topology view, workspace list |
 | **Row label** | A letter from `[glance] labels` that selects its Glance row in one keystroke and opens it on a second press. | Shortcut letter, hotkey |
-| **Warmth group** | One of Pinned, Needs you, Active, Recent, or Quiet, which places a Workspace in the Glance. | Bucket, section |
+| **Warmth group** | One of Pinned, Needs you, Hot, Warm, or Cold, which places a Workspace in the Glance. | Bucket, section |
+| **Cold workspace** | A Workspace the User sent to Cold by hand; it stays there until warmed up again, unless an agent needs you. | Archived, hidden, quiet |
 | **Other group** | The group of quick action and plugin Entries, shown in the Glance only while a Query is active. | Other source |
 | **Signal** | The age column of a row, showing when the activity that placed it in its Warmth group happened, such as `4m`. | Reason, badge |
 | **Topology** | The live Workspace → Tab → Pane structure read from Herdr. | Workspace list |

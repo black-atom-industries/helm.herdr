@@ -28,6 +28,7 @@ pub(crate) enum Command {
     CloseWorkspace,
     ArmClose,
     ToggleMark,
+    ToggleCold,
     ToggleHelp,
     Update,
     Filter(Source),
@@ -111,6 +112,7 @@ impl Keybind {
             Command::ToggleMark => app
                 .selected_entry()
                 .is_some_and(|entry| app.is_pinned(entry)),
+            Command::ToggleCold => app.selected_entry().is_some_and(|entry| app.is_cold(entry)),
             Command::ToggleHelp => app.input_mode == InputMode::Help,
             Command::Filter(source) => {
                 app.source_filter.as_ref().unwrap_or(&Source::Workspace) == &source
@@ -307,6 +309,13 @@ pub(crate) fn keybindings(app: &App) -> Vec<Keybind> {
             "^B",
         )],
         "pin to the top",
+        "Act",
+        None,
+    ));
+
+    bindings.push(binding(
+        vec![normal_key(Command::ToggleCold, KeyCode::Char('c'), "c")],
+        "send to cold (c twice) / warm up",
         "Act",
         None,
     ));

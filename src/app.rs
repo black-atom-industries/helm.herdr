@@ -48,6 +48,8 @@ pub(crate) struct App {
     pub(crate) path_to_workspaces: HashMap<String, Vec<WorkspaceRef>>,
     pub(crate) previous_workspace_id: Option<String>,
     pub(crate) pinned_entries: HashSet<String>,
+    /// Workspaces the User sent to Cold, by pin key.
+    pub(crate) cold_entries: HashSet<String>,
     pub(crate) recent_state: RecentState,
     pub(crate) spinner_tick: u32,
     pub(crate) update_available: Option<String>,
@@ -62,6 +64,7 @@ pub(crate) struct App {
     pub(crate) detail_scroll: DetailScroll,
     pub(crate) last_label: Option<char>,
     pub(crate) close_armed: bool,
+    pub(crate) cold_armed: bool,
     /// Largest useful detail offset, set by the last render.
     pub(crate) detail_max_offset: usize,
     /// Running Claude subagents, keyed by pane id.
@@ -99,6 +102,7 @@ impl App {
             path_to_workspaces: HashMap::new(),
             previous_workspace_id: None,
             pinned_entries: HashSet::new(),
+            cold_entries: HashSet::new(),
             recent_state: RecentState::default(),
             spinner_tick: 0,
             update_available: None,
@@ -111,6 +115,7 @@ impl App {
             detail_scroll: DetailScroll::default(),
             last_label: None,
             close_armed: false,
+            cold_armed: false,
             detail_max_offset: 0,
             subagents: HashMap::new(),
             git_detail: HashMap::new(),
@@ -153,13 +158,14 @@ impl App {
         );
 
         self.entries = entries;
-        self.pinned_entries =
-            read_pinned_entries(&plugin_config_dir().join(PINNED_ENTRIES_STATE_FILE))
-                .unwrap_or_default();
+        self.pinned_entries = read_entry_keys(&plugin_config_dir().join(PINNED_ENTRIES_STATE_FILE))
+            .unwrap_or_default();
+        self.cold_entries =
+            read_entry_keys(&plugin_config_dir().join(COLD_ENTRIES_STATE_FILE)).unwrap_or_default();
         self.set_workspace_state(workspaces, now_unix_secs());
         self.row_ranks.clear();
         if migrate_legacy_topology_pins(&self.entries, &mut self.pinned_entries) {
-            let _ = save_pinned_entries(
+            let _ = save_entry_keys(
                 &plugin_config_dir().join(PINNED_ENTRIES_STATE_FILE),
                 &self.pinned_entries,
             );
@@ -204,22 +210,23 @@ impl App {
 
     pub(crate) fn rebuild_glance(&mut self) {
         let thresholds = Thresholds {
-            active_secs: self.config.glance.active_minutes * 60,
-            recent_secs: self.config.glance.recent_hours * 3_600,
+            hot_secs: self.config.glance.hot_minutes * 60,
+            warm_secs: self.config.glance.warm_hours * 3_600,
         };
         self.glance = self
             .topology
             .workspaces
             .iter()
             .map(|workspace| {
-                let pinned = self
+                let entry = self
                     .topology_entries
                     .iter()
                     .find(|entry| {
                         matches!(&entry.action, EntryAction::FocusWorkspace { session, id } if id == &workspace.id && session == &workspace.session)
-                    })
-                    .is_some_and(|entry| self.is_pinned(entry));
-                let evidence = glance::evidence(workspace, &self.activity, pinned);
+                    });
+                let pinned = entry.is_some_and(|entry| self.is_pinned(entry));
+                let cold = entry.is_some_and(|entry| self.is_cold(entry));
+                let evidence = glance::evidence(workspace, &self.activity, pinned, cold);
                 let previous = self.previous_workspace_id.as_deref() == Some(workspace.id.as_str());
                 let row = glance::row(workspace, &evidence, previous, self.now, thresholds);
                 (
@@ -686,13 +693,51 @@ impl App {
         let removed_legacy = legacy_key
             .as_ref()
             .is_some_and(|legacy| pinned.remove(legacy));
+        let mut cold = self.cold_entries.clone();
         if !(removed_primary || removed_legacy) {
+            cold.remove(&key);
             pinned.insert(key);
         }
-        save_pinned_entries(
+        save_entry_keys(
             &plugin_config_dir().join(PINNED_ENTRIES_STATE_FILE),
             &pinned,
         )?;
+        save_entry_keys(&plugin_config_dir().join(COLD_ENTRIES_STATE_FILE), &cold)?;
+        self.pinned_entries = pinned;
+        self.cold_entries = cold;
+        self.rebuild_glance();
+        self.apply_filter();
+        Ok(())
+    }
+
+    pub(crate) fn is_cold(&self, entry: &Entry) -> bool {
+        self.cold_entries.contains(&pin_key(entry))
+    }
+
+    /// Sends the selected Workspace to Cold, or lets it warm up again.
+    /// Going cold unpins it.
+    pub(crate) fn toggle_selected_cold(&mut self) -> Result<(), String> {
+        let entry = self.selected_entry().ok_or("nothing selected")?;
+        if !matches!(entry.action, EntryAction::FocusWorkspace { .. }) {
+            return Err("only a workspace can go cold".into());
+        }
+        let key = pin_key(entry);
+        let legacy_key = legacy_current_workspace_pin_key(entry);
+        let mut cold = self.cold_entries.clone();
+        let mut pinned = self.pinned_entries.clone();
+        if !cold.remove(&key) {
+            pinned.remove(&key);
+            if let Some(legacy) = &legacy_key {
+                pinned.remove(legacy);
+            }
+            cold.insert(key);
+        }
+        save_entry_keys(&plugin_config_dir().join(COLD_ENTRIES_STATE_FILE), &cold)?;
+        save_entry_keys(
+            &plugin_config_dir().join(PINNED_ENTRIES_STATE_FILE),
+            &pinned,
+        )?;
+        self.cold_entries = cold;
         self.pinned_entries = pinned;
         self.rebuild_glance();
         self.apply_filter();
@@ -1148,6 +1193,7 @@ fn workspace_text(entry: &Entry) -> String {
 const JUMP_BACK_STATE_FILE: &str = "jump-back-workspace";
 const FOCUSED_WORKSPACE_STATE_FILE: &str = "focused-workspace";
 const PINNED_ENTRIES_STATE_FILE: &str = "pinned-entries.json";
+const COLD_ENTRIES_STATE_FILE: &str = "cold-entries.json";
 
 #[derive(Debug, Deserialize, Serialize, PartialEq, Eq)]
 struct JumpBackState {
@@ -1412,23 +1458,23 @@ fn save_workspace_state(file: &str, id: &str) -> Result<(), String> {
     fs::write(dir.join(file), value).map_err(|e| format!("failed to save workspace state: {e}"))
 }
 
-fn read_pinned_entries(path: &Path) -> Result<HashSet<String>, String> {
+fn read_entry_keys(path: &Path) -> Result<HashSet<String>, String> {
     let value =
-        fs::read_to_string(path).map_err(|e| format!("failed to read pinned entries: {e}"))?;
+        fs::read_to_string(path).map_err(|e| format!("failed to read {}: {e}", path.display()))?;
     serde_json::from_str::<Vec<String>>(&value)
         .map(|entries| entries.into_iter().collect())
-        .map_err(|e| format!("failed to parse pinned entries: {e}"))
+        .map_err(|e| format!("failed to parse {}: {e}", path.display()))
 }
 
-fn save_pinned_entries(path: &Path, entries: &HashSet<String>) -> Result<(), String> {
+fn save_entry_keys(path: &Path, entries: &HashSet<String>) -> Result<(), String> {
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent).map_err(|e| format!("failed to create plugin config: {e}"))?;
     }
     let mut entries = entries.iter().collect::<Vec<_>>();
     entries.sort_unstable();
     let value = serde_json::to_string_pretty(&entries)
-        .map_err(|e| format!("failed to encode pinned entries: {e}"))?;
-    fs::write(path, value).map_err(|e| format!("failed to save pinned entries: {e}"))
+        .map_err(|e| format!("failed to encode {}: {e}", path.display()))?;
+    fs::write(path, value).map_err(|e| format!("failed to save {}: {e}", path.display()))
 }
 
 fn launch_workspace_id() -> Option<String> {
@@ -1778,8 +1824,8 @@ exit 0
             .unwrap()
             .as_nanos();
         let path = env::temp_dir().join(format!("herdr-pins-{suffix}.json"));
-        save_pinned_entries(&path, &app.pinned_entries).unwrap();
-        assert_eq!(read_pinned_entries(&path).unwrap(), app.pinned_entries);
+        save_entry_keys(&path, &app.pinned_entries).unwrap();
+        assert_eq!(read_entry_keys(&path).unwrap(), app.pinned_entries);
         let _ = fs::remove_file(path);
     }
 
@@ -2120,6 +2166,56 @@ exit 0
     }
 
     #[test]
+    fn cold_workspace_drops_to_the_cold_group_and_loses_its_pin() {
+        let dir = env::temp_dir().join(format!("helm-cold-test-{}", std::process::id()));
+        let _lock = crate::herdr::test_env_lock();
+        let previous = env::var_os("HERDR_PLUGIN_CONFIG_DIR");
+        env::set_var("HERDR_PLUGIN_CONFIG_DIR", &dir);
+
+        let mut app = App::new(Config::default(), Theme::terminal());
+        app.apply_workspaces(
+            Workspaces {
+                topology: OpenTopology {
+                    workspaces: vec![
+                        bare_workspace("w1", "helm", true, Some(NOW - 60)),
+                        bare_workspace("w2", "dots", false, Some(NOW - 120)),
+                    ],
+                },
+                activity: ActivityState::default(),
+                previous: None,
+                subagents: HashMap::new(),
+            },
+            NOW,
+        );
+        app.selected = app
+            .filtered
+            .iter()
+            .position(|index| app.entries[*index].title == "helm")
+            .unwrap();
+        app.toggle_selected_pin().unwrap();
+        app.toggle_selected_cold().unwrap();
+
+        assert_eq!(glance_titles(&app), ["dots", "helm"]);
+        let helm = app.entries[app.filtered[1]].clone();
+        assert_eq!(app.glance_group(&helm), Some(Group::Cold));
+        assert!(!app.is_pinned(&helm));
+        assert_eq!(
+            read_entry_keys(&dir.join(COLD_ENTRIES_STATE_FILE)).unwrap(),
+            app.cold_entries
+        );
+
+        app.selected = 1;
+        app.toggle_selected_cold().unwrap();
+        assert_eq!(app.glance_group(&helm), Some(Group::Hot));
+
+        let _ = fs::remove_dir_all(&dir);
+        match previous {
+            Some(value) => env::set_var("HERDR_PLUGIN_CONFIG_DIR", value),
+            None => env::remove_var("HERDR_PLUGIN_CONFIG_DIR"),
+        }
+    }
+
+    #[test]
     fn pinned_workspace_stays_in_the_pinned_group() {
         let dir = env::temp_dir().join(format!("helm-pin-test-{}", std::process::id()));
         let _lock = crate::herdr::test_env_lock();
@@ -2155,7 +2251,7 @@ exit 0
         );
         assert_eq!(
             app.glance_group(&app.entries[app.filtered[1]]),
-            Some(Group::Active)
+            Some(Group::Hot)
         );
 
         let _ = fs::remove_dir_all(&dir);
