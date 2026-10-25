@@ -8,9 +8,13 @@ Compact, agent-only operating context for Helm for Herdr.
 2. `.agents/product-marketing.md` only for product positioning or marketing work.
 3. Source code and `herdr-plugin.toml` remain authoritative for implementation behavior.
 
-## Design
+## Designs
 
-The glance view and its keymap are designed on the canvas https://claude.ai/artifact/C6Sf6rv3FMeJYUXDr49swT (board C, keymap, marks, icons). The code is authoritative where they differ: key hints use ASCII names, and the list's last columns are a plain age and the progress bar.
+Design canvases (Claude Design artifacts), newest first. The code is authoritative where it and a canvas differ. Add a new canvas here with its date when a design starts; extend an existing canvas when the work continues it.
+
+| Date | Canvas | Covers |
+| --- | --- | --- |
+| 2026-10-25 | [Helm glance view](https://claude.ai/artifact/C6Sf6rv3FMeJYUXDr49swT) | Glance list, detail pane, keymap, here/last marks, status icons. Code differs: key hints use ASCII names, and the list ends with a plain age and the progress bar. |
 
 ## Local test build
 
