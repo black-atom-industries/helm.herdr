@@ -66,6 +66,22 @@ pub(crate) struct GlanceConfig {
     pub(crate) recent_hours: i64,
     #[serde(default)]
     pub(crate) icons: IconStyle,
+    #[serde(default = "default_labels")]
+    labels: String,
+}
+
+impl GlanceConfig {
+    /// Label letters in config order, lowercase and unique. `j` and `k` are
+    /// movement keys, so they are dropped.
+    pub(crate) fn labels(&self) -> Vec<char> {
+        let mut labels: Vec<char> = Vec::new();
+        for ch in self.labels.chars().map(|ch| ch.to_ascii_lowercase()) {
+            if ch.is_ascii_lowercase() && !matches!(ch, 'j' | 'k') && !labels.contains(&ch) {
+                labels.push(ch);
+            }
+        }
+        labels
+    }
 }
 
 #[derive(Clone, Deserialize)]
@@ -156,6 +172,9 @@ fn default_active_minutes() -> i64 {
 }
 fn default_recent_hours() -> i64 {
     4
+}
+fn default_labels() -> String {
+    "asdfg".into()
 }
 fn default_notification_sound() -> String {
     "default".into()
@@ -264,6 +283,7 @@ impl Default for GlanceConfig {
             active_minutes: default_active_minutes(),
             recent_hours: default_recent_hours(),
             icons: IconStyle::default(),
+            labels: default_labels(),
         }
     }
 }
@@ -471,6 +491,23 @@ mod tests {
         assert_eq!(custom.glance.active_minutes, 5);
         assert_eq!(custom.glance.recent_hours, 4);
         assert_eq!(custom.glance.icons, IconStyle::Nerd);
+    }
+
+    #[test]
+    fn glance_labels_default_and_skip_movement_keys_and_repeats() {
+        assert_eq!(
+            Config::default().glance.labels(),
+            vec!['a', 's', 'd', 'f', 'g']
+        );
+
+        let custom: Config = toml::from_str(
+            r#"
+            [glance]
+            labels = "AjsKsk1"
+            "#,
+        )
+        .unwrap();
+        assert_eq!(custom.glance.labels(), vec!['a', 's']);
     }
 
     #[test]

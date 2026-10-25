@@ -95,6 +95,8 @@ pub(crate) struct GlanceRow {
     pub(crate) repository: String,
     pub(crate) mark: Mark,
     pub(crate) signal: Signal,
+    /// Whether an agent waits on the User, even when the row sits in another group such as Pinned.
+    pub(crate) needs_you: bool,
 }
 
 pub(crate) fn evidence(
@@ -167,6 +169,7 @@ pub(crate) fn row(
             .map_or_else(|| workspace.label.clone(), |git| git.repo_key.clone()),
         mark,
         signal: verdict.signal,
+        needs_you: needs_you_signal(evidence).is_some(),
     }
 }
 

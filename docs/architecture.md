@@ -105,7 +105,9 @@ Activity is the newest of the Workspace's focus time, its last commit, and the n
 | `plugin` | Run the integration's configured open command |
 | `bookmark` | Apply the marked Entry's underlying action |
 
-`Up`/`Down` (`k`/`j`) move through the visible rows across groups, and Enter applies the Entry action for the selected row.
+In Normal mode, `j`/`k` and `Up`/`Down` move through the visible rows across groups. The first visible Workspace rows carry the letters from `[glance] labels` (`asdfg` by default, never `j` or `k`), and pressing one opens that row. Search mode hides the labels, and they return after `Esc`.
+
+`Enter` opens the selected Workspace at its last active Tab, and `1`–`9` open that Tab of the selected Workspace. `]` jumps to the first row of the next group. `[` jumps to the first row of the current group, or to the previous group's first row when it is already on that row. `!` jumps to the next row that needs you, including pinned rows. `-` opens the Previous workspace. `Shift-J` and `Shift-K` scroll the detail pane, and the offset resets when the selection moves to another row.
 
 ## Side behavior
 
@@ -120,7 +122,7 @@ Helm integrates with Herdr Plus without copying its UI:
 
 ## Configuration boundary
 
-Current Picker keys are `reuse_existing`, `create_missing`, `engine`, `source_order`, `source_priority_boost`, `check_updates`, `directory_template`, `directory_template_key`, and `[picker.filter_keys]`. Other current sections are `[notifications]`, `[jump_back]`, `[glance]`, `[sources]`, `[[roots]]`, and `[[integrations]]`. `[glance]` holds `active_minutes`, `recent_hours` and `icons`.
+Current Picker keys are `reuse_existing`, `create_missing`, `engine`, `source_order`, `source_priority_boost`, `check_updates`, `directory_template`, `directory_template_key`, and `[picker.filter_keys]`. Other current sections are `[notifications]`, `[jump_back]`, `[glance]`, `[sources]`, `[[roots]]`, and `[[integrations]]`. `[glance]` holds `active_minutes`, `recent_hours`, `icons` and `labels`.
 
 ## Color boundary
 

@@ -10,7 +10,7 @@ use serde::{Deserialize, Serialize};
 use crate::{
     activity::{now_unix_secs, parse_agent_status_event, ActivityState},
     config::Config,
-    glance::{self, GlanceRow, Group, Thresholds},
+    glance::{self, GlanceRow, Group, Mark, Thresholds},
     herdr::{herdr_json, herdr_json_args, notify_done, notify_error, run_herdr},
     integrations::{command, herdr_plus},
     matcher::match_score,
@@ -55,9 +55,18 @@ pub(crate) struct App {
     pub(crate) activity: ActivityState,
     pub(crate) glance: HashMap<String, GlanceRow>,
     pub(crate) now: i64,
+    pub(crate) detail_scroll: DetailScroll,
     #[cfg(test)]
     pub(crate) herdr_control: Option<Box<dyn HerdrControl>>,
     initial_selection_pending: bool,
+}
+
+/// Scroll offset of the detail pane. It belongs to one entry, so it resets
+/// once the selection moves to another.
+#[derive(Clone, Debug, Default)]
+pub(crate) struct DetailScroll {
+    pub(crate) entry: Option<String>,
+    pub(crate) offset: usize,
 }
 
 impl App {
@@ -83,6 +92,7 @@ impl App {
             activity: ActivityState::default(),
             glance: HashMap::new(),
             now: 0,
+            detail_scroll: DetailScroll::default(),
             #[cfg(test)]
             herdr_control: None,
             initial_selection_pending: true,
@@ -371,6 +381,119 @@ impl App {
         self.selected = 0;
     }
 
+    fn glance_row_at(&self, position: usize) -> Option<&GlanceRow> {
+        let index = *self.filtered.get(position)?;
+        self.glance_row(&self.entries[index])
+    }
+
+    fn group_at(&self, position: usize) -> Option<Group> {
+        let index = *self.filtered.get(position)?;
+        self.glance_group(&self.entries[index])
+    }
+
+    /// Positions of the labelled rows, in label order: the first visible
+    /// glance rows, Pinned first.
+    pub(crate) fn labelled_positions(&self) -> Vec<usize> {
+        if !self.glance_view() {
+            return Vec::new();
+        }
+        let count = self.config.glance.labels().len();
+        (0..self.filtered.len())
+            .filter(|&position| self.glance_row_at(position).is_some())
+            .take(count)
+            .collect()
+    }
+
+    /// Selects the first row of the next or previous Warmth group.
+    pub(crate) fn jump_group(&mut self, forward: bool) {
+        if !self.glance_view() {
+            return;
+        }
+        let groups: Vec<Option<Group>> = (0..self.filtered.len())
+            .map(|position| self.group_at(position))
+            .collect();
+        let starts: Vec<usize> = (0..groups.len())
+            .filter(|&position| {
+                groups[position].is_some()
+                    && (position == 0 || groups[position - 1] != groups[position])
+            })
+            .collect();
+        let target = if forward {
+            starts.iter().copied().find(|&start| start > self.selected)
+        } else {
+            // From inside a group, go to its first row; from that row, go to the previous group's.
+            let current = starts
+                .iter()
+                .rev()
+                .copied()
+                .find(|&start| start <= self.selected);
+            match current {
+                Some(current) if current < self.selected => Some(current),
+                Some(current) => starts.iter().rev().copied().find(|&start| start < current),
+                None => None,
+            }
+        };
+        if let Some(target) = target {
+            self.selected = target;
+        }
+    }
+
+    /// Selects the next row that needs you, wrapping to the first.
+    pub(crate) fn jump_needs_you(&mut self) {
+        let rows: Vec<usize> = (0..self.filtered.len())
+            .filter(|&position| {
+                self.glance_row_at(position)
+                    .is_some_and(|row| row.needs_you)
+            })
+            .collect();
+        let target = rows
+            .iter()
+            .copied()
+            .find(|&position| position > self.selected)
+            .or_else(|| rows.first().copied());
+        if let Some(target) = target {
+            self.selected = target;
+        }
+    }
+
+    /// The row marked `last`, which is the Previous workspace, when it is listed.
+    pub(crate) fn previous_position(&self) -> Option<usize> {
+        (0..self.filtered.len()).find(|&position| {
+            self.glance_row_at(position)
+                .is_some_and(|row| row.mark == Mark::Last)
+        })
+    }
+
+    /// The entry action for tab `number` (1-based) of the selected Workspace.
+    pub(crate) fn selected_tab_action(&self, number: usize) -> Option<EntryAction> {
+        let EntryAction::FocusWorkspace { session, id } = &self.selected_entry()?.action else {
+            return None;
+        };
+        let workspace = self
+            .topology
+            .workspaces
+            .iter()
+            .find(|workspace| &workspace.id == id && &workspace.session == session)?;
+        let tab = workspace.tabs.get(number.checked_sub(1)?)?;
+        Some(EntryAction::FocusTab {
+            session: session.clone(),
+            id: tab.id.clone(),
+        })
+    }
+
+    pub(crate) fn scroll_detail(&mut self, delta: isize) {
+        self.sync_detail_scroll();
+        self.detail_scroll.offset = self.detail_scroll.offset.saturating_add_signed(delta);
+    }
+
+    /// Resets the detail offset when the selection has moved to another entry.
+    pub(crate) fn sync_detail_scroll(&mut self) {
+        let entry = self.selected_entry().map(entry_identity);
+        if self.detail_scroll.entry != entry {
+            self.detail_scroll = DetailScroll { entry, offset: 0 };
+        }
+    }
+
     pub(crate) fn next(&mut self) {
         if !self.filtered.is_empty() {
             self.selected = (self.selected + 1).min(self.filtered.len() - 1);
@@ -443,6 +566,18 @@ impl App {
 
     pub(crate) fn open_selected(&mut self, use_directory_template: bool) -> Result<(), String> {
         let e = self.selected_entry().cloned().ok_or("nothing selected")?;
+        self.open_entry(e, use_directory_template)
+    }
+
+    /// Opens tab `number` (1-based) of the selected Workspace.
+    pub(crate) fn open_tab(&mut self, number: usize) -> Result<(), String> {
+        let action = self.selected_tab_action(number).ok_or("no such tab")?;
+        let mut entry = self.selected_entry().cloned().ok_or("nothing selected")?;
+        entry.action = action;
+        self.open_entry(entry, false)
+    }
+
+    fn open_entry(&mut self, e: Entry, use_directory_template: bool) -> Result<(), String> {
         let action_destination = recent_destination_for_entry(&e);
         let (result, notify_success, notify_failure) = match &e.action {
             EntryAction::FocusPane { .. }

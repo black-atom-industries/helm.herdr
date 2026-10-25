@@ -51,6 +51,7 @@
 | **Tab** | A named view within a Workspace containing one or more Panes. | Workspace tab, window |
 | **Pane** | A terminal area within a Tab. | Panel, split |
 | **Glance** | The default Picker view: one row per open Workspace, grouped by Warmth group. | Topology view, workspace list |
+| **Row label** | A letter from `[glance] labels` that opens its Glance row in one keystroke. | Shortcut letter, hotkey |
 | **Warmth group** | One of Pinned, Needs you, Active, Recent, or Quiet, which places a Workspace in the Glance. | Bucket, section |
 | **Other group** | The group of quick action and plugin Entries, shown in the Glance only while a Query is active. | Other source |
 | **Signal** | The fact that placed a row in its Warmth group, shown as text such as `waiting 4m`. | Reason, badge |
@@ -104,5 +105,5 @@
 - "Plugin" can mean any extension in general. Use **Herdr plugin** for the artifact handled by **Herdr**, and **Local plugin** only when it is linked from this repository.
 - "Result", "entry", and "row" can describe the same visible thing. Use **Entry** for the destination, **Entry row** for its rendering, and **Result list** for the collection.
 - "Query" and "filter" both narrow results. Use **Query** for typed text and **Source filter** for the selected source category.
-- "Pin" appears in product-facing language, while the interface command is "mark". Use **Marked entry** and **mark/unmark** for the state and action.
+- "Pin" is the word the Picker shows for the action, while the command is named "mark". Use **Marked entry** for the state and **pin/unpin** for the action.
 - "Open" is both a Source label and a general verb. Use **Workspace source** for the category and **open** only for the action.

@@ -70,6 +70,7 @@ pub(crate) fn tui_loop(
         if let Ok(workspaces) = workspace_refresh.try_recv() {
             app.apply_workspaces(workspaces, now_unix_secs());
         }
+        app.sync_detail_scroll();
         terminal.draw(|f| list_hits = draw(f, app))?;
         let animate = has_working_entry(app);
         let frame = if animate || update_check.is_some() {
@@ -91,11 +92,14 @@ pub(crate) fn tui_loop(
         match action {
             Action::Continue => {}
             Action::Quit => break Ok(()),
-            action @ (Action::Open | Action::OpenTemplate) => {
+            action @ (Action::Open | Action::OpenTemplate | Action::OpenTab(_)) => {
                 // leave the TUI while the action runs: herdr CLI output goes to
                 // the normal screen instead of corrupting the alternate screen
                 cleanup_terminal(&mut terminal)?;
-                let outcome = app.open_selected(matches!(action, Action::OpenTemplate));
+                let outcome = match action {
+                    Action::OpenTab(number) => app.open_tab(number),
+                    _ => app.open_selected(matches!(action, Action::OpenTemplate)),
+                };
                 if let Err(e) = outcome {
                     open_action_error(e, persist)?;
                 }
@@ -200,11 +204,13 @@ fn wait_for_key() {
     let _ = io::stdin().read_line(&mut s);
 }
 
+#[derive(Debug, PartialEq, Eq)]
 enum Action {
     Continue,
     Quit,
     Open,
     OpenTemplate,
+    OpenTab(usize),
     Update,
     CloseWorkspace,
 }
@@ -244,8 +250,7 @@ fn handle_mouse(app: &mut App, mouse: MouseEvent, hits: &ListHits) -> Action {
 fn handle_key(app: &mut App, key: KeyEvent) -> Action {
     let command = keybindings(app)
         .into_iter()
-        .find(|binding| binding.matches(app, key))
-        .map(|binding| binding.command);
+        .find_map(|binding| binding.command_for(app, key));
 
     if app.input_mode == InputMode::Help {
         if matches!(command, Some(Command::Back | Command::ToggleHelp)) {
@@ -290,6 +295,59 @@ fn execute_command(app: &mut App, command: Command, key: KeyEvent) -> Action {
             .selected_entry()
             .map(|_| Action::OpenTemplate)
             .unwrap_or(Action::Continue),
+        Command::OpenLabel => {
+            let slot = app
+                .config
+                .glance
+                .labels()
+                .iter()
+                .position(|ch| key.code == KeyCode::Char(*ch));
+            match slot.and_then(|slot| app.labelled_positions().get(slot).copied()) {
+                Some(position) => {
+                    app.selected = position;
+                    Action::Open
+                }
+                None => Action::Continue,
+            }
+        }
+        Command::OpenTab => match key.code {
+            KeyCode::Char(ch) if ('1'..='9').contains(&ch) => {
+                let number = usize::from(ch as u8 - b'0');
+                if app.selected_tab_action(number).is_some() {
+                    Action::OpenTab(number)
+                } else {
+                    Action::Continue
+                }
+            }
+            _ => Action::Continue,
+        },
+        Command::OpenPrevious => match app.previous_position() {
+            Some(position) => {
+                app.selected = position;
+                Action::Open
+            }
+            None => Action::Continue,
+        },
+        Command::NextGroup => {
+            app.jump_group(true);
+            Action::Continue
+        }
+        Command::PrevGroup => {
+            app.jump_group(false);
+            Action::Continue
+        }
+        Command::NextNeedsYou => {
+            app.jump_needs_you();
+            Action::Continue
+        }
+        Command::ScrollDetailDown => {
+            app.scroll_detail(1);
+            Action::Continue
+        }
+        Command::ScrollDetailUp => {
+            app.scroll_detail(-1);
+            Action::Continue
+        }
         Command::Update => Action::Update,
         Command::MoveUp => {
             app.prev();
@@ -342,7 +400,13 @@ fn execute_command(app: &mut App, command: Command, key: KeyEvent) -> Action {
                 app.query.clear();
                 app.input_mode = InputMode::Normal;
             }
-            app.set_filter(Some(source));
+            // The glance is the Workspace view, so its key clears the filter instead of toggling it.
+            let filter = if source == Source::Workspace {
+                None
+            } else {
+                Some(source)
+            };
+            app.set_filter(filter);
             app.apply_filter();
             Action::Continue
         }
@@ -352,69 +416,17 @@ fn execute_command(app: &mut App, command: Command, key: KeyEvent) -> Action {
 fn draw(f: &mut Frame, app: &App) -> ListHits {
     let area = f.area();
     f.render_widget(Clear, area);
-    let inner = area;
 
     let rows = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
-            Constraint::Length(if app.input_mode == InputMode::Search {
-                3
-            } else {
-                1
-            }),
+            Constraint::Length(3),
             Constraint::Min(3),
-            Constraint::Length(2),
+            Constraint::Length(1),
         ])
-        .split(inner);
+        .split(area);
 
-    if app.input_mode == InputMode::Search {
-        let filter = app
-            .source_filter
-            .as_ref()
-            .map(|s| s.label())
-            .unwrap_or("all");
-        let mut search_spans = vec![
-            Span::styled("query ", Style::default().fg(app.theme.overlay0)),
-            Span::styled(
-                &app.query,
-                Style::default()
-                    .fg(app.theme.text)
-                    .add_modifier(Modifier::BOLD),
-            ),
-            Span::raw("   "),
-            Span::styled(
-                format!("filter:{filter}"),
-                Style::default().fg(app.theme.accent),
-            ),
-        ];
-        if let Some(version) = &app.update_available {
-            search_spans.push(Span::styled(
-                format!("   ↑ v{version} available · F5 update"),
-                Style::default()
-                    .fg(app.theme.yellow)
-                    .add_modifier(Modifier::BOLD),
-            ));
-        }
-        let search = Paragraph::new(Line::from(search_spans)).block(
-            Block::default()
-                .title(" Helm ")
-                .style(Style::default().bg(app.theme.panel_bg))
-                .borders(Borders::BOTTOM),
-        );
-        f.render_widget(search, rows[0]);
-    } else {
-        let title = app.update_available.as_ref().map_or_else(
-            || " Helm ".to_string(),
-            |version| format!(" Helm   ↑ v{version} available · F5 update "),
-        );
-        f.render_widget(
-            Block::default()
-                .title(title)
-                .style(Style::default().bg(app.theme.panel_bg)),
-            rows[0],
-        );
-    }
-
+    draw_header(f, app, rows[0]);
     let list_hits = draw_list(f, app, rows[1]);
 
     draw_key_hints(f, app, rows[2]);
@@ -424,56 +436,223 @@ fn draw(f: &mut Frame, app: &App) -> ListHits {
     list_hits
 }
 
-fn draw_key_hints(f: &mut Frame, app: &App, area: Rect) {
-    let mut command_spans = Vec::new();
-    let mut filter_spans = Vec::new();
-    for binding in keybindings(app) {
-        let Some((key, label)) = binding.compact_hint(app) else {
-            continue;
-        };
-        if key.is_empty() {
-            continue;
-        }
-        let spans = if binding.group == "Filters" {
-            &mut filter_spans
-        } else {
-            &mut command_spans
-        };
-        let active = binding.is_active(app);
-        let key_style = if active {
-            Style::default()
-                .fg(app.theme.panel_bg)
-                .bg(app.theme.accent)
-                .add_modifier(Modifier::BOLD)
-        } else {
+const HEADER_COUNTS_MIN_WIDTH: u16 = 90;
+
+fn draw_header(f: &mut Frame, app: &App, area: Rect) {
+    let block = Block::default()
+        .style(Style::default().bg(app.theme.panel_bg))
+        .borders(Borders::BOTTOM);
+    let inner = block.inner(area);
+    f.render_widget(block, area);
+    let lines = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Length(1), Constraint::Length(1)])
+        .split(inner);
+
+    let counts = if area.width >= HEADER_COUNTS_MIN_WIDTH {
+        group_count_spans(app)
+    } else {
+        Vec::new()
+    };
+    let counts_width: usize = counts.iter().map(Span::width).sum();
+    let search_line = Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([Constraint::Min(0), Constraint::Length(counts_width as u16)])
+        .split(lines[0]);
+    f.render_widget(
+        Paragraph::new(Line::from(header_spans(app))),
+        search_line[0],
+    );
+    f.render_widget(Paragraph::new(Line::from(counts)), search_line[1]);
+
+    f.render_widget(
+        Paragraph::new(Line::from(source_strip_spans(app))),
+        lines[1],
+    );
+}
+
+fn header_spans(app: &App) -> Vec<Span<'static>> {
+    let mut spans = vec![
+        Span::styled(
+            "Helm",
             Style::default()
                 .fg(app.theme.accent)
-                .add_modifier(Modifier::BOLD)
-        };
-        spans.push(Span::styled(format!(" {key} "), key_style));
+                .add_modifier(Modifier::BOLD),
+        ),
+        Span::raw("  "),
+    ];
+    if app.input_mode == InputMode::Search || !app.query.is_empty() {
+        spans.push(Span::styled("/ ", Style::default().fg(app.theme.subtext0)));
         spans.push(Span::styled(
-            format!("{label}  "),
-            Style::default().fg(if active {
-                app.theme.text
-            } else {
-                app.theme.overlay0
-            }),
+            app.query.clone(),
+            Style::default()
+                .fg(app.theme.text)
+                .add_modifier(Modifier::BOLD),
+        ));
+    } else {
+        spans.push(Span::styled(
+            "/ type to search",
+            Style::default().fg(app.theme.subtext0),
         ));
     }
+    if let Some(version) = &app.update_available {
+        spans.push(Span::styled(
+            format!("   ↑ v{version} available · F5 update"),
+            Style::default()
+                .fg(app.theme.yellow)
+                .add_modifier(Modifier::BOLD),
+        ));
+    }
+    spans
+}
+
+fn group_count_spans(app: &App) -> Vec<Span<'static>> {
+    let counts = [
+        (
+            app.glance.values().filter(|row| row.needs_you).count(),
+            "need you",
+            Group::NeedsYou,
+        ),
+        (
+            app.glance
+                .values()
+                .filter(|row| row.group == Group::Active)
+                .count(),
+            "active",
+            Group::Active,
+        ),
+        (
+            app.glance
+                .values()
+                .filter(|row| row.group == Group::Recent)
+                .count(),
+            "recent",
+            Group::Recent,
+        ),
+        (
+            app.glance
+                .values()
+                .filter(|row| row.group == Group::Quiet)
+                .count(),
+            "quiet",
+            Group::Quiet,
+        ),
+    ];
+    let mut spans = Vec::new();
+    for (count, word, group) in counts {
+        if count == 0 {
+            continue;
+        }
+        if !spans.is_empty() {
+            spans.push(Span::raw("  "));
+        }
+        spans.push(Span::styled(
+            format!("{count} {word}"),
+            Style::default().fg(group_color(&app.theme, group)),
+        ));
+    }
+    spans
+}
+
+fn source_strip_spans(app: &App) -> Vec<Span<'static>> {
+    let bindings = keybindings(app);
+    let mut spans = Vec::new();
+    for binding in bindings
+        .iter()
+        .filter(|binding| matches!(binding.command(), Command::Filter(_)))
+    {
+        let (key_style, label_style) = if binding.is_active(app) {
+            let chip = Style::default().fg(app.theme.panel_bg).bg(app.theme.accent);
+            (chip.add_modifier(Modifier::BOLD), chip)
+        } else {
+            (
+                Style::default()
+                    .fg(app.theme.accent)
+                    .add_modifier(Modifier::BOLD),
+                Style::default().fg(app.theme.subtext0),
+            )
+        };
+        spans.push(Span::styled(
+            format!(" {} ", binding.key_label(app)),
+            key_style,
+        ));
+        spans.push(Span::styled(format!("{} ", binding.label), label_style));
+        spans.push(Span::raw(" "));
+    }
+    spans
+}
+
+const HINT_GAP: &str = "   ";
+
+fn hint_width(hints: &[(String, &'static str)]) -> usize {
+    hints
+        .iter()
+        .map(|(key, label)| Span::raw(key.as_str()).width() + 1 + Span::raw(*label).width())
+        .sum::<usize>()
+        + HINT_GAP.len() * hints.len().saturating_sub(1)
+}
+
+fn hint_line(app: &App, hints: &[(String, &'static str)]) -> Line<'static> {
+    let mut spans = Vec::new();
+    for (index, (key, label)) in hints.iter().enumerate() {
+        if index > 0 {
+            spans.push(Span::raw(HINT_GAP));
+        }
+        spans.push(Span::styled(
+            key.clone(),
+            Style::default()
+                .fg(app.theme.accent)
+                .add_modifier(Modifier::BOLD),
+        ));
+        spans.push(Span::styled(
+            format!(" {label}"),
+            Style::default().fg(app.theme.subtext0),
+        ));
+    }
+    Line::from(spans)
+}
+
+/// One line of compact hints. The left block drops hints from its end until
+/// it fits beside the right-aligned block.
+fn draw_key_hints(f: &mut Frame, app: &App, area: Rect) {
+    let mut left = Vec::new();
+    let mut right = Vec::new();
+    for binding in keybindings(app) {
+        let Some(hint) = binding.compact_hint(app) else {
+            continue;
+        };
+        if binding.footer_right {
+            right.push(hint);
+        } else {
+            left.push(hint);
+        }
+    }
+
+    let right_width = hint_width(&right);
+    let room = (area.width as usize).saturating_sub(right_width + 2);
+    while !left.is_empty() && hint_width(&left) > room {
+        left.pop();
+    }
+
+    let columns = Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([Constraint::Min(0), Constraint::Length(right_width as u16)])
+        .split(area);
+    let style = Style::default().bg(app.theme.panel_bg);
     f.render_widget(
-        Paragraph::new(Text::from(vec![
-            Line::from(command_spans),
-            Line::from(filter_spans),
-        ]))
-        .style(Style::default().bg(app.theme.panel_bg)),
-        area,
+        Paragraph::new(hint_line(app, &left)).style(style),
+        columns[0],
+    );
+    f.render_widget(
+        Paragraph::new(hint_line(app, &right)).style(style),
+        columns[1],
     );
 }
 
 fn draw_keybindings_help(f: &mut Frame, app: &App, area: Rect) {
     let bindings = keybindings(app);
     let mut lines = Vec::new();
-    for group in ["Navigation", "Actions", "View", "Filters"] {
+    for group in ["Move", "Open", "Find", "Sources", "Act"] {
         let start = lines.len();
         lines.push(Line::styled(
             format!(" {group}"),
@@ -834,6 +1013,12 @@ fn draw_glance(f: &mut Frame, app: &App, area: Rect) -> ListHits {
     let name_width = name_width.min(flex * 3 / 5);
     let branch_width = branch_width.min(flex.saturating_sub(name_width));
 
+    let labels = app.config.glance.labels();
+    let labelled = if app.input_mode == InputMode::Normal {
+        app.labelled_positions()
+    } else {
+        Vec::new()
+    };
     let mut items = Vec::new();
     let mut hit_rows = Vec::new();
     let mut selected_item = None;
@@ -872,9 +1057,23 @@ fn draw_glance(f: &mut Frame, app: &App, area: Rect) -> ListHits {
             Mark::Last => "last",
             Mark::None => "",
         };
+        let label = match labelled
+            .iter()
+            .position(|&slot| slot == *position)
+            .and_then(|slot| labels.get(slot))
+        {
+            Some(ch) => Span::styled(
+                format!(" {ch}"),
+                Style::default()
+                    .fg(app.theme.accent)
+                    .bg(app.theme.surface0)
+                    .add_modifier(Modifier::BOLD),
+            ),
+            None => Span::raw("  "),
+        };
         items.push(ListItem::new(Line::from(vec![
             Span::raw(" "),
-            Span::raw("  "),
+            label,
             Span::raw("  "),
             Span::styled(
                 fit_cell(cells.icon, 1),
@@ -1232,18 +1431,18 @@ mod tests {
             })
             .unwrap();
         let normal_text = buffer_text(&terminal);
-        assert!(!normal_text.contains("query"));
-        assert!(!normal_text.contains("filter:all"));
+        assert!(normal_text.contains("/ type to search"));
 
         handle_key(&mut app, key(KeyCode::Char('/')));
+        handle_key(&mut app, key(KeyCode::Char('x')));
         terminal
             .draw(|f| {
                 draw(f, &app);
             })
             .unwrap();
         let search_text = buffer_text(&terminal);
-        assert!(search_text.contains("query"));
-        assert!(search_text.contains("filter:all"));
+        assert!(search_text.contains("/ x"));
+        assert!(!search_text.contains("type to search"));
     }
 
     #[test]
@@ -1273,7 +1472,7 @@ mod tests {
         let buffer = terminal.backend().buffer();
 
         assert_eq!(buffer[(0, 0)].bg, app.theme.base_background);
-        assert_eq!(buffer[(0, 1)].bg, app.theme.base_background);
+        assert_eq!(buffer[(79, 1)].bg, app.theme.base_background);
         assert_eq!(buffer[(0, 6)].bg, app.theme.base_background);
     }
 
@@ -1393,22 +1592,43 @@ mod tests {
     #[test]
     fn registry_maps_ctrl_b_to_mark_without_stealing_enter() {
         let app = App::new(Config::default(), Theme::terminal());
-        let mark = keybindings(&app)
-            .into_iter()
-            .find(|binding| binding.command == Command::ToggleMark)
+        let bindings = keybindings(&app);
+        let mark = bindings
+            .iter()
+            .find(|binding| binding.command() == Command::ToggleMark)
             .unwrap();
 
-        assert!(mark.label.contains("mark"));
-        assert!(mark.matches(
-            &app,
-            KeyEvent::new(KeyCode::Char('b'), KeyModifiers::CONTROL)
-        ));
-        assert!(!mark.matches(&app, KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE)));
-        assert!(keybindings(&app)
-            .into_iter()
-            .find(|binding| binding.command == Command::Open)
-            .unwrap()
-            .matches(&app, KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE)));
+        assert_eq!(mark.label, "pin to the top");
+        assert_eq!(
+            mark.command_for(
+                &app,
+                KeyEvent::new(KeyCode::Char('b'), KeyModifiers::CONTROL)
+            ),
+            Some(Command::ToggleMark)
+        );
+        assert_eq!(
+            mark.command_for(&app, KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE)),
+            None
+        );
+        let open = bindings
+            .iter()
+            .find(|binding| binding.command() == Command::Open)
+            .unwrap();
+        assert_eq!(
+            open.command_for(&app, KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE)),
+            Some(Command::Open)
+        );
+    }
+
+    #[test]
+    fn workspace_key_returns_to_the_glance_from_another_source() {
+        let mut app = App::new(Config::default(), Theme::terminal());
+        app.source_filter = Some(Source::Root);
+        let ctrl_w = KeyEvent::new(KeyCode::Char('w'), KeyModifiers::CONTROL);
+        handle_key(&mut app, ctrl_w);
+        assert_eq!(app.source_filter, None);
+        handle_key(&mut app, ctrl_w);
+        assert_eq!(app.source_filter, None);
     }
 
     #[test]
@@ -1419,7 +1639,7 @@ mod tests {
         let bindings = keybindings(&app);
         assert!(!bindings
             .iter()
-            .any(|binding| { matches!(binding.command, Command::Filter(Source::Zoxide)) }));
+            .any(|binding| { matches!(binding.command(), Command::Filter(Source::Zoxide)) }));
 
         let backend = TestBackend::new(110, 20);
         let mut terminal = Terminal::new(backend).unwrap();
@@ -1430,24 +1650,6 @@ mod tests {
             .unwrap();
         let text = buffer_text(&terminal);
         assert!(!text.contains("zoxide"));
-    }
-
-    #[test]
-    fn compact_footer_groups_movement_and_lists_filters() {
-        let app = App::new(Config::default(), Theme::terminal());
-        let backend = TestBackend::new(110, 20);
-        let mut terminal = Terminal::new(backend).unwrap();
-        terminal
-            .draw(|f| {
-                draw(f, &app);
-            })
-            .unwrap();
-        let text = buffer_text(&terminal);
-
-        assert!(text.contains("↓/j up/down"));
-        assert!(text.contains("⌃Z zoxide"));
-        assert!(!text.contains("⌃A agent"));
-        assert!(!text.contains("k move up"));
     }
 
     #[test]
@@ -1905,5 +2107,386 @@ mod tests {
         let (lines, _) = render_app(&app, 160, 40);
         assert!(line_index(&lines, "PINNED") < line_index(&lines, "NEEDS YOU"));
         assert!(lines[line_index(&lines, "fonts")].contains("9d"));
+    }
+
+    fn shift_key(ch: char) -> KeyEvent {
+        KeyEvent::new(KeyCode::Char(ch), KeyModifiers::SHIFT)
+    }
+
+    fn selected_title(app: &App) -> String {
+        app.selected_entry().unwrap().title.clone()
+    }
+
+    fn commit_workspace(id: &str, label: &str, last_commit_at: i64) -> WorkspaceNode {
+        glance_workspace(id, label, false, Some(last_commit_at), vec![])
+    }
+
+    #[test]
+    fn label_opens_the_labelled_row_and_is_ignored_while_searching() {
+        let mut app = glance_app(
+            NOW,
+            None,
+            vec![
+                commit_workspace("w1", "alpha", NOW - 60),
+                commit_workspace("w2", "beta", NOW - 120),
+                commit_workspace("w3", "gamma", NOW - 180),
+            ],
+            ActivityState::default(),
+        );
+        assert_eq!(selected_title(&app), "alpha");
+
+        assert_eq!(handle_key(&mut app, key(KeyCode::Char('s'))), Action::Open);
+        assert_eq!(selected_title(&app), "beta");
+
+        handle_key(&mut app, key(KeyCode::Char('/')));
+        assert_eq!(
+            handle_key(&mut app, key(KeyCode::Char('s'))),
+            Action::Continue
+        );
+        assert_eq!(app.query, "s");
+    }
+
+    #[test]
+    fn digits_open_the_tab_of_the_selected_workspace_and_ignore_missing_tabs() {
+        let mut workspace = glance_workspace("w1", "helm", true, Some(NOW - 60), vec![]);
+        workspace.tabs.push(TabNode {
+            id: "w1:t2".into(),
+            label: "Edit".into(),
+            focused: false,
+            panes: vec![],
+        });
+        let mut app = glance_app(NOW, None, vec![workspace], ActivityState::default());
+
+        assert_eq!(
+            handle_key(&mut app, key(KeyCode::Char('2'))),
+            Action::OpenTab(2)
+        );
+        assert!(matches!(
+            app.selected_tab_action(2),
+            Some(EntryAction::FocusTab { id, .. }) if id == "w1:t2"
+        ));
+        assert_eq!(
+            handle_key(&mut app, key(KeyCode::Char('3'))),
+            Action::Continue
+        );
+        assert_eq!(
+            handle_key(&mut app, key(KeyCode::Char('9'))),
+            Action::Continue
+        );
+    }
+
+    #[test]
+    fn group_jumps_land_on_group_starts_and_stop_at_the_edges() {
+        let mut activity = ActivityState::default();
+        activity.record_agent_status("p-need", "blocked", NOW - 60);
+        let mut app = glance_app(
+            NOW,
+            None,
+            vec![
+                glance_workspace(
+                    "w1",
+                    "need",
+                    false,
+                    None,
+                    vec![pane(
+                        "p-need",
+                        "/repos/need",
+                        Some(("claude", AgentState::Blocked)),
+                    )],
+                ),
+                commit_workspace("w2", "active-one", NOW - 60),
+                commit_workspace("w3", "active-two", NOW - 120),
+                commit_workspace("w4", "old", NOW - 9 * 86_400),
+            ],
+            activity,
+        );
+        assert_eq!(selected_title(&app), "need");
+
+        handle_key(&mut app, key(KeyCode::Char(']')));
+        assert_eq!(selected_title(&app), "active-one");
+        handle_key(&mut app, key(KeyCode::Char(']')));
+        assert_eq!(selected_title(&app), "old");
+        handle_key(&mut app, key(KeyCode::Char(']')));
+        assert_eq!(selected_title(&app), "old");
+
+        handle_key(&mut app, key(KeyCode::Char('[')));
+        assert_eq!(selected_title(&app), "active-one");
+        handle_key(&mut app, key(KeyCode::Char('[')));
+        assert_eq!(selected_title(&app), "need");
+        handle_key(&mut app, key(KeyCode::Char('[')));
+        assert_eq!(selected_title(&app), "need");
+
+        app.selected = 2;
+        handle_key(&mut app, key(KeyCode::Char('[')));
+        assert_eq!(selected_title(&app), "active-one");
+        handle_key(&mut app, key(KeyCode::Char('[')));
+        assert_eq!(selected_title(&app), "need");
+    }
+
+    #[test]
+    fn needs_you_jump_moves_to_the_next_waiting_row_and_wraps() {
+        let mut activity = ActivityState::default();
+        activity.record_agent_status("p-first", "blocked", NOW - 60);
+        activity.record_agent_status("p-second", "done", NOW - 120);
+        let mut app = glance_app(
+            NOW,
+            None,
+            vec![
+                glance_workspace(
+                    "w1",
+                    "first",
+                    false,
+                    None,
+                    vec![pane(
+                        "p-first",
+                        "/repos/first",
+                        Some(("claude", AgentState::Blocked)),
+                    )],
+                ),
+                glance_workspace(
+                    "w2",
+                    "second",
+                    false,
+                    None,
+                    vec![pane(
+                        "p-second",
+                        "/repos/second",
+                        Some(("claude", AgentState::Done)),
+                    )],
+                ),
+                commit_workspace("w3", "quiet", NOW - 9 * 86_400),
+            ],
+            activity,
+        );
+
+        handle_key(&mut app, shift_key('!'));
+        assert_eq!(selected_title(&app), "second");
+        handle_key(&mut app, shift_key('!'));
+        assert_eq!(selected_title(&app), "first");
+
+        app.selected = 2;
+        handle_key(&mut app, shift_key('!'));
+        assert_eq!(selected_title(&app), "first");
+    }
+
+    #[test]
+    fn minus_opens_the_previous_workspace_row() {
+        let mut app = glance_app(
+            NOW,
+            Some("w2"),
+            vec![
+                glance_workspace("w1", "helm", true, Some(NOW - 60), vec![]),
+                glance_workspace("w2", "dots", false, Some(NOW - 120), vec![]),
+            ],
+            ActivityState::default(),
+        );
+        app.selected = 1;
+
+        assert_eq!(handle_key(&mut app, key(KeyCode::Char('-'))), Action::Open);
+        assert_eq!(selected_title(&app), "dots");
+    }
+
+    #[test]
+    fn shift_j_and_k_scroll_the_detail_pane_and_selection_resets_it() {
+        let mut app = glance_app(
+            NOW,
+            None,
+            vec![
+                commit_workspace("w1", "alpha", NOW - 60),
+                commit_workspace("w2", "beta", NOW - 120),
+            ],
+            ActivityState::default(),
+        );
+
+        handle_key(&mut app, shift_key('J'));
+        handle_key(&mut app, shift_key('J'));
+        assert_eq!(app.detail_scroll.offset, 2);
+        handle_key(&mut app, shift_key('K'));
+        assert_eq!(app.detail_scroll.offset, 1);
+
+        handle_key(&mut app, key(KeyCode::Char('j')));
+        app.sync_detail_scroll();
+        assert_eq!(app.detail_scroll.offset, 0);
+
+        handle_key(&mut app, shift_key('K'));
+        assert_eq!(app.detail_scroll.offset, 0);
+    }
+
+    #[test]
+    fn label_column_marks_the_first_five_rows_with_pinned_first() {
+        let names = [
+            "alpha", "bravo", "charlie", "delta", "echo", "foxtrot", "golf",
+        ];
+        let mut workspaces: Vec<WorkspaceNode> = names
+            .iter()
+            .enumerate()
+            .map(|(index, name)| {
+                commit_workspace(&format!("w{index}"), name, NOW - 60 * (index as i64 + 1))
+            })
+            .collect();
+        workspaces.last_mut().unwrap().label = "golf".into();
+        let mut app = glance_app(NOW, None, workspaces, ActivityState::default());
+        let golf = app
+            .topology_entries
+            .iter()
+            .find(|entry| entry.title == "golf")
+            .unwrap()
+            .clone();
+        app.pinned_entries.insert(pin_key(&golf));
+        app.rebuild_glance();
+        app.apply_filter();
+
+        let (lines, _) = render_app(&app, 160, 40);
+        let label_at = |name: &str| lines[line_index(&lines, name)].chars().nth(2).unwrap();
+        assert_eq!(label_at("golf"), 'a');
+        assert_eq!(label_at("alpha"), 's');
+        assert_eq!(label_at("bravo"), 'd');
+        assert_eq!(label_at("charlie"), 'f');
+        assert_eq!(label_at("delta"), 'g');
+        assert_eq!(label_at("echo"), ' ');
+        assert_eq!(label_at("foxtrot"), ' ');
+
+        handle_key(&mut app, key(KeyCode::Char('/')));
+        let (lines, _) = render_app(&app, 160, 40);
+        assert_eq!(lines[line_index(&lines, "golf")].chars().nth(2), Some(' '));
+    }
+
+    #[test]
+    fn header_and_footer_render_at_160_and_100_columns() {
+        let mut activity = ActivityState::default();
+        activity.record_agent_status("p-skills", "blocked", NOW - 4 * 60);
+        activity.record_agent_status("p-writing", "done", NOW - 12 * 60);
+        let app = glance_app(
+            NOW,
+            None,
+            vec![
+                glance_workspace(
+                    "w1",
+                    "skills",
+                    false,
+                    None,
+                    vec![pane(
+                        "p-skills",
+                        "/repos/skills",
+                        Some(("claude", AgentState::Blocked)),
+                    )],
+                ),
+                glance_workspace(
+                    "w2",
+                    "writing",
+                    false,
+                    None,
+                    vec![pane(
+                        "p-writing",
+                        "/repos/writing",
+                        Some(("claude", AgentState::Done)),
+                    )],
+                ),
+                commit_workspace("w3", "dots", NOW - 14 * 60),
+                commit_workspace("w4", "fonts", NOW - 9 * 86_400),
+            ],
+            activity,
+        );
+
+        let (wide, _) = render_app(&app, 160, 40);
+        assert!(wide[0].contains("Helm"));
+        assert!(wide[0].contains("/ type to search"));
+        assert!(wide[0].contains("2 need you"));
+        assert!(wide[0].contains("1 active"));
+        assert!(wide[0].contains("1 quiet"));
+        assert!(!wide[0].contains("recent"));
+        assert!(wide[1].contains("⌃W workspaces"));
+        assert!(wide[1].contains("⌃R roots"));
+        assert!(wide[1].contains("⌃Z zoxide"));
+        let footer = wide.last().unwrap();
+        assert!(footer.contains("a–g open row"));
+        assert!(footer.contains("↵ open"));
+        assert!(footer.contains("1–9 tab"));
+        assert!(footer.contains("] [ group"));
+        assert!(footer.contains("! needs you"));
+        assert!(footer.contains("/ search"));
+        assert!(footer.contains("⌃B pin"));
+        assert!(footer.ends_with("? keys   esc close"));
+
+        let (narrow, _) = render_app(&app, 100, 40);
+        let footer = narrow.last().unwrap();
+        assert!(footer.contains("a–g open row"));
+        assert!(footer.contains("⌃B pin"));
+        assert!(footer.ends_with("? keys   esc close"));
+    }
+
+    #[test]
+    fn footer_drops_its_left_hints_before_the_right_block() {
+        let app = glance_app(
+            NOW,
+            None,
+            vec![commit_workspace("w1", "dots", NOW - 60)],
+            ActivityState::default(),
+        );
+        let (lines, _) = render_app(&app, 80, 40);
+        let footer = lines.last().unwrap();
+        assert!(footer.contains("a–g open row"));
+        assert!(!footer.contains("/ search"));
+        assert!(!footer.contains("⌃B pin"));
+        assert!(footer.ends_with("? keys   esc close"));
+    }
+
+    #[test]
+    fn needs_you_finds_and_counts_pinned_rows_that_wait_on_the_user() {
+        let mut activity = ActivityState::default();
+        activity.record_agent_status("p-pinned", "blocked", NOW - 60);
+        let mut app = glance_app(
+            NOW,
+            None,
+            vec![
+                glance_workspace(
+                    "w1",
+                    "pinned",
+                    false,
+                    None,
+                    vec![pane(
+                        "p-pinned",
+                        "/repos/pinned",
+                        Some(("claude", AgentState::Blocked)),
+                    )],
+                ),
+                commit_workspace("w2", "quiet", NOW - 9 * 86_400),
+            ],
+            activity,
+        );
+        let pinned = app
+            .topology_entries
+            .iter()
+            .find(|entry| entry.title == "pinned")
+            .unwrap()
+            .clone();
+        app.pinned_entries.insert(pin_key(&pinned));
+        app.rebuild_glance();
+        app.apply_filter();
+
+        app.selected = 1;
+        handle_key(&mut app, shift_key('!'));
+        assert_eq!(selected_title(&app), "pinned");
+
+        let (lines, _) = render_app(&app, 100, 40);
+        assert!(lines[0].contains("1 need you"));
+    }
+
+    #[test]
+    fn question_mark_sheet_lists_the_sections() {
+        let mut app = glance_app(
+            NOW,
+            None,
+            vec![commit_workspace("w1", "dots", NOW - 60)],
+            ActivityState::default(),
+        );
+        handle_key(&mut app, key(KeyCode::Char('?')));
+        let (lines, _) = render_app(&app, 100, 40);
+        let text = lines.join("\n");
+        for section in [" Move", " Open", " Find", " Sources", " Act"] {
+            assert!(text.contains(section), "{section}");
+        }
+        assert!(text.contains("⇧J ⇧K"));
+        assert!(text.contains("a–g"));
     }
 }

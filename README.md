@@ -51,15 +51,16 @@ height = "90%"
 
 With an empty Query, every open Workspace is a four-line block: the Workspace, its Tabs, the selected Tab's Panes, and the selected Pane's detail.
 
-| Key                            | Action                                                     |
-| ------------------------------ | ---------------------------------------------------------- |
-| `l`                            | On a Workspace, step into its Tabs                         |
-| `h` / `l`, `Shift-Tab` / `Tab` | On a Tab or Pane, select the previous or next one          |
-| `j` / `k`                      | On a Workspace, move between Workspaces; on a Tab or Pane, step down or up a level (`j` on a Pane moves on to the next Workspace) |
-| `J` / `K`, `]` / `[`           | Next or previous Workspace, from any depth                 |
-| `Enter`                        | Focus the selected Workspace, Tab, or exact Pane           |
-
-The arrow keys mirror `h` `j` `k` `l`.
+| Key                  | Action                                                       |
+| -------------------- | ------------------------------------------------------------ |
+| `a`–`g`              | Open the row with that label, for the first five rows        |
+| `j` / `k`, `↓` / `↑` | Move to the next or previous row                             |
+| `Enter`              | Open the selected Workspace at its last active Tab           |
+| `1`–`9`              | Open that Tab of the selected Workspace                      |
+| `]` / `[`            | Jump to the first row of the next group; `[` goes to the current group's first row, then to the previous group's |
+| `!`                  | Jump to the next row that needs you, wrapping around         |
+| `-`                  | Open the previous Workspace                                  |
+| `Shift-J` / `Shift-K` | Scroll the detail pane                                      |
 
 ## Query
 
@@ -80,10 +81,10 @@ The `workspace` rows come from the live session. Each `[sources]` entry in the c
 
 | Key              | Action                                                               |
 | ---------------- | -------------------------------------------------------------------- |
-| `Ctrl-W`         | Workspaces, Tabs, and Panes                                          |
+| `Ctrl-W`         | Back to the glance of open Workspaces                                |
 | `Ctrl-Q`         | Herdr Plus Quick Actions                                             |
 | `Ctrl-Z` / `Ctrl-R` | zoxide / roots                                                    |
-| `Ctrl-B`         | Mark or unmark the selected Entry                                    |
+| `Ctrl-B`         | Pin or unpin the selected Entry to the top                           |
 | `Ctrl-X`         | Close the open Workspace behind the selected Entry                   |
 | `Alt-Enter`      | Open a zoxide or root directory with the shared template             |
 | `Ctrl-U`         | Clear the Query and filter                                           |
