@@ -472,8 +472,13 @@ fn execute_command(app: &mut App, command: Command, key: KeyEvent) -> Action {
 }
 
 fn draw(f: &mut Frame, app: &App) -> (ListHits, usize) {
-    let area = f.area();
-    f.render_widget(Clear, area);
+    let full = f.area();
+    f.render_widget(Clear, full);
+    f.render_widget(
+        Block::default().style(Style::default().bg(app.theme.base_background)),
+        full,
+    );
+    let area = content_area(full);
 
     let rows = Layout::default()
         .direction(Direction::Vertical)
@@ -499,6 +504,17 @@ fn draw(f: &mut Frame, app: &App) -> (ListHits, usize) {
 }
 
 const HEADER_COUNTS_MIN_WIDTH: u16 = 90;
+
+/// Herdr's popup frame keeps one column on the right for its scrollbar, so
+/// the left inset is one column wider to look even.
+fn content_area(full: Rect) -> Rect {
+    Rect {
+        x: full.x + 2.min(full.width),
+        y: full.y + 1.min(full.height),
+        width: full.width.saturating_sub(3),
+        height: full.height.saturating_sub(2),
+    }
+}
 
 fn draw_header(f: &mut Frame, app: &App, area: Rect) {
     let block = Block::default()
@@ -677,6 +693,10 @@ fn hint_line(app: &App, hints: &[(String, &'static str)]) -> Line<'static> {
 /// One line of compact hints. The left block drops hints from its end until
 /// it fits beside the right-aligned block.
 fn draw_key_hints(f: &mut Frame, app: &App, area: Rect) {
+    f.render_widget(
+        Block::default().style(Style::default().bg(app.theme.panel_bg)),
+        area,
+    );
     if app.close_armed {
         let name = app.selected_entry().map(display_title).unwrap_or_default();
         let line = Line::from(vec![
@@ -2309,7 +2329,45 @@ mod tests {
         let mut hits = ListHits::default();
         terminal.draw(|f| hits = draw(f, app).0).unwrap();
         let text = buffer_text(&terminal);
-        (text.lines().map(str::to_string).collect(), hits)
+        let lines: Vec<String> = text.lines().map(str::to_string).collect();
+        (content_lines(&lines), hits)
+    }
+
+    /// The rendered lines inside the content inset, so layout assertions
+    /// read the same at any padding.
+    fn content_lines(lines: &[String]) -> Vec<String> {
+        let inner = lines.get(1..lines.len().saturating_sub(1)).unwrap_or(&[]);
+        inner
+            .iter()
+            .map(|line| {
+                let chars: Vec<char> = line.chars().collect();
+                let end = chars.len().saturating_sub(1).max(2.min(chars.len()));
+                chars[2.min(chars.len())..end].iter().collect()
+            })
+            .collect()
+    }
+
+    #[test]
+    fn content_sits_inside_an_even_inset() {
+        let app = glance_app(
+            NOW,
+            None,
+            vec![commit_workspace("w1", "dots", NOW - 60)],
+            ActivityState::default(),
+        );
+        let mut terminal = Terminal::new(TestBackend::new(120, 30)).unwrap();
+        terminal
+            .draw(|f| {
+                draw(f, &app);
+            })
+            .unwrap();
+        let text = buffer_text(&terminal);
+        let lines: Vec<&str> = text.lines().collect();
+        assert!(lines[0].trim().is_empty());
+        assert!(lines[lines.len() - 1].trim().is_empty());
+        assert!(lines[1].starts_with("  Helm"));
+        assert!(lines[lines.len() - 2].starts_with("  a–g"));
+        assert!(lines[lines.len() - 2].ends_with("q quit "));
     }
 
     fn line_index(lines: &[String], needle: &str) -> usize {
@@ -2518,7 +2576,7 @@ mod tests {
             ActivityState::default(),
         );
         let (lines, hits) = render_app(&app, 110, 20);
-        let row = line_index(&lines, "lazyjira") as u16;
+        let row = line_index(&lines, "lazyjira") as u16 + 1;
         let (_, position) = hits
             .rows
             .iter()
@@ -3002,19 +3060,26 @@ mod tests {
         assert!(wide[1].contains("^R roots"));
         assert!(wide[1].contains("^Z zoxide"));
         let footer = wide.last().unwrap();
-        assert!(footer.contains("a–g select row"));
+        assert!(footer.contains("a–g row"));
         assert!(footer.contains("enter open"));
         assert!(footer.contains("1–9 tab"));
+        assert!(footer.contains("l last"));
+        assert!(footer.contains("x close"));
+        assert!(
+            footer.find("a–g row") < footer.find("1–9 tab")
+                && footer.find("1–9 tab") < footer.find("enter open")
+                && footer.find("enter open") < footer.find("l last")
+        );
         assert!(footer.contains("] [ group"));
         assert!(footer.contains("! needs you"));
         assert!(footer.contains("/ search"));
         assert!(footer.contains("^B pin"));
-        assert!(footer.ends_with("? keys   esc close"));
+        assert!(footer.trim_end().ends_with("? keys   q quit"));
 
         let (narrow, _) = render_app(&app, 100, 40);
         let footer = narrow.last().unwrap();
-        assert!(footer.contains("a–g select row"));
-        assert!(footer.ends_with("? keys   esc close"));
+        assert!(footer.contains("a–g row"));
+        assert!(footer.trim_end().ends_with("? keys   q quit"));
     }
 
     #[test]
@@ -3027,10 +3092,10 @@ mod tests {
         );
         let (lines, _) = render_app(&app, 80, 40);
         let footer = lines.last().unwrap();
-        assert!(footer.contains("a–g select row"));
+        assert!(footer.contains("a–g row"));
         assert!(!footer.contains("/ search"));
         assert!(!footer.contains("^B pin"));
-        assert!(footer.ends_with("? keys   esc close"));
+        assert!(footer.trim_end().ends_with("? keys   q quit"));
     }
 
     #[test]
@@ -3197,11 +3262,11 @@ mod tests {
     }
 
     #[test]
-    fn detail_pane_hides_below_110_columns() {
+    fn detail_pane_hides_when_the_content_is_narrower_than_110_columns() {
         let app = detail_app(vec![claude_pane()], 0, ActivityState::default());
-        let (narrow, _) = render_app(&app, 109, 40);
+        let (narrow, _) = render_app(&app, 112, 40);
         assert!(!narrow.iter().any(|line| line.contains('│')));
-        let (wide, _) = render_app(&app, 110, 40);
+        let (wide, _) = render_app(&app, 113, 40);
         assert!(wide.iter().any(|line| line.contains('│')));
     }
 

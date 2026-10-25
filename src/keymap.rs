@@ -219,9 +219,13 @@ pub(crate) fn keybindings(app: &App) -> Vec<Keybind> {
         } else {
             format!("{first}–{last}")
         };
-        bindings
-            .push(binding(keys, "select labelled row", "Move", Some("select row")).keys_as(range));
+        bindings.push(binding(keys, "select labelled row", "Move", Some("row")).keys_as(range));
     }
+
+    let digits = ('1'..='9')
+        .map(|ch| normal_key(Command::OpenTab, KeyCode::Char(ch), ch.to_string()))
+        .collect();
+    bindings.push(binding(digits, "open tab of selected row", "Open", Some("tab")).keys_as("1–9"));
 
     bindings.push(binding(
         vec![key(
@@ -235,10 +239,30 @@ pub(crate) fn keybindings(app: &App) -> Vec<Keybind> {
         Some("open"),
     ));
 
-    let digits = ('1'..='9')
-        .map(|ch| normal_key(Command::OpenTab, KeyCode::Char(ch), ch.to_string()))
-        .collect();
-    bindings.push(binding(digits, "open tab of selected row", "Open", Some("tab")).keys_as("1–9"));
+    bindings.push(binding(
+        vec![normal_key(Command::OpenPrevious, KeyCode::Char('l'), "l")],
+        "open previous workspace",
+        "Open",
+        Some("last"),
+    ));
+
+    bindings.push(
+        binding(
+            vec![
+                normal_key(Command::ArmClose, KeyCode::Char('x'), "x"),
+                key(
+                    Command::CloseWorkspace,
+                    KeyCode::Char('x'),
+                    KeyModifiers::CONTROL,
+                    "^X",
+                ),
+            ],
+            "close workspace (x twice, ^X at once)",
+            "Act",
+            Some("close"),
+        )
+        .keys_as("x"),
+    );
 
     bindings.push(
         binding(
@@ -329,28 +353,6 @@ pub(crate) fn keybindings(app: &App) -> Vec<Keybind> {
             ));
         }
     }
-
-    bindings.push(binding(
-        vec![normal_key(Command::OpenPrevious, KeyCode::Char('l'), "l")],
-        "open previous workspace",
-        "Open",
-        None,
-    ));
-
-    bindings.push(binding(
-        vec![
-            normal_key(Command::ArmClose, KeyCode::Char('x'), "x"),
-            key(
-                Command::CloseWorkspace,
-                KeyCode::Char('x'),
-                KeyModifiers::CONTROL,
-                "^X",
-            ),
-        ],
-        "close workspace (x twice, ^X at once)",
-        "Act",
-        None,
-    ));
 
     bindings.push(binding(
         vec![key(
@@ -464,9 +466,9 @@ pub(crate) fn keybindings(app: &App) -> Vec<Keybind> {
             ],
             "back, then close",
             "Open",
-            Some("close"),
+            Some("quit"),
         )
-        .keys_as("esc")
+        .keys_as("q")
         .on_right(),
     );
     bindings
