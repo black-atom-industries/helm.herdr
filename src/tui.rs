@@ -477,7 +477,7 @@ fn draw(f: &mut Frame, app: &App) -> (ListHits, usize) {
     let full = f.area();
     f.render_widget(Clear, full);
     f.render_widget(
-        Block::default().style(Style::default().bg(app.theme.chrome_background())),
+        Block::default().style(Style::default().bg(app.theme.base_background)),
         full,
     );
     let area = content_area(full);
@@ -491,7 +491,7 @@ fn draw(f: &mut Frame, app: &App) -> (ListHits, usize) {
         ])
         .split(area);
 
-    let bar = Block::default().style(Style::default().bg(app.theme.bar_background()));
+    let bar = Block::default().style(Style::default().bg(app.theme.base_background));
     f.render_widget(
         bar.clone(),
         Rect {
@@ -507,20 +507,14 @@ fn draw(f: &mut Frame, app: &App) -> (ListHits, usize) {
             ..full
         },
     );
-    draw_header(f, app, rows[0]);
+    draw_header(f, app, indent(rows[0]));
     let (list_hits, detail_max) = if app.glance_view() {
-        let inset = rows[1].x - full.x;
-        let body = Rect {
-            x: full.x,
-            width: rows[1].width + inset,
-            ..rows[1]
-        };
-        draw_glance(f, app, body)
+        draw_glance(f, app, rows[1])
     } else {
         (draw_list(f, app, rows[1]), 0)
     };
 
-    draw_key_hints(f, app, rows[2]);
+    draw_key_hints(f, app, indent(rows[2]));
     if app.input_mode == InputMode::Help {
         draw_keybindings_help(f, app, area);
     }
@@ -528,6 +522,15 @@ fn draw(f: &mut Frame, app: &App) -> (ListHits, usize) {
 }
 
 const HEADER_COUNTS_MIN_WIDTH: u16 = 90;
+
+/// Header and footer text starts where the list text does, inside the card.
+fn indent(area: Rect) -> Rect {
+    Rect {
+        x: area.x + 1.min(area.width),
+        width: area.width.saturating_sub(2),
+        ..area
+    }
+}
 
 /// Herdr's popup frame keeps one column on the right for its scrollbar, so
 /// the left inset is one column wider to look even.
@@ -736,7 +739,7 @@ fn draw_key_hints(f: &mut Frame, app: &App, area: Rect) {
             ),
         ]);
         f.render_widget(
-            Paragraph::new(line).style(Style::default().bg(app.theme.bar_background())),
+            Paragraph::new(line).style(Style::default().bg(app.theme.base_background)),
             area,
         );
         return;
@@ -764,7 +767,7 @@ fn draw_key_hints(f: &mut Frame, app: &App, area: Rect) {
         .direction(Direction::Horizontal)
         .constraints([Constraint::Min(0), Constraint::Length(right_width as u16)])
         .split(area);
-    let style = Style::default().bg(app.theme.bar_background());
+    let style = Style::default().bg(app.theme.base_background);
     f.render_widget(
         Paragraph::new(hint_line(app, &left)).style(style),
         columns[0],
@@ -1122,11 +1125,15 @@ fn draw_glance(f: &mut Frame, app: &App, area: Rect) -> (ListHits, usize) {
     }
     let [list, border, detail] = Layout::horizontal([
         Constraint::Percentage(55),
-        Constraint::Length(1),
+        Constraint::Length(2),
         Constraint::Percentage(45),
     ])
     .areas(area);
     let _ = border;
+    f.render_widget(
+        Block::default().style(Style::default().bg(app.theme.chrome_background())),
+        detail,
+    );
     let max_offset = draw_detail(f, app, detail);
     let card = list_card(f, app, list);
     (draw_glance_list(f, app, card), max_offset)
@@ -1136,18 +1143,13 @@ fn draw_glance(f: &mut Frame, app: &App, area: Rect) -> (ListHits, usize) {
 /// padded area its rows use.
 fn list_card(f: &mut Frame, app: &App, area: Rect) -> Rect {
     f.render_widget(
-        Block::default().style(Style::default().bg(app.theme.base_background)),
+        Block::default().style(Style::default().bg(app.theme.bar_background())),
         area,
     );
-    let inner = area.inner(Margin {
+    area.inner(Margin {
         horizontal: 1,
         vertical: 1,
-    });
-    Rect {
-        x: inner.x + 1,
-        width: inner.width.saturating_sub(1),
-        ..inner
-    }
+    })
 }
 
 fn draw_glance_list(f: &mut Frame, app: &App, area: Rect) -> ListHits {
@@ -1371,13 +1373,8 @@ fn draw_detail(f: &mut Frame, app: &App, area: Rect) -> usize {
     let width = area.width as usize;
     let dim = Style::default().fg(app.theme.subtext0);
 
-    let name_width = Span::raw(&row.name).width();
-    let chips = fit_chips(
-        tab_chips(app, workspace),
-        width.saturating_sub(name_width + 2),
-    );
-    let chips_width: usize = chips.iter().map(|span| span.width()).sum();
-    let name_room = width.saturating_sub(chips_width + 1);
+    let chips = fit_chips(tab_chips(app, workspace), width);
+    let name_room = width;
     let name = truncate_terminal(&row.name, name_room);
     let branch_room = name_room.saturating_sub(Span::raw(&name).width() + 2);
     let mut left = vec![Span::styled(
@@ -1393,7 +1390,9 @@ fn draw_detail(f: &mut Frame, app: &App, area: Rect) -> usize {
         ));
     }
     let header = vec![
-        justified(left, chips, width),
+        Line::from(chips),
+        Line::raw(""),
+        Line::from(left),
         Line::styled(truncate_end(&display_path(entry), width), dim),
         Line::styled(truncate_end(&activity_sources(app, workspace), width), dim),
         Line::raw(""),
@@ -1409,15 +1408,22 @@ fn draw_detail(f: &mut Frame, app: &App, area: Rect) -> usize {
         app,
         workspace,
         width,
-        height.saturating_sub(header.len() + section_lines(DETAIL_SECTION_MIN_ROWS)),
+        height.saturating_sub(header.len() + 1 + section_lines(DETAIL_SECTION_MIN_ROWS)),
     );
     let pane_rows = (height.saturating_sub(header.len() + 3) / 2)
         .clamp(DETAIL_SECTION_MIN_ROWS, DETAIL_SECTION_MAX_ROWS);
-    let free_rows = height.saturating_sub(header.len() + agents.len() + 3) / 2;
+    // One blank line always separates the agents from the changes.
+    let free_rows = height.saturating_sub(header.len() + agents.len() + 4) / 2;
     let rows = pane_rows.min(free_rows).max(1);
     let lower_height = section_lines(rows).min(height) as u16;
-    let [top, bottom] =
-        Layout::vertical([Constraint::Min(0), Constraint::Length(lower_height)]).areas(area);
+    let top_height = (header.len() + agents.len() + 1) as u16;
+    // With room, the lower sections sit at the bottom so they never move; without
+    // it, they follow the agents and lose their last rows instead.
+    let [top, bottom] = if top_height + lower_height <= area.height {
+        Layout::vertical([Constraint::Min(0), Constraint::Length(lower_height)]).areas(area)
+    } else {
+        Layout::vertical([Constraint::Length(top_height), Constraint::Min(0)]).areas(area)
+    };
 
     let mut top_lines = header;
     top_lines.extend(agents);
@@ -2055,9 +2061,9 @@ mod tests {
     }
 
     #[test]
-    fn picker_layers_bars_chrome_and_the_list_background() {
-        let app = App::new(Config::default(), Theme::terminal());
-        let backend = TestBackend::new(80, 8);
+    fn picker_paints_list_card_and_detail_panel_on_the_base_background() {
+        let app = detail_app(vec![claude_pane()], 0, ActivityState::default());
+        let backend = TestBackend::new(120, 30);
         let mut terminal = Terminal::new(backend).unwrap();
         terminal
             .draw(|f| {
@@ -2065,13 +2071,25 @@ mod tests {
             })
             .unwrap();
         let buffer = terminal.backend().buffer();
+        let bg = |x: u16, y: u16| buffer[(x, y)].bg;
+        let theme = &app.theme;
 
-        assert_eq!(buffer[(0, 0)].bg, app.theme.bar_background());
-        assert_eq!(buffer[(79, 1)].bg, app.theme.bar_background());
-        assert_eq!(buffer[(0, 7)].bg, app.theme.bar_background());
-        assert_eq!(buffer[(79, 4)].bg, app.theme.chrome_background());
-        assert_eq!(buffer[(0, 4)].bg, app.theme.base_background);
-        assert_eq!(buffer[(5, 4)].bg, app.theme.base_background);
+        for (x, y) in [(0, 0), (119, 1), (0, 29), (2, 1), (117, 28)] {
+            assert_eq!(bg(x, y), theme.base_background, "({x}, {y})");
+        }
+        assert_eq!(bg(0, 4), theme.base_background);
+        assert_eq!(bg(1, 4), theme.base_background);
+        assert_eq!(bg(2, 4), theme.bar_background());
+        assert_eq!(bg(3, 4), theme.bar_background());
+
+        let gap = (3..119)
+            .find(|&x| bg(x, 4) != theme.bar_background())
+            .unwrap();
+        assert_eq!(bg(gap, 4), theme.base_background);
+        assert_eq!(bg(gap + 1, 4), theme.base_background);
+        assert_eq!(bg(gap + 2, 4), theme.chrome_background());
+        assert_eq!(bg(118, 4), theme.chrome_background());
+        assert_eq!(bg(119, 4), theme.base_background);
     }
 
     #[test]
@@ -2413,9 +2431,9 @@ mod tests {
         let lines: Vec<&str> = text.lines().collect();
         assert!(lines[0].trim().is_empty());
         assert!(lines[lines.len() - 1].trim().is_empty());
-        assert!(lines[1].starts_with("  Helm"));
-        assert!(lines[lines.len() - 2].starts_with("  a–g"));
-        assert!(lines[lines.len() - 2].ends_with("q quit "));
+        assert!(lines[1].starts_with("   Helm"));
+        assert!(lines[lines.len() - 2].starts_with("   a–g"));
+        assert!(lines[lines.len() - 2].ends_with("q quit  "));
     }
 
     fn line_index(lines: &[String], needle: &str) -> usize {
@@ -3046,7 +3064,7 @@ mod tests {
         app.apply_filter();
 
         let (lines, _) = render_app(&app, 100, 40);
-        let label_at = |name: &str| lines[line_index(&lines, name)].chars().nth(2).unwrap();
+        let label_at = |name: &str| lines[line_index(&lines, name)].chars().nth(3).unwrap();
         assert_eq!(label_at("golf"), 'a');
         assert_eq!(label_at("alpha"), 's');
         assert_eq!(label_at("bravo"), 'd');
@@ -3057,7 +3075,7 @@ mod tests {
 
         handle_key(&mut app, key(KeyCode::Char('/')));
         let (lines, _) = render_app(&app, 100, 40);
-        assert_eq!(lines[line_index(&lines, "golf")].chars().nth(2), Some(' '));
+        assert_eq!(lines[line_index(&lines, "golf")].chars().nth(3), Some(' '));
     }
 
     #[test]
@@ -3312,9 +3330,9 @@ mod tests {
     #[test]
     fn detail_pane_hides_when_the_content_is_narrower_than_110_columns() {
         let app = detail_app(vec![claude_pane()], 0, ActivityState::default());
-        let (narrow, _) = render_app(&app, 110, 40);
+        let (narrow, _) = render_app(&app, 112, 40);
         assert!(!narrow.iter().any(|line| line.contains("AGENTS")));
-        let (wide, _) = render_app(&app, 111, 40);
+        let (wide, _) = render_app(&app, 113, 40);
         assert!(wide.iter().any(|line| line.contains("AGENTS")));
     }
 
@@ -3549,7 +3567,9 @@ mod tests {
         assert!(line_index(&lines, "AGENTS") < second);
         assert!(second < line_index(&lines, "CHANGES · 3 files"));
         assert!(line_index(&lines, "CHANGES · 3 files") < line_index(&lines, "RECENT COMMITS"));
-        assert!(lines.iter().any(|line| line.contains("└ +")));
+        assert!(lines[line_index(&lines, "CHANGES · 3 files") - 1]
+            .trim()
+            .is_empty());
         assert!(lines.iter().any(|line| line.contains("3f1a9c0")));
     }
 
@@ -3564,7 +3584,7 @@ mod tests {
     }
 
     #[test]
-    fn tab_chips_never_crowd_out_the_workspace_name() {
+    fn tab_chips_on_their_own_line_never_crowd_out_the_workspace_name() {
         let mut app = detail_app(vec![claude_pane()], 0, ActivityState::default());
         let workspace = &mut app.topology.workspaces[0];
         workspace.label = "helm.herdr-glance-view".into();
@@ -3578,7 +3598,11 @@ mod tests {
         }
         app.rebuild_glance();
         let (lines, _) = render_app(&app, 120, 30);
-        let header = &lines[line_index(&lines, "1  Agents")];
-        assert!(header.contains("helm.herdr-glance-view"), "{header}");
+        let chips = line_index(&lines, "1  Agents");
+        let name = line_index(&lines, "helm.herdr-glance-view");
+        assert!(chips < name, "chips {chips}, name {name}");
+        let detail_column = |line: &str| line.chars().skip(64).collect::<String>();
+        assert!(detail_column(&lines[chips + 1]).trim().is_empty());
+        assert_eq!(name, chips + 2);
     }
 }
