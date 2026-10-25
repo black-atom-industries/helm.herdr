@@ -7,6 +7,7 @@ use std::{
 use serde::{Deserialize, Serialize};
 
 use crate::{
+    activity::{now_unix_secs, parse_agent_status_event, ActivityState},
     config::Config,
     herdr::{herdr_json, herdr_json_args, notify_done, notify_error, run_herdr},
     integrations::{command, herdr_plus},
@@ -110,6 +111,7 @@ impl App {
             normalize_recent_state(&mut self.recent_state, &open_entries);
             self.recent_state.save();
         }
+        prune_activity(&self.topology);
 
         if self.config.sources.zoxide {
             push_unique(&mut entries, &mut seen, collect_zoxide());
@@ -960,9 +962,6 @@ fn current_workspace_id() -> Result<String, String> {
 }
 
 pub(crate) fn track_focus(config: &Config) -> Result<(), String> {
-    if !config.jump_back.enabled {
-        return Ok(());
-    }
     let event = env::var("HERDR_PLUGIN_EVENT_JSON")
         .map_err(|_| "HERDR_PLUGIN_EVENT_JSON is not set".to_string())?;
     let event = serde_json::from_str::<serde_json::Value>(&event)
@@ -971,7 +970,47 @@ pub(crate) fn track_focus(config: &Config) -> Result<(), String> {
         .pointer("/data/workspace_id")
         .and_then(|v| v.as_str())
         .ok_or("focus event has no workspace_id")?;
-    record_focused_workspace(focused)
+    if config.jump_back.enabled {
+        record_focused_workspace(focused)?;
+    }
+    update_activity(|activity| activity.record_focus(focused, now_unix_secs()))
+}
+
+pub(crate) fn track_agent() -> Result<(), String> {
+    let event = env::var("HERDR_PLUGIN_EVENT_JSON")
+        .map_err(|_| "HERDR_PLUGIN_EVENT_JSON is not set".to_string())?;
+    let (pane_id, status) = parse_agent_status_event(&event)?;
+    let now = now_unix_secs();
+    update_activity(|activity| activity.record_agent_status(&pane_id, &status, now))
+}
+
+fn prune_activity(topology: &OpenTopology) {
+    if topology.workspaces.is_empty() {
+        return;
+    }
+    let workspaces = topology
+        .workspaces
+        .iter()
+        .map(|workspace| workspace.id.clone())
+        .collect::<Vec<_>>();
+    let panes = topology
+        .workspaces
+        .iter()
+        .flat_map(|workspace| &workspace.tabs)
+        .flat_map(|tab| &tab.panes)
+        .map(|pane| pane.id.clone())
+        .collect::<Vec<_>>();
+    let mut activity = ActivityState::load();
+    activity.retain(&workspaces, &panes);
+    let _ = activity.save();
+}
+
+fn update_activity(update: impl FnOnce(&mut ActivityState)) -> Result<(), String> {
+    let mut activity = ActivityState::load();
+    update(&mut activity);
+    activity
+        .save()
+        .map_err(|e| format!("failed to save activity state: {e}"))
 }
 
 fn record_focused_workspace(focused: &str) -> Result<(), String> {

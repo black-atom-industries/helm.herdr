@@ -3,6 +3,7 @@ use std::{
     process::{self, Command},
 };
 
+mod activity;
 mod app;
 mod config;
 mod herdr;
@@ -30,6 +31,7 @@ enum CliCommand {
     OpenSide,
     JumpBack,
     TrackFocus,
+    TrackAgent,
     Ui,
     List,
     Invalid,
@@ -42,6 +44,7 @@ fn cli_command(command: Option<&str>) -> CliCommand {
         Some("open-side") => CliCommand::OpenSide,
         Some("jump-back") => CliCommand::JumpBack,
         Some("track-focus") => CliCommand::TrackFocus,
+        Some("track-agent") => CliCommand::TrackAgent,
         Some("list") => CliCommand::List,
         Some(_) => CliCommand::Invalid,
     }
@@ -53,10 +56,13 @@ fn main() {
         CliCommand::OpenSide => open_side_picker(),
         CliCommand::JumpBack => jump_back(),
         CliCommand::TrackFocus => track_focus(),
+        CliCommand::TrackAgent => track_agent(),
         CliCommand::Ui => run_ui(env::args().nth(2).as_deref() == Some("--side")),
         CliCommand::List => debug_list(),
         CliCommand::Invalid => {
-            eprintln!("usage: helm-herdr [open|open-side|jump-back|track-focus|ui|list]");
+            eprintln!(
+                "usage: helm-herdr [open|open-side|jump-back|track-focus|track-agent|ui|list]"
+            );
             process::exit(2);
         }
     }
@@ -200,6 +206,14 @@ fn jump_back() -> ! {
 fn track_focus() -> ! {
     if let Err(error) = app::track_focus(&Config::load()) {
         eprintln!("track focus failed: {error}");
+        process::exit(1);
+    }
+    process::exit(0);
+}
+
+fn track_agent() -> ! {
+    if let Err(error) = app::track_agent() {
+        eprintln!("track agent failed: {error}");
         process::exit(1);
     }
     process::exit(0);

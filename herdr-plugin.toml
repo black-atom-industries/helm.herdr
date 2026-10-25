@@ -30,6 +30,10 @@ command = ["./target/release/helm-herdr", "jump-back"]
 on = "workspace.focused"
 command = ["./target/release/helm-herdr", "track-focus"]
 
+[[events]]
+on = "pane.agent_status_changed"
+command = ["./target/release/helm-herdr", "track-agent"]
+
 [[panes]]
 id = "picker"
 title = "Helm"

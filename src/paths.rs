@@ -39,6 +39,10 @@ pub(crate) fn recent_workspaces_state_path() -> PathBuf {
     plugin_config_dir().join("recent-workspaces.json")
 }
 
+pub(crate) fn activity_state_path() -> PathBuf {
+    plugin_config_dir().join("activity.json")
+}
+
 pub(crate) fn herdr_plus_projects_dir() -> PathBuf {
     home().join(".config/herdr/plugins/config/cloudmanic.herdr-plus/projects")
 }

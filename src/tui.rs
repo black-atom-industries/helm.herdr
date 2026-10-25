@@ -2098,6 +2098,7 @@ mod tests {
             repo_key: "/repo/.git".into(),
             label: "repo".into(),
             head: crate::topology::GitHead::Branch("main".into()),
+            last_commit_at: None,
         });
         app.topology_cursor.depth = TopologyDepth::Tab;
         let backend = TestBackend::new(80, 8);

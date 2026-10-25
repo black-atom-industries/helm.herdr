@@ -25,6 +25,35 @@ Popup dimensions belong to the user's Herdr `type = "popup"` keybinding. The Sid
 | `helm-herdr` | Run the interactive Picker; `helm-herdr ui` remains an explicit equivalent |
 | `helm-herdr list` | Print collected Entries without opening the Picker |
 
+## State files and events
+
+Helm keeps its state in the plugin config directory (`HERDR_PLUGIN_CONFIG_DIR`).
+
+| File | Written by | Holds |
+| --- | --- | --- |
+| `recent-workspaces.json` | Picker and jump back | Workspace IDs per Herdr session, most recent first |
+| `focused-workspace`, `jump-back-workspace` | `track-focus` | The last focused Workspace and the Previous workspace |
+| `activity.json` | `track-focus`, `track-agent` | When each Workspace was last focused and when each Pane's agent status last changed |
+
+`activity.json` has this shape:
+
+```json
+{
+  "version": 1,
+  "workspaces": { "w1": { "focused_at": 1792931924 } },
+  "panes": { "w1:p1": { "status": "working", "since": 1792931924 } }
+}
+```
+
+Times are Unix seconds. `since` changes only when the agent status changes. Opening the Picker drops Workspaces and Panes missing from the live Topology, and skips pruning when the Topology is empty. Each write replaces the file through a temporary file and a rename.
+
+Herdr runs these commands as event hooks from `herdr-plugin.toml`. Each receives the event envelope as JSON in `HERDR_PLUGIN_EVENT_JSON`:
+
+| Event | Command | Fields read |
+| --- | --- | --- |
+| `workspace.focused` | `helm-herdr track-focus` | `data.workspace_id` |
+| `pane.agent_status_changed` | `helm-herdr track-agent` | `data.pane_id`, `data.agent_status` |
+
 ## Code layout
 
 ```text
@@ -32,6 +61,7 @@ src/main.rs      CLI entrypoints and popup/Side requests
 src/app.rs       Picker state, Query projection, filtering, and Entry actions
 src/tui.rs       terminal UI and command execution
 src/keymap.rs    key registry, labels, groups, and active states
+src/activity.rs  activity.json state and event payload parsing
 src/config.rs    plugin config loading and defaults
 src/model.rs     Source/Entry/EntryAction models
 src/sources.rs   source collectors

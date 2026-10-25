@@ -93,6 +93,7 @@ pub(crate) struct GitIdentity {
     pub(crate) repo_key: String,
     pub(crate) label: String,
     pub(crate) head: GitHead,
+    pub(crate) last_commit_at: Option<i64>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -632,12 +633,29 @@ fn worktree_identity(worktrees: &[Worktree], cwd: &Path) -> Option<GitIdentity> 
         repo_key,
         label,
         head,
+        last_commit_at: None,
     })
+}
+
+fn last_commit_at(cwd: &Path) -> Option<i64> {
+    let output = Command::new("git")
+        .args(["-C", &cwd.to_string_lossy(), "log", "-1", "--format=%ct"])
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    parse_commit_time(&String::from_utf8_lossy(&output.stdout))
+}
+
+fn parse_commit_time(output: &str) -> Option<i64> {
+    output.trim().parse().ok()
 }
 
 pub(crate) fn enrich_git<P: GitProbe>(topology: &mut OpenTopology, probe: &P) {
     let mut cache: Vec<(String, Vec<Worktree>)> = Vec::new();
     let mut failed = HashSet::new();
+    let mut identity_cwds = Vec::with_capacity(topology.workspaces.len());
     for workspace in &mut topology.workspaces {
         let mut cwd_candidates = workspace
             .tabs
@@ -645,7 +663,7 @@ pub(crate) fn enrich_git<P: GitProbe>(topology: &mut OpenTopology, probe: &P) {
             .flat_map(|tab| tab.panes.iter())
             .collect::<Vec<_>>();
         cwd_candidates.sort_by_key(|pane| !pane.focused);
-        let mut identity = None;
+        let mut identity: Option<(GitIdentity, PathBuf)> = None;
         for pane in cwd_candidates {
             if pane.cwd.as_os_str().is_empty() {
                 continue;
@@ -686,12 +704,23 @@ pub(crate) fn enrich_git<P: GitProbe>(topology: &mut OpenTopology, probe: &P) {
                 });
             let Some(worktrees) = worktrees else { continue };
             if let Some(found) = worktree_identity(&worktrees, &cwd) {
-                identity = Some(found);
+                identity = Some((found, pane.cwd.clone()));
                 break;
             }
         }
-        workspace.git = identity;
+        let (git, cwd) = identity.unzip();
+        workspace.git = git;
+        identity_cwds.push(cwd);
     }
+
+    std::thread::scope(|scope| {
+        for (workspace, cwd) in topology.workspaces.iter_mut().zip(identity_cwds) {
+            let (Some(git), Some(cwd)) = (workspace.git.as_mut(), cwd) else {
+                continue;
+            };
+            scope.spawn(move || git.last_commit_at = last_commit_at(&cwd));
+        }
+    });
 }
 
 pub(crate) fn clip_selected_for_hits(value: &str, width: usize, selected: Option<&str>) -> String {
@@ -1664,6 +1693,13 @@ mod tests {
                     .collect::<Vec<_>>(),
             ]
         );
+    }
+
+    #[test]
+    fn parses_last_commit_time_and_rejects_non_numeric_output() {
+        assert_eq!(parse_commit_time("1700000000\n"), Some(1_700_000_000));
+        assert_eq!(parse_commit_time(""), None);
+        assert_eq!(parse_commit_time("fatal: not a git repository"), None);
     }
 
     #[test]
