@@ -77,6 +77,11 @@ pub(crate) fn tui_loop(
         drive_detail(app, &mut detail_job, now_unix_secs());
         let mut detail_max = 0;
         terminal.draw(|f| {
+            if !persist && too_small(f.area()) {
+                draw_too_small(f, app);
+                list_hits = ListHits::default();
+                return;
+            }
             let (hits, max) = draw(f, app);
             list_hits = hits;
             detail_max = max;
@@ -522,6 +527,48 @@ fn draw(f: &mut Frame, app: &App) -> (ListHits, usize) {
 }
 
 const HEADER_COUNTS_MIN_WIDTH: u16 = 90;
+
+/// The smallest popup the glance and its detail pane fit in.
+const POPUP_MIN_WIDTH: u16 = 120;
+const POPUP_MIN_HEIGHT: u16 = 32;
+
+fn too_small(area: Rect) -> bool {
+    area.width < POPUP_MIN_WIDTH || area.height < POPUP_MIN_HEIGHT
+}
+
+fn draw_too_small(f: &mut Frame, app: &App) {
+    let area = f.area();
+    f.render_widget(Clear, area);
+    f.render_widget(
+        Block::default().style(Style::default().bg(app.theme.base_background)),
+        area,
+    );
+    let message = format!(
+        "Helm needs at least {POPUP_MIN_WIDTH} × {POPUP_MIN_HEIGHT}, this popup is {} × {}",
+        area.width, area.height
+    );
+    let hint = "Set width and height in cells on the Herdr popup binding · q quits";
+    let y = area.y + area.height / 2;
+    for (offset, (text, style)) in [
+        (message, Style::default().fg(app.theme.text)),
+        (hint.to_string(), Style::default().fg(app.theme.subtext0)),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let row = Rect {
+            y: (y + offset as u16).min(area.bottom().saturating_sub(1)),
+            height: 1,
+            ..area
+        };
+        f.render_widget(
+            Paragraph::new(text)
+                .style(style)
+                .alignment(ratatui::layout::Alignment::Center),
+            row,
+        );
+    }
+}
 
 /// Header and footer text starts where the list text does, inside the card.
 fn indent(area: Rect) -> Rect {
@@ -2411,6 +2458,19 @@ mod tests {
                 chars[2.min(chars.len())..end].iter().collect()
             })
             .collect()
+    }
+
+    #[test]
+    fn small_popups_get_a_size_notice_instead_of_the_layout() {
+        assert!(too_small(Rect::new(0, 0, 119, 40)));
+        assert!(too_small(Rect::new(0, 0, 160, 31)));
+        assert!(!too_small(Rect::new(0, 0, 120, 32)));
+
+        let app = App::new(Config::default(), Theme::terminal());
+        let mut terminal = Terminal::new(TestBackend::new(98, 24)).unwrap();
+        terminal.draw(|f| draw_too_small(f, &app)).unwrap();
+        let text = buffer_text(&terminal);
+        assert!(text.contains("Helm needs at least 120 × 32, this popup is 98 × 24"));
     }
 
     #[test]

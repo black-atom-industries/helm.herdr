@@ -22,8 +22,8 @@ key = "prefix+t"
 type = "popup"
 command = "helm-herdr"
 description = "picker center"
-width = "90%"
-height = "90%"
+width = 124
+height = 34
 ```
 
 ## From another plugin

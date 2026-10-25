@@ -33,7 +33,7 @@ mkdir -p "$HOME/.local/bin"
 ln -sfn "$plugin_root/target/release/helm-herdr" "$HOME/.local/bin/helm-herdr"
 ```
 
-Bind it in `~/.config/herdr/config.toml`. The binding owns the key and the popup size:
+Bind it in `~/.config/herdr/config.toml`. The binding owns the key and the popup size. Helm needs at least 120 × 32 cells and shows a size notice below that, so give the size in cells rather than percentages:
 
 ```toml
 [[keys.command]]
@@ -41,8 +41,8 @@ key = "prefix+t"
 type = "popup"
 command = "helm-herdr"
 description = "jump to anything"
-width = "90%"
-height = "90%"
+width = 124
+height = 34
 ```
 
 ## Glance
