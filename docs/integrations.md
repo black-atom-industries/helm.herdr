@@ -40,7 +40,6 @@ Use this when your plugin wants to hand control back to the central picker inste
 
 Current built-in integrations:
 
-- Projects: read Herdr Plus project TOML files and open/apply them directly.
 - Quick Actions: add one `quick` entry that delegates to Herdr Plus Quick Actions.
 
 This is the preferred pattern:

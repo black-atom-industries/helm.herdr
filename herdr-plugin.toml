@@ -2,7 +2,7 @@ id = "helm-herdr"
 name = "Helm for Herdr"
 version = "0.6.0"
 min_herdr_version = "0.7.4"
-description = "Jump to any Herdr workspace, agent, project, directory, or action from one fuzzy navigator."
+description = "Jump to any Herdr workspace, pane, directory, or action from one fuzzy navigator."
 platforms = ["linux", "macos"]
 
 [[build]]

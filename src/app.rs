@@ -12,9 +12,9 @@ use crate::{
     integrations::{command, herdr_plus},
     matcher::match_score,
     model::{Entry, EntryAction, Source, WorkspaceKind, WorkspaceRef},
-    paths::{canonical_str, herdr_plus_quick_actions_dir, home, plugin_config_dir},
+    paths::{canonical_str, herdr_plus_quick_actions_dir, plugin_config_dir},
     recent::RecentState,
-    sources::{collect_agents, collect_open_topology, collect_roots, collect_zoxide},
+    sources::{collect_open_topology, collect_roots, collect_zoxide},
     theme::Theme,
     topology::{self, ChildSelection, OpenTopology, TopologyCursor, TopologyDepth},
 };
@@ -93,17 +93,13 @@ impl App {
     pub(crate) fn refresh(&mut self) {
         let mut entries = Vec::new();
         let mut seen = HashSet::new();
-        let (open_entries, workspace_entries, path_to_workspaces) =
+        let (open_entries, path_to_workspaces) =
             collect_open_topology(self.config.sources.open_workspaces);
         self.path_to_workspaces = path_to_workspaces;
         self.topology = if self.config.sources.open_workspaces {
             let session = current_session_name();
-            let mut topology = topology::collect_topology(
-                |args| herdr_json_args(args.iter().copied()),
-                session,
-                &self.config.agent_aliases,
-                self.config.sources.agents,
-            );
+            let mut topology =
+                topology::collect_topology(|args| herdr_json_args(args.iter().copied()), session);
             topology::enrich_git(&mut topology, &topology::NativeGitProbe);
             topology
         } else {
@@ -115,20 +111,11 @@ impl App {
             self.recent_state.save();
         }
 
-        if self.config.sources.herdr_plus_projects {
-            push_unique(&mut entries, &mut seen, herdr_plus::collect_projects());
-        }
         if self.config.sources.zoxide {
             push_unique(&mut entries, &mut seen, collect_zoxide());
         }
         if self.config.sources.roots {
             push_unique(&mut entries, &mut seen, collect_roots(&self.config));
-        }
-        if self.config.sources.agents {
-            entries.extend(collect_agents(
-                &workspace_entries,
-                &self.config.agent_aliases,
-            ));
         }
         if self.config.sources.herdr_plus_quick_actions && herdr_plus_quick_actions_dir().is_dir() {
             entries.push(herdr_plus::quick_actions_entry());
@@ -139,19 +126,7 @@ impl App {
             command::collect(&self.config.integrations),
         );
 
-        self.topology_entries = topology::query_entries(&self.topology, self.config.sources.agents);
-        let topology_agent_targets = self
-            .topology_entries
-            .iter()
-            .filter_map(|entry| {
-                matches!(entry.action, EntryAction::FocusPane { .. })
-                    .then(|| entry.agent_target.as_deref())
-                    .flatten()
-            })
-            .collect::<HashSet<_>>();
-        entries.retain(|entry| {
-            !matches!(&entry.action, EntryAction::FocusAgent { target } if topology_agent_targets.contains(target.as_str()))
-        });
+        self.topology_entries = topology::query_entries(&self.topology);
         entries.extend(self.topology_entries.iter().cloned());
         self.entries = entries;
         self.pinned_entries =
@@ -322,13 +297,7 @@ impl App {
 
     pub(crate) fn apply_filter(&mut self) {
         let query = Query::parse(&self.query);
-        let empty_query = query.plain.is_empty();
         let searching = !self.query.trim().is_empty();
-        let agent_view =
-            query.all_agents || (self.source_filter == Some(Source::Agent) && empty_query);
-        let use_agent_priority = empty_query
-            && (agent_view || self.source_filter.is_none())
-            && agent_sort(&self.config.picker.agent_sort) == "priority";
         let pin_previous = self.config.jump_back.enabled
             && self.config.jump_back.pin_previous
             && !searching
@@ -346,19 +315,14 @@ impl App {
         let mut scored = Vec::new();
         for (idx, entry) in self.entries.iter().enumerate() {
             if let Some(source) = &self.source_filter {
-                if *source == Source::Agent {
-                    if !is_agent_entry(entry) {
-                        continue;
-                    }
-                } else if &entry.source != source {
+                if &entry.source != source {
                     continue;
                 }
             }
             if !query.filters_match(entry) {
                 continue;
             }
-            let bonus = self.config.picker.source_bonus(&entry.source)
-                + query.score_bonus(entry, use_agent_priority);
+            let bonus = self.config.picker.source_bonus(&entry.source);
             if query.plain.is_empty() {
                 scored.push((bonus, idx));
             } else if let Some(score) =
@@ -398,8 +362,7 @@ impl App {
             self.filtered_scores.push(score);
         }
         self.selected = if searching {
-            self.best_search_position(&query, use_agent_priority)
-                .unwrap_or(0)
+            self.best_search_position(&query).unwrap_or(0)
         } else {
             0
         };
@@ -418,7 +381,7 @@ impl App {
         }
     }
 
-    fn best_search_position(&self, query: &Query, use_agent_priority: bool) -> Option<usize> {
+    fn best_search_position(&self, query: &Query) -> Option<usize> {
         self.filtered
             .iter()
             .enumerate()
@@ -432,9 +395,7 @@ impl App {
                 } else {
                     match_score(&self.config.picker.engine, &entry.haystack(), &query.plain)?
                 };
-                let score = score
-                    + self.config.picker.source_bonus(&entry.source)
-                    + query.score_bonus(entry, use_agent_priority);
+                let score = score + self.config.picker.source_bonus(&entry.source);
                 Some((score, position))
             })
             .max_by(|(score_a, position_a), (score_b, position_b)| {
@@ -555,13 +516,9 @@ impl App {
         .ok_or("nothing selected")?;
         let action_destination = recent_destination_for_entry(&e);
         let (result, notify_success, notify_failure) = match &e.action {
-            EntryAction::FocusAgent { target } => {
-                (run_herdr(["agent", "focus", target]), true, true)
-            }
             EntryAction::FocusPane { .. }
             | EntryAction::FocusWorkspace { .. }
             | EntryAction::FocusTab { .. } => (self.focus_action(&e.action), true, true),
-            EntryAction::OpenProject => (self.open_project(&e), true, true),
             EntryAction::InvokePluginAction { action } => (
                 run_herdr(["plugin", "action", "invoke", action]),
                 true,
@@ -651,39 +608,9 @@ impl App {
     fn workspace_to_close(&self, e: &Entry) -> Option<String> {
         match e.source {
             Source::Workspace => e.workspace_id.clone(),
-            Source::Agent => e.workspace_id.clone(),
-            Source::Project => self.matching_project_workspace(e).map(|ws| ws.id.clone()),
             Source::Zoxide | Source::Root => self.matching_dir_workspace(e).map(|ws| ws.id.clone()),
             Source::QuickAction | Source::Integration => None,
         }
-    }
-
-    pub(crate) fn open_project(&self, e: &Entry) -> Result<(), String> {
-        if self.config.picker.reuse_existing {
-            if let Some(ws) = self.matching_project_workspace(e) {
-                return run_herdr(["workspace", "focus", &ws.id]);
-            }
-        }
-        if !self.config.picker.create_missing {
-            return Err("create_missing=false and no workspace exists".into());
-        }
-        let project = e.project.as_ref();
-        let label = project
-            .map(|p| p.name.clone())
-            .unwrap_or_else(|| e.title.clone());
-        let json = herdr_json([
-            "workspace",
-            "create",
-            "--cwd",
-            &e.path.display().to_string(),
-            "--label",
-            &label,
-            "--focus",
-        ])?;
-        if let Some(p) = project {
-            herdr_plus::bootstrap_project_tabs(p, &json, &e.path)?;
-        }
-        Ok(())
     }
 
     pub(crate) fn focus_or_create_dir(
@@ -737,25 +664,6 @@ impl App {
             label,
             "--focus",
         ])
-    }
-
-    pub(crate) fn workspaces_for_entry(&self, e: &Entry) -> &[WorkspaceRef] {
-        self.path_to_workspaces
-            .get(&e.key())
-            .map(Vec::as_slice)
-            .unwrap_or(&[])
-    }
-
-    pub(crate) fn matching_project_workspace(&self, e: &Entry) -> Option<&WorkspaceRef> {
-        let workspaces = self.workspaces_for_entry(e);
-        workspaces
-            .iter()
-            .find(|ws| ws.kind == WorkspaceKind::Project)
-            .or_else(|| {
-                workspaces
-                    .iter()
-                    .find(|ws| ws.kind == WorkspaceKind::Unknown)
-            })
     }
 
     pub(crate) fn matching_dir_workspace(&self, e: &Entry) -> Option<&WorkspaceRef> {
@@ -824,10 +732,6 @@ fn recent_destination_for_entry(e: &Entry) -> Option<(Option<String>, String)> {
             .workspace_id
             .as_ref()
             .map(|workspace_id| (session.clone(), workspace_id.clone())),
-        EntryAction::FocusAgent { .. } => e
-            .workspace_id
-            .as_ref()
-            .map(|workspace_id| (current_session_name(), workspace_id.clone())),
         EntryAction::FocusPane { session, .. } => e
             .workspace_id
             .as_ref()
@@ -840,14 +744,11 @@ fn recent_destination_after_indirect_success(
     action: &EntryAction,
     resulting_workspace_id: Option<&str>,
 ) -> Option<(Option<String>, String)> {
-    matches!(
-        action,
-        EntryAction::FocusAgent { .. } | EntryAction::OpenProject | EntryAction::FocusOrCreateDir
-    )
-    .then(|| {
-        resulting_workspace_id.map(|workspace_id| (current_session_name(), workspace_id.into()))
-    })
-    .flatten()
+    matches!(action, EntryAction::FocusOrCreateDir)
+        .then(|| {
+            resulting_workspace_id.map(|workspace_id| (current_session_name(), workspace_id.into()))
+        })
+        .flatten()
 }
 
 fn record_persisted_recent_workspace(session: Option<&str>, workspace_id: &str) {
@@ -925,14 +826,6 @@ impl Query {
             && all_match(&self.path, &entry.path.display().to_string())
             && all_match(&self.status, &status_text(entry))
     }
-
-    fn score_bonus(&self, entry: &Entry, use_agent_priority: bool) -> i64 {
-        if entry.source == Source::Agent && use_agent_priority {
-            agent_status_bonus(entry)
-        } else {
-            0
-        }
-    }
 }
 
 fn push_token(tokens: &mut Vec<String>, value: &str) {
@@ -955,36 +848,15 @@ fn all_match_either(tokens: &[String], left: &str, right: &str) -> bool {
 }
 
 fn is_agent_entry(entry: &Entry) -> bool {
-    entry.agent_target.is_some() || entry.source == Source::Agent
+    entry.agent_target.is_some()
 }
 
 fn ordinary_source_label(entry: &Entry) -> &'static str {
     match entry.action {
         EntryAction::FocusWorkspace { .. } => "workspace",
         EntryAction::FocusTab { .. } => "tab",
-        EntryAction::FocusPane { .. } | EntryAction::FocusAgent { .. } => "pane",
+        EntryAction::FocusPane { .. } => "pane",
         _ => entry.source.label(),
-    }
-}
-
-fn agent_status_bonus(entry: &Entry) -> i64 {
-    let status = status_text(entry);
-    if ["block", "fail", "error"]
-        .iter()
-        .any(|needle| status.contains(needle))
-    {
-        4
-    } else if ["need", "attention", "review", "request", "question", "wait"]
-        .iter()
-        .any(|needle| status.contains(needle))
-    {
-        3
-    } else if status.contains("done") || status.contains("complete") {
-        2
-    } else if status.contains("work") || status.contains("run") {
-        1
-    } else {
-        0
     }
 }
 
@@ -1199,32 +1071,6 @@ fn launch_workspace_id() -> Option<String> {
         .filter(|s| !s.is_empty())
 }
 
-fn agent_sort(configured: &str) -> String {
-    match configured.to_lowercase().as_str() {
-        "priority" => "priority".into(),
-        "spaces" => "spaces".into(),
-        _ => herdr_agent_panel_sort(),
-    }
-}
-
-fn herdr_agent_panel_sort() -> String {
-    let path = std::env::var("XDG_CONFIG_HOME")
-        .map(|xdg| Path::new(&xdg).join("herdr/config.toml"))
-        .unwrap_or_else(|_| home().join(".config/herdr/config.toml"));
-    fs::read_to_string(path)
-        .ok()
-        .and_then(|s| s.parse::<toml::Value>().ok())
-        .and_then(|v| {
-            v.get("ui")
-                .and_then(|x| x.as_table())
-                .and_then(|x| x.get("agent_panel_sort"))
-                .or_else(|| v.get("agent_panel_sort"))
-                .and_then(|x| x.as_str())
-                .map(str::to_string)
-        })
-        .unwrap_or_else(|| "spaces".into())
-}
-
 fn topology_workspace_pin_key(session: Option<&str>, id: &str) -> String {
     format!("workspace:{}:{id}", session_key(session))
 }
@@ -1264,11 +1110,9 @@ fn pin_key(entry: &Entry) -> String {
         EntryAction::FocusTab { session, id, .. } => {
             format!("tab:{}:{id}", session_key(session.as_deref()))
         }
-        EntryAction::FocusAgent { target } => format!("agent:{target}"),
         EntryAction::FocusPane { session, id } => {
             format!("pane:{}:{id}", session_key(session.as_deref()))
         }
-        EntryAction::OpenProject => format!("project:{}", entry.key()),
         EntryAction::InvokePluginAction { action } => {
             format!("plugin:{}:{action}", entry.source_name())
         }
@@ -1288,7 +1132,7 @@ fn push_unique(entries: &mut Vec<Entry>, seen: &mut HashSet<String>, incoming: V
                 format!("open:tab:{}:{id}", session_key(session.as_deref()))
             }
             EntryAction::RunCommand { command, .. } => format!("{}:{command}", e.source_name()),
-            _ if matches!(e.source, Source::Project | Source::Zoxide | Source::Root) => {
+            _ if matches!(e.source, Source::Zoxide | Source::Root) => {
                 format!("directory:{path_key}")
             }
             _ => format!("{}:{path_key}", e.source_name()),
@@ -1297,10 +1141,7 @@ fn push_unique(entries: &mut Vec<Entry>, seen: &mut HashSet<String>, incoming: V
             entries.push(e);
         } else if e.source == Source::Root {
             if let Some(index) = entries.iter().position(|entry| {
-                matches!(
-                    entry.source,
-                    Source::Project | Source::Zoxide | Source::Root
-                ) && entry.key() == path_key
+                matches!(entry.source, Source::Zoxide | Source::Root) && entry.key() == path_key
             }) {
                 entries[index] = e;
             }
@@ -1325,7 +1166,6 @@ mod tests {
     use super::*;
     use crate::{
         config::{Config, JumpBackConfig},
-        model::Project,
         paths::recent_workspaces_state_path,
         theme::Theme,
     };
@@ -1339,7 +1179,6 @@ mod tests {
             workspace_id: None,
             workspace_label: None,
             agent_target: None,
-            project: None,
             action: EntryAction::FocusOrCreateDir,
             source_label: None,
             search_terms: vec![],
@@ -1366,7 +1205,6 @@ mod tests {
             workspace_id: Some(id.into()),
             workspace_label: Some(title.into()),
             agent_target: None,
-            project: None,
             action: EntryAction::FocusWorkspace {
                 session: Some(session.into()),
                 id: id.into(),
@@ -1385,7 +1223,6 @@ mod tests {
             workspace_id: Some(workspace_id.into()),
             workspace_label: None,
             agent_target: None,
-            project: None,
             action: EntryAction::FocusTab {
                 session: Some(session.into()),
                 id: id.into(),
@@ -1476,10 +1313,8 @@ exit 0
         let mut config = Config::default();
         config.notifications.enabled = false;
         config.sources.open_workspaces = false;
-        config.sources.herdr_plus_projects = false;
         config.sources.zoxide = false;
         config.sources.roots = false;
-        config.sources.agents = false;
         config.sources.herdr_plus_quick_actions = false;
         config.jump_back.pin_previous = false;
         config
@@ -1562,7 +1397,7 @@ exit 0
                 git: None,
             }],
         };
-        app.topology_entries = topology::query_entries(&app.topology, false);
+        app.topology_entries = topology::query_entries(&app.topology);
         app.entries = app.topology_entries.clone();
         app.query = "s".into();
         app.apply_filter();
@@ -1576,7 +1411,7 @@ exit 0
     #[test]
     fn exact_agent_token_is_a_trait_predicate_and_agents_is_plain_text() {
         let mut app = App::new(Config::default(), Theme::terminal());
-        let mut agent = entry(Source::Agent, "/tmp", "Codex");
+        let mut agent = entry(Source::Workspace, "/tmp", "Codex");
         agent.agent_target = Some("p1".into());
         let tab = entry(Source::Workspace, "/tmp", "Agents");
         app.entries = vec![agent, tab];
@@ -1593,7 +1428,7 @@ exit 0
 
     #[test]
     fn legacy_agent_marks_migrate_to_session_qualified_pane_keys() {
-        let mut pane = entry(Source::Agent, "/tmp", "Shell");
+        let mut pane = entry(Source::Workspace, "/tmp", "Shell");
         pane.agent_target = Some("p1".into());
         pane.action = EntryAction::FocusPane {
             session: Some("dev".into()),
@@ -1716,51 +1551,6 @@ exit 0
     }
 
     #[test]
-    fn source_specific_reuse_distinguishes_same_path_workspaces() {
-        let mut app = App::new(Config::default(), Theme::terminal());
-        let mut project = entry(Source::Project, "/tmp", "tmp");
-        project.project = Some(Project {
-            name: "tmp".into(),
-            description: String::new(),
-            working_dir: "/tmp".into(),
-            tabs: vec![],
-        });
-        let dir = entry(Source::Zoxide, "/tmp", "tmp");
-        app.path_to_workspaces.insert(
-            project.key(),
-            vec![
-                workspace("w1", "project: tmp", WorkspaceKind::Project, "/tmp"),
-                workspace("w2", "dir: tmp", WorkspaceKind::Dir, "/tmp"),
-            ],
-        );
-
-        assert_eq!(app.matching_project_workspace(&project).unwrap().id, "w1");
-        assert_eq!(app.matching_dir_workspace(&dir).unwrap().id, "w2");
-    }
-
-    #[test]
-    fn plain_workspace_is_shared_by_project_and_directory_entries() {
-        let mut app = App::new(Config::default(), Theme::terminal());
-        let mut project = entry(Source::Project, "/tmp", "tmp");
-        project.project = Some(Project {
-            name: "tmp".into(),
-            description: String::new(),
-            working_dir: "/tmp".into(),
-            tabs: vec![],
-        });
-        let dir = entry(Source::Zoxide, "/tmp", "tmp");
-        app.path_to_workspaces.insert(
-            project.key(),
-            vec![workspace("w1", "tmp", WorkspaceKind::Unknown, "/tmp")],
-        );
-
-        assert_eq!(app.matching_project_workspace(&project).unwrap().id, "w1");
-        assert_eq!(app.matching_dir_workspace(&dir).unwrap().id, "w1");
-        assert_eq!(app.workspace_to_close(&project), Some("w1".into()));
-        assert_eq!(app.workspace_to_close(&dir), Some("w1".into()));
-    }
-
-    #[test]
     fn offers_directory_template_for_new_and_existing_directory_workspaces() {
         let mut config = Config::default();
         config.picker.directory_template = Some("default.toml".into());
@@ -1794,23 +1584,15 @@ exit 0
     #[test]
     fn close_target_matches_entry_kind() {
         let mut app = App::new(Config::default(), Theme::terminal());
-        let mut project = entry(Source::Project, "/tmp", "tmp");
-        project.project = Some(Project {
-            name: "tmp".into(),
-            description: String::new(),
-            working_dir: "/tmp".into(),
-            tabs: vec![],
-        });
         let dir = entry(Source::Root, "/tmp", "tmp");
         app.path_to_workspaces.insert(
-            project.key(),
+            dir.key(),
             vec![
                 workspace("w1", "project: tmp", WorkspaceKind::Project, "/tmp"),
                 workspace("w2", "dir: tmp", WorkspaceKind::Dir, "/tmp"),
             ],
         );
 
-        assert_eq!(app.workspace_to_close(&project), Some("w1".into()));
         assert_eq!(app.workspace_to_close(&dir), Some("w2".into()));
     }
 
@@ -1852,7 +1634,6 @@ exit 0
             &mut entries,
             &mut seen,
             vec![
-                entry(Source::Project, "/tmp/project", "project"),
                 entry(Source::Root, "/tmp/project", "root"),
                 entry(Source::Zoxide, "/tmp/project", "zoxide"),
             ],
@@ -1987,16 +1768,6 @@ exit 0
             Some((Some("work".into()), "w2".into()))
         );
 
-        let mut agent = entry(Source::Agent, "/tmp", "agent");
-        agent.workspace_id = Some("w3".into());
-        agent.action = EntryAction::FocusAgent {
-            target: "pane-1".into(),
-        };
-        assert_eq!(
-            recent_destination_for_entry(&agent).map(|(_, workspace_id)| workspace_id),
-            Some("w3".into())
-        );
-
         let mut pane = entry(Source::Workspace, "/tmp/pane", "Shell");
         pane.workspace_id = Some("w4".into());
         pane.action = EntryAction::FocusPane {
@@ -2011,7 +1782,7 @@ exit 0
 
     #[test]
     fn indirect_success_uses_resulting_workspace_and_failure_has_no_destination() {
-        let action = EntryAction::OpenProject;
+        let action = EntryAction::FocusOrCreateDir;
         let destination = recent_destination_after_indirect_success(&action, Some("w4"));
         assert_eq!(
             destination

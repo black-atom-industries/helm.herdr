@@ -18,18 +18,12 @@ create_missing = true
 engine = "nucleo"
 
 # Source priority controls initial ordering and tie/near-tie ranking.
-# Accepted names: agent, workspace/open, project, zoxide, root, quick, plugin.
-source_order = ["workspace", "agent", "project", "zoxide", "root", "quick", "plugin"]
+# Accepted names: workspace/open, zoxide, root, quick, plugin.
+source_order = ["workspace", "zoxide", "root", "quick", "plugin"]
 
 # How strongly source_order influences search ranking.
 # Set 0 for pure matcher score.
 source_priority_boost = 5
-
-# Agent view sorting for `@` and Ctrl-A:
-# - herdr: read Herdr's agent_panel_sort setting
-# - priority: blocked/error, attention/request, done, working, then idle
-# - spaces: keep Herdr/pane order
-agent_sort = "herdr"
 
 # Check GitHub releases in the background at most once per day. Network errors
 # are ignored; a newer version appears as a badge in the Helm header.
@@ -41,8 +35,7 @@ check_updates = true
 # directory_template_key = "alt-enter" # also accepts Ctrl forms such as "ctrl-g"
 
 # Optional: override source filter shortcuts. Values accept "ctrl-x", "ctrl+x", "^x", or "x".
-# Defaults: agent=ctrl-a, quick=ctrl-q, workspace=ctrl-w, project=ctrl-p,
-# zoxide=ctrl-z, root=ctrl-r.
+# Defaults: quick=ctrl-q, workspace=ctrl-w, zoxide=ctrl-z, root=ctrl-r.
 # [picker.filter_keys]
 # quick = "ctrl-g"
 
@@ -76,18 +69,11 @@ pin_previous = true
 # Selecting a row focuses that exact workspace or tab.
 open_workspaces = true
 
-# Herdr Plus project templates from:
-# ~/.config/herdr/plugins/config/cloudmanic.herdr-plus/projects/*.toml
-herdr_plus_projects = true
-
 # zoxide history from `zoxide query -l`.
 zoxide = true
 
 # Direct filesystem scan of [[roots]] below.
 roots = true
-
-# Agent panes from Herdr pane metadata. Selecting focuses the agent.
-agents = true
 
 # Herdr Plus Quick Actions. Selecting opens the Quick Actions picker.
 herdr_plus_quick_actions = true
@@ -100,15 +86,6 @@ max_depth = 3
 [[roots]]
 path = "~/projects"
 max_depth = 3
-
-# Optional agent aliases. All match fields are optional and matched as text contains.
-# Aliases become extra search terms for matching agent panes.
-#
-# [[agent_aliases]]
-# alias = "main ai dot"
-# agent = "claude"
-# workspace = "Dotfiles"
-# path = "dotfiles"
 
 # Optional command/JSON integrations. A plugin only needs:
 # - collect: command that prints JSON array

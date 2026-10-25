@@ -9,7 +9,7 @@ use serde_json::Value;
 
 use crate::{
     config::Config,
-    herdr::{herdr_json, herdr_json_args},
+    herdr::herdr_json_args,
     model::{Entry, EntryAction, Source, WorkspaceKind, WorkspaceRef},
     paths::{basename, canonical_str, expand_path, home},
 };
@@ -36,15 +36,14 @@ impl SessionSpec {
 
 pub(crate) fn collect_open_topology(
     include_topology: bool,
-) -> (Vec<Entry>, Vec<Entry>, HashMap<String, Vec<WorkspaceRef>>) {
+) -> (Vec<Entry>, HashMap<String, Vec<WorkspaceRef>>) {
     let current_name = std::env::var("HERDR_SESSION")
         .ok()
         .filter(|name| !name.trim().is_empty());
     let session = SessionSpec { name: current_name };
     let (ws_json, tab_json, pane_json) =
         session_state_with(&session, include_topology, herdr_json_args);
-    let (topology, current_workspaces, current_map) =
-        topology_from_json(&session, &ws_json, &tab_json, &pane_json);
+    let (topology, current_map) = topology_from_json(&session, &ws_json, &tab_json, &pane_json);
 
     (
         if include_topology {
@@ -52,7 +51,6 @@ pub(crate) fn collect_open_topology(
         } else {
             Vec::new()
         },
-        current_workspaces,
         current_map,
     )
 }
@@ -131,9 +129,8 @@ fn topology_from_json(
     ws_json: &Value,
     tab_json: &Value,
     pane_json: &Value,
-) -> (Vec<Entry>, Vec<Entry>, HashMap<String, Vec<WorkspaceRef>>) {
+) -> (Vec<Entry>, HashMap<String, Vec<WorkspaceRef>>) {
     let mut entries = Vec::new();
-    let mut workspace_entries = Vec::new();
     let mut map = HashMap::new();
     let mut cwd_by_ws: HashMap<String, String> = HashMap::new();
     if let Some(panes) = result_array(pane_json, "panes") {
@@ -234,7 +231,6 @@ fn topology_from_json(
             workspace_id: Some(id.into()),
             workspace_label: Some(label.into()),
             agent_target: None,
-            project: None,
             action: EntryAction::FocusWorkspace {
                 session: session.name.clone(),
                 id: id.into(),
@@ -252,7 +248,6 @@ fn topology_from_json(
                 pane_count,
             });
         }
-        workspace_entries.push(entry.clone());
 
         let mut workspace_tabs = tabs
             .iter()
@@ -277,7 +272,6 @@ fn topology_from_json(
                     workspace_id: Some(id.into()),
                     workspace_label: Some(label.into()),
                     agent_target: None,
-                    project: None,
                     action: EntryAction::FocusTab {
                         session: session.name.clone(),
                         id: tab_id.into(),
@@ -315,7 +309,7 @@ fn topology_from_json(
             entries.extend(child.tabs.iter().cloned());
         }
     }
-    (entries, workspace_entries, map)
+    (entries, map)
 }
 
 fn workspace_kind(label: &str) -> WorkspaceKind {
@@ -329,101 +323,10 @@ fn workspace_kind(label: &str) -> WorkspaceKind {
     }
 }
 
-pub(crate) fn collect_agents(
-    workspaces: &[Entry],
-    aliases: &[crate::config::AgentAliasConfig],
-) -> Vec<Entry> {
-    let agent_json = herdr_json(["agent", "list"]).unwrap_or(Value::Null);
-    agents_from_json(&agent_json, workspaces, aliases)
-}
-
-fn agents_from_json(
-    agent_json: &Value,
-    workspaces: &[Entry],
-    aliases: &[crate::config::AgentAliasConfig],
-) -> Vec<Entry> {
-    let workspace_labels: HashMap<&str, &str> = workspaces
-        .iter()
-        .filter_map(|entry| Some((entry.workspace_id.as_deref()?, entry.title.as_str())))
-        .collect();
-    let mut entries = Vec::new();
-    if let Some(agents) = agent_json
-        .pointer("/result/agents")
-        .and_then(|v| v.as_array())
-    {
-        for p in agents {
-            let Some(agent) = p.get("agent").and_then(|v| v.as_str()) else {
-                continue;
-            };
-            let pane = p.get("pane_id").and_then(|v| v.as_str()).unwrap_or("");
-            let tab = p.get("tab_id").and_then(|v| v.as_str()).unwrap_or("");
-            let term = p.get("terminal_id").and_then(|v| v.as_str()).unwrap_or("");
-            // Herdr's `agent focus` accepts pane IDs, not terminal IDs.
-            let target = pane;
-            let cwd = p.get("cwd").and_then(|v| v.as_str()).unwrap_or("/");
-            let foreground_cwd = p
-                .get("foreground_cwd")
-                .and_then(|v| v.as_str())
-                .unwrap_or(cwd);
-            let status = p
-                .get("agent_status")
-                .and_then(|v| v.as_str())
-                .unwrap_or("unknown");
-            let workspace_id = p.get("workspace_id").and_then(|v| v.as_str()).unwrap_or("");
-            let workspace_label = workspace_labels
-                .get(workspace_id)
-                .copied()
-                .unwrap_or(workspace_id);
-            let path = PathBuf::from(cwd);
-            let dir = basename(&path);
-            let alias_terms: Vec<String> = aliases
-                .iter()
-                .filter(|alias| alias.matches(agent, workspace_label, cwd))
-                .map(|alias| alias.alias.clone())
-                .collect();
-            let title = format!("{agent} · {workspace_label} · {dir}");
-            let subtitle = format!("{status} · {pane} · {tab}");
-            let mut search_terms = vec![
-                agent.into(),
-                status.into(),
-                pane.into(),
-                tab.into(),
-                term.into(),
-                workspace_id.into(),
-                workspace_label.into(),
-                dir,
-                basename(&PathBuf::from(foreground_cwd)),
-                foreground_cwd.into(),
-            ];
-            if let Some(session) = p.pointer("/agent_session/value").and_then(|v| v.as_str()) {
-                search_terms.push(session.into());
-            }
-            search_terms.extend(alias_terms);
-            entries.push(Entry {
-                source: Source::Agent,
-                title,
-                subtitle,
-                path,
-                workspace_id: (!workspace_id.is_empty()).then(|| workspace_id.into()),
-                workspace_label: Some(workspace_label.into()),
-                agent_target: Some(target.into()),
-                project: None,
-                action: EntryAction::FocusAgent {
-                    target: target.into(),
-                },
-                source_label: Some("pane".into()),
-                search_terms,
-            });
-        }
-    }
-    entries
-}
-
 const AGENT_SPINNER: &[&str] = &["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
 
 // Mirrors Herdr's workspace `state_dot` and agent `agent_icon` mappings.
-pub(crate) fn status_icon_at(source: &Source, status: &str, tick: u32) -> &'static str {
-    let workspace = *source == Source::Workspace;
+pub(crate) fn status_icon_at(workspace: bool, status: &str, tick: u32) -> &'static str {
     let status = status.to_lowercase();
     if status.contains("block")
         || status.contains("error")
@@ -478,7 +381,6 @@ pub(crate) fn collect_zoxide() -> Vec<Entry> {
                 workspace_id: None,
                 workspace_label: None,
                 agent_target: None,
-                project: None,
                 action: EntryAction::FocusOrCreateDir,
                 source_label: None,
                 search_terms: vec![],
@@ -510,7 +412,6 @@ fn walk_dirs(path: &Path, depth: usize, out: &mut Vec<Entry>) {
             workspace_id: None,
             workspace_label: None,
             agent_target: None,
-            project: None,
             action: EntryAction::FocusOrCreateDir,
             source_label: None,
             search_terms: vec![],
@@ -549,9 +450,9 @@ mod tests {
         });
 
         assert_eq!(calls, vec![vec!["--session", "work", "api", "snapshot"]]);
-        let (topology, current, _) = topology_from_json(&session, &workspaces, &tabs, &panes);
+        let (topology, _) = topology_from_json(&session, &workspaces, &tabs, &panes);
         assert_eq!(topology.len(), 2);
-        assert_eq!(current[0].path, PathBuf::from("/tmp/project"));
+        assert_eq!(topology[0].path, PathBuf::from("/tmp/project"));
         assert_eq!(topology[1].title, "Code");
     }
 
@@ -631,17 +532,17 @@ mod tests {
 
     #[test]
     fn status_icons_match_herdr() {
-        assert_eq!(status_icon_at(&Source::Workspace, "blocked", 0), "●");
-        assert_eq!(status_icon_at(&Source::Workspace, "working", 0), "●");
-        assert_eq!(status_icon_at(&Source::Workspace, "done", 0), "●");
-        assert_eq!(status_icon_at(&Source::Workspace, "idle", 0), "○");
-        assert_eq!(status_icon_at(&Source::Workspace, "unknown", 0), "·");
+        assert_eq!(status_icon_at(true, "blocked", 0), "●");
+        assert_eq!(status_icon_at(true, "working", 0), "●");
+        assert_eq!(status_icon_at(true, "done", 0), "●");
+        assert_eq!(status_icon_at(true, "idle", 0), "○");
+        assert_eq!(status_icon_at(true, "unknown", 0), "·");
 
-        assert_eq!(status_icon_at(&Source::Agent, "blocked", 0), "!");
-        assert_eq!(status_icon_at(&Source::Agent, "working", 0), "⠋");
-        assert_eq!(status_icon_at(&Source::Agent, "working", 1), "⠙");
-        assert_eq!(status_icon_at(&Source::Agent, "done", 0), "✓");
-        assert_eq!(status_icon_at(&Source::Agent, "idle", 0), "○");
-        assert_eq!(status_icon_at(&Source::Agent, "unknown", 0), "");
+        assert_eq!(status_icon_at(false, "blocked", 0), "!");
+        assert_eq!(status_icon_at(false, "working", 0), "⠋");
+        assert_eq!(status_icon_at(false, "working", 1), "⠙");
+        assert_eq!(status_icon_at(false, "done", 0), "✓");
+        assert_eq!(status_icon_at(false, "idle", 0), "○");
+        assert_eq!(status_icon_at(false, "unknown", 0), "");
     }
 }

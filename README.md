@@ -1,7 +1,7 @@
 # Helm for Herdr
 
 <p align="center">
-  <strong>One popup to reach every workspace, tab, pane, agent, project, and directory in Herdr.</strong>
+  <strong>One popup to reach every workspace, tab, pane, and directory in Herdr.</strong>
 </p>
 
 <p align="center">
@@ -14,7 +14,7 @@
 
 ![Helm walking from the api Workspace into web's preview Tab and focusing the vite Pane](docs/assets/changelog/0.6.0-topology.webp)
 
-Helm opens on your live session as Workspace → Tab → Pane, and Enter lands on the exact Pane you picked. Press `/` and type, and the same list reaches what is not open yet: zoxide directories, configured roots, Herdr Plus projects, and agents. Helm focuses what exists and creates a Workspace for what does not.
+Helm opens on your live session as Workspace → Tab → Pane, and Enter lands on the exact Pane you picked. Press `/` and type, and the same list reaches what is not open yet: zoxide directories and configured roots. Helm focuses what exists and creates a Workspace for what does not.
 
 > [!NOTE]
 > Part of the [Helm](https://github.com/black-atom-industries) family, next to [helm.tmux](https://github.com/black-atom-industries/helm.tmux). Forked from [thanhdat77/herdr-navigator](https://github.com/thanhdat77/herdr-navigator); thanks to thanhdat77 for the foundation.
@@ -72,8 +72,6 @@ Press `/` and type; until then, letters navigate. The topology turns into flat o
 | `workspace` | Open Workspaces                | Focus the Workspace                                           |
 | `tab`       | Open Tabs                      | Focus the Tab                                                 |
 | `pane`      | Open Panes                     | Focus the exact Pane ID                                       |
-| `agent`     | Herdr agent panes              | Focus the agent                                               |
-| `project`   | Herdr Plus project TOML        | Reuse or create the project Workspace with its tabs and splits |
 | `zoxide`    | `zoxide query -l`              | Reuse or create a Workspace there                             |
 | `root`      | Configured `[[roots]]`         | Reuse or create a Workspace there                             |
 | `quick`     | Herdr Plus Quick Actions       | Open the Quick Actions picker                                 |
@@ -85,8 +83,7 @@ The `workspace`, `tab`, and `pane` rows all come from the live session. Each `[s
 | Key              | Action                                                               |
 | ---------------- | -------------------------------------------------------------------- |
 | `Ctrl-W`         | Workspaces, Tabs, and Panes                                          |
-| `Ctrl-A`         | Agents                                                               |
-| `Ctrl-P` / `Ctrl-Q` | Herdr Plus projects / Quick Actions                               |
+| `Ctrl-Q`         | Herdr Plus Quick Actions                                             |
 | `Ctrl-Z` / `Ctrl-R` | zoxide / roots                                                    |
 | `Ctrl-B`         | Mark or unmark the selected Entry                                    |
 | `Ctrl-X`         | Close the open Workspace behind the selected Entry                   |
@@ -143,7 +140,7 @@ herdr plugin config-dir helm-herdr
 
 ```toml
 [picker]
-source_order = ["workspace", "agent", "project", "zoxide", "root", "quick", "plugin"]
+source_order = ["workspace", "zoxide", "root", "quick", "plugin"]
 # directory_template = "default.toml"
 
 [theme]
@@ -180,7 +177,7 @@ open = "bookmarks open {{id}}"
 
 - Herdr 0.7.4 or newer, on Linux or macOS
 - `jq` for the install link command
-- Optional: `zoxide` for directory history, Herdr Plus for projects and Quick Actions
+- Optional: `zoxide` for directory history, Herdr Plus for Quick Actions and directory templates
 - Rust stable, only when building from source
 
 ## Build from source

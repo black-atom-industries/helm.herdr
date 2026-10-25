@@ -4,9 +4,6 @@ check_updates = false
 [notifications]
 enabled = false
 
-[sources]
-herdr_plus_projects = false
-
 [[roots]]
 path = "~/code"
 max_depth = 2

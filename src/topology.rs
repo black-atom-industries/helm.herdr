@@ -13,7 +13,6 @@ use ratatui::{
 use serde_json::Value;
 
 use crate::{
-    config::AgentAliasConfig,
     model::{Entry, EntryAction, Source},
     sources::status_icon_at,
 };
@@ -63,7 +62,6 @@ impl AgentState {
 pub(crate) struct AgentMeta {
     pub(crate) name: String,
     pub(crate) state: AgentState,
-    pub(crate) alias: Option<String>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -369,24 +367,7 @@ fn strip_terminal_title(value: &str) -> String {
     output.trim().to_string()
 }
 
-fn alias_for(
-    agent: &str,
-    workspace: &str,
-    cwd: &Path,
-    aliases: &[AgentAliasConfig],
-) -> Option<String> {
-    aliases
-        .iter()
-        .find(|alias| alias.matches(agent, workspace, &cwd.to_string_lossy()))
-        .map(|alias| alias.alias.clone())
-}
-
-fn agent_from_value(
-    value: &Value,
-    workspace: &str,
-    cwd: &Path,
-    aliases: &[AgentAliasConfig],
-) -> Option<AgentMeta> {
+fn agent_from_value(value: &Value) -> Option<AgentMeta> {
     let object = value.as_object();
     let name = value.as_str().map(str::to_string).or_else(|| {
         value_string(value, &["agent", "name"]).or_else(|| {
@@ -402,28 +383,18 @@ fn agent_from_value(
     let state = value_string(value, &["agent_status", "state", "status"])
         .map(|value| AgentState::parse(&value))
         .unwrap_or(AgentState::Unknown);
-    Some(AgentMeta {
-        alias: alias_for(&name, workspace, cwd, aliases),
-        name,
-        state,
-    })
+    Some(AgentMeta { name, state })
 }
 
-fn pane_agent(
-    pane: &Value,
-    workspace: &str,
-    cwd: &Path,
-    agents_by_pane: &HashMap<&str, &Value>,
-    aliases: &[AgentAliasConfig],
-) -> Option<AgentMeta> {
+fn pane_agent(pane: &Value, agents_by_pane: &HashMap<&str, &Value>) -> Option<AgentMeta> {
     let embedded = pane.get("agent").filter(|value| !value.is_null());
     let external = pane
         .get("pane_id")
         .and_then(Value::as_str)
         .and_then(|id| agents_by_pane.get(id).copied());
-    let external_meta = external.and_then(|value| agent_from_value(value, workspace, cwd, aliases));
+    let external_meta = external.and_then(agent_from_value);
     if let Some(value) = embedded {
-        let embedded_meta = agent_from_value(value, workspace, cwd, aliases);
+        let embedded_meta = agent_from_value(value);
         let embedded_name = value
             .as_str()
             .map(str::to_string)
@@ -442,11 +413,7 @@ fn pane_agent(
         let state = embedded_state
             .or_else(|| external_meta.as_ref().map(|agent| agent.state))
             .unwrap_or(AgentState::Unknown);
-        return Some(AgentMeta {
-            alias: alias_for(&name, workspace, cwd, aliases),
-            name,
-            state,
-        });
+        return Some(AgentMeta { name, state });
     }
     external_meta
 }
@@ -457,11 +424,10 @@ fn pane_title(pane: &Value) -> Option<String> {
         .filter(|title| !title.is_empty())
 }
 
-fn snapshot_is_usable(value: &Value, include_agents: bool) -> bool {
-    ["workspaces", "tabs", "panes"]
+fn snapshot_is_usable(value: &Value) -> bool {
+    ["workspaces", "tabs", "panes", "agents"]
         .iter()
         .all(|name| result_array(value, name).is_some())
-        && (!include_agents || result_array(value, "agents").is_some())
 }
 
 fn parse_workspaces(
@@ -470,7 +436,6 @@ fn parse_workspaces(
     panes: &[Value],
     agents: &[Value],
     session: Option<String>,
-    aliases: &[AgentAliasConfig],
 ) -> OpenTopology {
     let agents_by_pane = agents
         .iter()
@@ -513,7 +478,7 @@ fn parse_workspaces(
                             })
                             .map(PathBuf::from)
                             .unwrap_or_default();
-                        let agent = pane_agent(pane, &label, &cwd, &agents_by_pane, aliases);
+                        let agent = pane_agent(pane, &agents_by_pane);
                         let title = pane_title(pane).or_else(|| {
                             external.and_then(|value| {
                                 value_string(value, &["terminal_title", "title"])
@@ -555,13 +520,8 @@ fn parse_workspaces(
     OpenTopology { workspaces: result }
 }
 
-fn parse_snapshot_with(
-    snapshot: &Value,
-    session: Option<String>,
-    aliases: &[AgentAliasConfig],
-    include_agents: bool,
-) -> OpenTopology {
-    if !snapshot_is_usable(snapshot, include_agents) {
+pub(crate) fn parse_snapshot(snapshot: &Value, session: Option<String>) -> OpenTopology {
+    if !snapshot_is_usable(snapshot) {
         return OpenTopology::default();
     }
     parse_workspaces(
@@ -570,16 +530,7 @@ fn parse_snapshot_with(
         result_array(snapshot, "panes").unwrap_or_default(),
         result_array(snapshot, "agents").unwrap_or_default(),
         session,
-        aliases,
     )
-}
-
-pub(crate) fn parse_snapshot(
-    snapshot: &Value,
-    session: Option<String>,
-    aliases: &[AgentAliasConfig],
-) -> OpenTopology {
-    parse_snapshot_with(snapshot, session, aliases, true)
 }
 
 pub(crate) fn topology_from_values(
@@ -588,7 +539,6 @@ pub(crate) fn topology_from_values(
     pane_list: &Value,
     agent_list: &Value,
     session: Option<String>,
-    aliases: &[AgentAliasConfig],
 ) -> OpenTopology {
     parse_workspaces(
         result_array(workspace_list, "workspaces").unwrap_or_default(),
@@ -596,43 +546,23 @@ pub(crate) fn topology_from_values(
         result_array(pane_list, "panes").unwrap_or_default(),
         result_array(agent_list, "agents").unwrap_or_default(),
         session,
-        aliases,
     )
 }
 
-pub(crate) fn collect_topology<F>(
-    mut fetch: F,
-    session: Option<String>,
-    aliases: &[AgentAliasConfig],
-    include_agents: bool,
-) -> OpenTopology
+pub(crate) fn collect_topology<F>(mut fetch: F, session: Option<String>) -> OpenTopology
 where
     F: FnMut(&[&str]) -> Result<Value, String>,
 {
     if let Ok(snapshot) = fetch(&["api", "snapshot"]) {
-        if snapshot_is_usable(&snapshot, include_agents) {
-            let mut topology = parse_snapshot_with(&snapshot, session, aliases, include_agents);
-            if !include_agents {
-                for workspace in &mut topology.workspaces {
-                    for tab in &mut workspace.tabs {
-                        for pane in &mut tab.panes {
-                            pane.agent = None;
-                        }
-                    }
-                }
-            }
-            return topology;
+        if snapshot_is_usable(&snapshot) {
+            return parse_snapshot(&snapshot, session);
         }
     }
     let workspaces = fetch(&["workspace", "list"]).unwrap_or(Value::Null);
     let tabs = fetch(&["tab", "list"]).unwrap_or(Value::Null);
     let panes = fetch(&["pane", "list"]).unwrap_or(Value::Null);
-    let agents = if include_agents {
-        fetch(&["agent", "list"]).unwrap_or(Value::Null)
-    } else {
-        Value::Null
-    };
-    topology_from_values(&workspaces, &tabs, &panes, &agents, session, aliases)
+    let agents = fetch(&["agent", "list"]).unwrap_or(Value::Null);
+    topology_from_values(&workspaces, &tabs, &panes, &agents, session)
 }
 
 fn parse_worktrees(value: &str) -> Vec<Worktree> {
@@ -827,8 +757,8 @@ pub(crate) fn pane_value(pane: &PaneNode, spinner_tick: u32) -> String {
     match &pane.agent {
         Some(agent) => format!(
             "{} {}",
-            status_icon_at(&Source::Agent, agent.state.label(), spinner_tick),
-            agent.alias.as_deref().unwrap_or(&agent.name)
+            status_icon_at(false, agent.state.label(), spinner_tick),
+            agent.name
         ),
         None => label.to_string(),
     }
@@ -934,14 +864,7 @@ fn render_workspace_block_selected_at(
                 .or_else(|| tab.panes.first())
         })
         .map(|pane| match &pane.agent {
-            Some(agent) => format!(
-                "agent {}",
-                agent
-                    .alias
-                    .as_deref()
-                    .or(pane.title.as_deref())
-                    .unwrap_or(&agent.name)
-            ),
+            Some(agent) => format!("agent {}", pane.title.as_deref().unwrap_or(&agent.name)),
             None => format!(
                 "pane {}",
                 if pane.label.is_empty() {
@@ -1148,7 +1071,7 @@ fn styled_pane_row(
                 .is_some_and(|agent| agent.state == AgentState::Working)
             {
                 let start = offset + 1;
-                let end = start + status_icon_at(&Source::Agent, "working", spinner_tick).len();
+                let end = start + status_icon_at(false, "working", spinner_tick).len();
                 if start >= clip_start && end <= clip_start + clipped.len() {
                     working_glyphs
                         .push(label_end + start - clip_start..label_end + end - clip_start);
@@ -1328,7 +1251,7 @@ fn workspace_breadcrumb(workspace: &WorkspaceNode) -> String {
     )
 }
 
-pub(crate) fn query_entries(topology: &OpenTopology, _include_agents: bool) -> Vec<Entry> {
+pub(crate) fn query_entries(topology: &OpenTopology) -> Vec<Entry> {
     let mut entries = Vec::new();
     for workspace in &topology.workspaces {
         let workspace_path = workspace
@@ -1350,7 +1273,6 @@ pub(crate) fn query_entries(topology: &OpenTopology, _include_agents: bool) -> V
             workspace_id: Some(workspace.id.clone()),
             workspace_label: Some(workspace.label.clone()),
             agent_target: None,
-            project: None,
             action: EntryAction::FocusWorkspace {
                 session: workspace.session.clone(),
                 id: workspace.id.clone(),
@@ -1371,7 +1293,6 @@ pub(crate) fn query_entries(topology: &OpenTopology, _include_agents: bool) -> V
                 workspace_id: Some(workspace.id.clone()),
                 workspace_label: Some(workspace.label.clone()),
                 agent_target: None,
-                project: None,
                 action: EntryAction::FocusTab {
                     session: workspace.session.clone(),
                     id: tab.id.clone(),
@@ -1414,18 +1335,13 @@ pub(crate) fn query_entries(topology: &OpenTopology, _include_agents: bool) -> V
                     search_terms.push(format!("agent-status:{}", agent.state.label()));
                 }
                 entries.push(Entry {
-                    source: if pane.agent.is_some() {
-                        Source::Agent
-                    } else {
-                        Source::Workspace
-                    },
+                    source: Source::Workspace,
                     title: label.into(),
                     subtitle: breadcrumb,
                     path: pane.cwd.clone(),
                     workspace_id: Some(workspace.id.clone()),
                     workspace_label: Some(workspace.label.clone()),
                     agent_target: pane.agent.as_ref().map(|_| pane.id.clone()),
-                    project: None,
                     action: EntryAction::FocusPane {
                         session: workspace.session.clone(),
                         id: pane.id.clone(),
@@ -1489,7 +1405,7 @@ mod tests {
                 "agents": []
             }}
         });
-        let topology = parse_snapshot(&snapshot, None, &[]);
+        let topology = parse_snapshot(&snapshot, None);
         let rendered = render_workspace_block(&topology.workspaces[0], 120);
         let lines = rendered.lines().collect::<Vec<_>>();
         assert_eq!(lines.len(), 4);
@@ -1516,7 +1432,7 @@ mod tests {
             serde_json::json!([]),
         );
 
-        let tabs = &parse_snapshot(&value, None, &[]).workspaces[0].tabs;
+        let tabs = &parse_snapshot(&value, None).workspaces[0].tabs;
 
         assert_eq!(
             tabs.iter()
@@ -1541,7 +1457,7 @@ mod tests {
                 {"pane_id":"p2","agent":"claude","agent_status":"working","cwd":"/agent","title":"\u{1b}]0;Claude\u{07}"}
             ]),
         );
-        let topology = parse_snapshot(&value, Some("work".into()), &[]);
+        let topology = parse_snapshot(&value, Some("work".into()));
         let panes = &topology.workspaces[0].tabs[0].panes;
         assert_eq!(panes[0].cwd, PathBuf::from("/shell"));
         assert_eq!(panes[0].title.as_deref(), Some("embedded"));
@@ -1553,21 +1469,7 @@ mod tests {
     }
 
     #[test]
-    fn aliases_use_first_matching_alias_and_all_states_have_ordered_aggregate() {
-        let aliases = [
-            AgentAliasConfig {
-                alias: "first".into(),
-                agent: Some("claude".into()),
-                workspace: None,
-                path: None,
-            },
-            AgentAliasConfig {
-                alias: "second".into(),
-                agent: Some("claude".into()),
-                workspace: None,
-                path: None,
-            },
-        ];
+    fn all_states_have_ordered_aggregate() {
         let value = snapshot(
             serde_json::json!([{"workspace_id":"w1","label":"Project"}]),
             serde_json::json!([{"workspace_id":"w1","tab_id":"t1","label":"Code","focused":true}]),
@@ -1579,17 +1481,8 @@ mod tests {
             ]),
             serde_json::json!([]),
         );
-        let topology = parse_snapshot(&value, None, &aliases);
+        let topology = parse_snapshot(&value, None);
         let workspace = &topology.workspaces[0];
-        assert_eq!(
-            workspace.tabs[0].panes[0]
-                .agent
-                .as_ref()
-                .unwrap()
-                .alias
-                .as_deref(),
-            Some("first")
-        );
         assert!(render_workspace_block(workspace, 120)
             .contains("1 blocked · 1 done · 1 working · 1 idle"));
     }
@@ -1602,7 +1495,7 @@ mod tests {
             serde_json::json!([{"workspace_id":"w1","tab_id":"t1","pane_id":"p1","label":"Shell","agent":"claude","agent_status":"working"}]),
             serde_json::json!([]),
         );
-        let workspace = &parse_snapshot(&value, None, &[]).workspaces[0];
+        let workspace = &parse_snapshot(&value, None).workspaces[0];
         let theme = crate::theme::Theme::load(false);
         let selected = Some(ChildSelection { tab: 0, pane: 0 });
         let first =
@@ -1638,7 +1531,7 @@ mod tests {
             ]),
             serde_json::json!([]),
         );
-        let workspace = &parse_snapshot(&value, None, &[]).workspaces[0];
+        let workspace = &parse_snapshot(&value, None).workspaces[0];
         let theme = crate::theme::Theme::load(false);
         let selected = Some(ChildSelection { tab: 1, pane: 0 });
         let row = topology_lines_selected(
@@ -1668,7 +1561,7 @@ mod tests {
             serde_json::json!([{"workspace_id":"w1","tab_id":"t1","pane_id":"p1","agent":{"state":"working"}}]),
             serde_json::json!([{"pane_id":"p1","agent":"claude","agent_status":"done"}]),
         );
-        let pane = &parse_snapshot(&value, None, &[]).workspaces[0].tabs[0].panes[0];
+        let pane = &parse_snapshot(&value, None).workspaces[0].tabs[0].panes[0];
         assert_eq!(pane.agent.as_ref().unwrap().name, "claude");
         assert_eq!(pane.agent.as_ref().unwrap().state, AgentState::Working);
     }
@@ -1681,7 +1574,7 @@ mod tests {
             serde_json::json!([{"workspace_id":"w1","tab_id":"t1","pane_id":"p1","agent":{"agent":{"name":"nested"}}}]),
             serde_json::json!([]),
         );
-        let pane = &parse_snapshot(&value, None, &[]).workspaces[0].tabs[0].panes[0];
+        let pane = &parse_snapshot(&value, None).workspaces[0].tabs[0].panes[0];
         assert_eq!(pane.agent.as_ref().unwrap().name, "nested");
     }
 
@@ -1693,7 +1586,7 @@ mod tests {
             serde_json::json!([{"workspace_id":"w1","tab_id":"t1","pane_id":"p1","agent":"claude","label":"Agent"}]),
             serde_json::json!([]),
         );
-        let workspace = &parse_snapshot(&value, None, &[]).workspaces[0];
+        let workspace = &parse_snapshot(&value, None).workspaces[0];
         assert_eq!(
             workspace.tabs[0].panes[0].agent.as_ref().unwrap().state,
             AgentState::Unknown
@@ -1714,12 +1607,12 @@ mod tests {
             serde_json::json!([{"workspace_id":"w1","tab_id":"t1","pane_id":"p1"}]),
             serde_json::json!([{"pane_id":"p1","agent":"claude","title":"\u{1b}]0;\u{07}"}]),
         );
-        let pane = &parse_snapshot(&value, None, &[]).workspaces[0].tabs[0].panes[0];
+        let pane = &parse_snapshot(&value, None).workspaces[0].tabs[0].panes[0];
         assert_eq!(pane.title, None);
     }
 
     #[test]
-    fn malformed_snapshot_falls_back_and_disabled_agents_skip_collection() {
+    fn malformed_snapshot_falls_back_to_list_commands() {
         let malformed =
             serde_json::json!({"result":{"snapshot":{"workspaces":[],"tabs":[],"panes":[]}}});
         let fallback = |args: &[&str]| -> Result<Value, String> {
@@ -1744,8 +1637,6 @@ mod tests {
                 }
             },
             None,
-            &[],
-            true,
         );
         assert_eq!(topology.workspaces[0].id, "w1");
         assert_eq!(
@@ -1773,33 +1664,6 @@ mod tests {
                     .collect::<Vec<_>>(),
             ]
         );
-
-        let mut disabled_calls: Vec<Vec<String>> = Vec::new();
-        let no_agents = serde_json::json!({"result":{"snapshot":{
-            "workspaces":[{"workspace_id":"w2","label":"Project"}],
-            "tabs":[{"workspace_id":"w2","tab_id":"t2","label":"Code"}],
-            "panes":[{"workspace_id":"w2","tab_id":"t2","pane_id":"p2","label":"Shell"}]
-        }}});
-        let disabled_topology = collect_topology(
-            |args| {
-                disabled_calls.push(args.iter().map(|arg| (*arg).to_string()).collect());
-                Ok(no_agents.clone())
-            },
-            None,
-            &[],
-            false,
-        );
-        assert_eq!(
-            disabled_calls,
-            vec![vec!["api", "snapshot"]
-                .into_iter()
-                .map(String::from)
-                .collect::<Vec<_>>()]
-        );
-        assert_eq!(disabled_topology.workspaces[0].id, "w2");
-        assert!(disabled_topology.workspaces[0].tabs[0].panes[0]
-            .agent
-            .is_none());
     }
 
     #[test]
@@ -1813,7 +1677,7 @@ mod tests {
             ]),
             serde_json::json!([]),
         );
-        let mut topology = parse_snapshot(&value, None, &[]);
+        let mut topology = parse_snapshot(&value, None);
         let git = FakeGit { porcelain: "worktree /repo\nHEAD 1234567890abcdef\nbranch refs/heads/main\n\nworktree /repo-feature\nHEAD deadbeefcafebabe\ndetached\n".into(), calls: std::cell::RefCell::new(Vec::new()) };
         enrich_git(&mut topology, &git);
         assert_eq!(topology.workspaces[0].git.as_ref().unwrap().label, "repo");
@@ -1839,7 +1703,7 @@ mod tests {
             ]),
             serde_json::json!([]),
         );
-        let mut topology = parse_snapshot(&value, None, &[]);
+        let mut topology = parse_snapshot(&value, None);
         let mut responses = HashMap::new();
         responses.insert(PathBuf::from("/not-git"), Err("not a repository".into()));
         responses.insert(
@@ -1866,7 +1730,7 @@ mod tests {
             serde_json::json!([{"workspace_id":"w1","tab_id":"t1","pane_id":"p1","cwd":"/plain"}]),
             serde_json::json!([]),
         );
-        let mut topology = parse_snapshot(&value, None, &[]);
+        let mut topology = parse_snapshot(&value, None);
         let mut responses = HashMap::new();
         responses.insert(PathBuf::from("/plain"), Err("not a repository".into()));
         enrich_git(
@@ -1918,7 +1782,7 @@ mod tests {
             serde_json::json!([{"workspace_id":"w1","tab_id":"t1","pane_id":"p1","label":"Shell","cwd":"/tmp"}]),
             serde_json::json!([]),
         );
-        let entries = query_entries(&parse_snapshot(&value, Some("session".into()), &[]), true);
+        let entries = query_entries(&parse_snapshot(&value, Some("session".into())));
         assert!(entries.iter().any(|entry| entry.key() == "pane:session:p1"));
         assert!(
             matches!(entries.last().unwrap().action, EntryAction::FocusPane { ref id, .. } if id == "p1")

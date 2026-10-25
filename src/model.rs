@@ -7,10 +7,8 @@ use crate::paths::canonical_str;
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub(crate) enum Source {
     Workspace,
-    Project,
     Zoxide,
     Root,
-    Agent,
     QuickAction,
     Integration,
 }
@@ -19,10 +17,8 @@ impl Source {
     pub(crate) fn label(&self) -> &'static str {
         match self {
             Source::Workspace => "open",
-            Source::Project => "project",
             Source::Zoxide => "zoxide",
             Source::Root => "root",
-            Source::Agent => "agent",
             Source::QuickAction => "quick",
             Source::Integration => "plugin",
         }
@@ -31,10 +27,8 @@ impl Source {
     pub(crate) fn from_config(value: &str) -> Option<Self> {
         match value.trim().to_ascii_lowercase().as_str() {
             "workspace" | "workspaces" | "open" | "open_workspaces" => Some(Source::Workspace),
-            "project" | "projects" | "herdr_plus_projects" => Some(Source::Project),
             "zoxide" | "z" => Some(Source::Zoxide),
             "root" | "roots" | "scan" => Some(Source::Root),
-            "agent" | "agents" => Some(Source::Agent),
             "quick" | "quick_action" | "quick_actions" | "herdr_plus_quick_actions" => {
                 Some(Source::QuickAction)
             }
@@ -43,13 +37,11 @@ impl Source {
         }
     }
 
-    pub(crate) fn all() -> [Source; 7] {
+    pub(crate) fn all() -> [Source; 5] {
         [
             Source::Workspace,
-            Source::Project,
             Source::Zoxide,
             Source::Root,
-            Source::Agent,
             Source::QuickAction,
             Source::Integration,
         ]
@@ -66,15 +58,11 @@ pub(crate) enum EntryAction {
         session: Option<String>,
         id: String,
     },
-    FocusAgent {
-        target: String,
-    },
     #[allow(dead_code)]
     FocusPane {
         session: Option<String>,
         id: String,
     },
-    OpenProject,
     InvokePluginAction {
         action: String,
     },
@@ -113,7 +101,6 @@ pub(crate) struct Entry {
     pub(crate) workspace_id: Option<String>,
     pub(crate) workspace_label: Option<String>,
     pub(crate) agent_target: Option<String>,
-    pub(crate) project: Option<Project>,
     pub(crate) action: EntryAction,
     pub(crate) source_label: Option<String>,
     pub(crate) search_terms: Vec<String>,

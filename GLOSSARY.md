@@ -60,8 +60,6 @@
 | --- | --- | --- |
 | **Source** | A category that supplies Entries to the Result list. | Provider, collection |
 | **Workspace source** | The Source of currently open Workspaces and their Tabs. | Open source |
-| **Agent source** | The Source of agent panes reported by Herdr. | Agent list |
-| **Project source** | The Source of Herdr Plus project definitions. | Template source |
 | **Zoxide source** | The Source of directories returned by zoxide. | Directory history |
 | **Root source** | The Source of directories discovered below configured filesystem roots. | Scan source |
 | **Quick Action source** | The Source of Herdr Plus Quick Actions. | Action menu |

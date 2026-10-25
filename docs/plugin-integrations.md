@@ -100,4 +100,4 @@ notify_error = true
 
 Use command/JSON integration for simple list/open flows.
 
-Use a built-in adapter when opening needs Herdr-specific behavior. Herdr Plus is built in because project entries may need workspace creation plus tab/bootstrap commands.
+Use a built-in adapter when opening needs Herdr-specific behavior. Herdr Plus is built in because directory templates need workspace creation plus tab/bootstrap commands.

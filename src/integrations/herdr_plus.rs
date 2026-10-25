@@ -8,40 +8,8 @@ use serde_json::Value;
 use crate::{
     herdr::{herdr_json, run_herdr},
     model::{Entry, EntryAction, Project, Source},
-    paths::{expand_path, herdr_plus_projects_dir, home},
+    paths::{herdr_plus_projects_dir, home},
 };
-
-pub(crate) fn collect_projects() -> Vec<Entry> {
-    let mut out = Vec::new();
-    let dir = herdr_plus_projects_dir();
-    let Ok(read) = fs::read_dir(dir) else {
-        return out;
-    };
-    for file in read.flatten() {
-        let path = file.path();
-        if path.extension().and_then(|s| s.to_str()) != Some("toml") {
-            continue;
-        }
-        let Ok(project) = load_project_file(&path) else {
-            continue;
-        };
-        let p = expand_path(&project.working_dir);
-        out.push(Entry {
-            source: Source::Project,
-            title: project.name.clone(),
-            subtitle: project.description.clone(),
-            path: p,
-            workspace_id: None,
-            workspace_label: None,
-            agent_target: None,
-            project: Some(project),
-            action: EntryAction::OpenProject,
-            source_label: None,
-            search_terms: vec![],
-        });
-    }
-    out
-}
 
 pub(crate) fn load_project_template(name: &str) -> Result<Project, String> {
     load_project_file(&herdr_plus_projects_dir().join(template_filename(name)?))
@@ -77,7 +45,6 @@ pub(crate) fn quick_actions_entry() -> Entry {
         workspace_id: None,
         workspace_label: None,
         agent_target: None,
-        project: None,
         action: EntryAction::InvokePluginAction {
             action: "cloudmanic.herdr-plus.quick-actions".into(),
         },

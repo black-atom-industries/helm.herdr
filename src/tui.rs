@@ -687,16 +687,6 @@ fn entry_status(entry: &Entry) -> Option<&str> {
     {
         return Some(status);
     }
-    if entry.source == Source::Agent {
-        return Some(
-            entry
-                .subtitle
-                .split_once(" · ")
-                .map(|(status, _)| status)
-                .filter(|status| !status.is_empty())
-                .unwrap_or("unknown"),
-        );
-    }
     entry.subtitle.strip_prefix("agent:").map(|rest| {
         rest.split_once(" · ")
             .map(|(status, _)| status)
@@ -1143,13 +1133,17 @@ fn draw_list(f: &mut Frame, app: &App, area: Rect) -> ListHits {
                 .map(|status| {
                     format!(
                         "{} {status}",
-                        status_icon_at(&e.source, status, app.spinner_tick)
+                        status_icon_at(
+                            e.source == Source::Workspace && e.agent_target.is_none(),
+                            status,
+                            app.spinner_tick
+                        )
                     )
                 })
                 .unwrap_or_default();
             let topology_entry = is_topology_entry(e);
             let raw_path = e.path.display().to_string();
-            let raw_metadata = if topology_entry || e.source == Source::Agent {
+            let raw_metadata = if topology_entry {
                 String::new()
             } else {
                 entry_metadata(e)
@@ -1270,10 +1264,8 @@ fn draw_list(f: &mut Frame, app: &App, area: Rect) -> ListHits {
 fn source_color(theme: &Theme, source: &Source) -> Color {
     match source {
         Source::Workspace => theme.green,
-        Source::Project => theme.mauve,
         Source::Zoxide => theme.blue,
         Source::Root => theme.teal,
-        Source::Agent => theme.yellow,
         Source::QuickAction => theme.mauve,
         Source::Integration => theme.red,
     }
@@ -1333,8 +1325,9 @@ mod tests {
         };
         tab.search_terms.push("repo-key:/repo/.git".into());
 
-        let mut pane = entry(Source::Agent, "old-pane");
+        let mut pane = entry(Source::Workspace, "old-pane");
         pane.source_label = Some("pane".into());
+        pane.agent_target = Some("p1".into());
         pane.subtitle = "repo › main › Tab › Pane".into();
         pane.path = PathBuf::from("/old/pane-cwd");
         pane.action = EntryAction::FocusPane {
@@ -1478,7 +1471,6 @@ mod tests {
             workspace_id: None,
             workspace_label: None,
             agent_target: None,
-            project: None,
             action: EntryAction::FocusOrCreateDir,
             source_label: None,
             search_terms: vec![],
@@ -1530,11 +1522,17 @@ mod tests {
     #[test]
     fn flat_rows_put_destination_before_aligned_type_and_status() {
         let mut app = App::new(Config::default(), Theme::terminal());
-        let mut idle = entry(Source::Agent, "first-destination");
+        let mut idle = entry(Source::Workspace, "first-destination");
+        idle.source_label = Some("pane".into());
+        idle.agent_target = Some("p1".into());
         idle.search_terms.push("agent-status:idle".into());
-        let mut blocked = entry(Source::Agent, "second-destination");
+        let mut blocked = entry(Source::Workspace, "second-destination");
+        blocked.source_label = Some("pane".into());
+        blocked.agent_target = Some("p2".into());
         blocked.search_terms.push("agent-status:blocked".into());
-        let mut working = entry(Source::Agent, "third-destination");
+        let mut working = entry(Source::Workspace, "third-destination");
+        working.source_label = Some("pane".into());
+        working.agent_target = Some("p3".into());
         working.search_terms.push("agent-status:working".into());
         let mut ordinary = entry(Source::Workspace, "ordinary");
         ordinary.subtitle = "remaining metadata".into();
@@ -1568,7 +1566,7 @@ mod tests {
                 .unwrap();
             assert_eq!(line.matches(status).count(), 1);
             assert!(line.starts_with(destination));
-            let column = text_column(line, "agent");
+            let column = text_column(line, "pane");
             assert_eq!(*type_column.get_or_insert(column), column);
             let symbol_x = column + 10;
             assert_eq!(line.chars().nth(symbol_x), symbol.chars().next());
@@ -1630,7 +1628,7 @@ mod tests {
             }],
         };
         let mut app = App::new(Config::default(), Theme::terminal());
-        app.topology_entries = crate::topology::query_entries(&topology, false);
+        app.topology_entries = crate::topology::query_entries(&topology);
         app.topology = topology;
         app.topology_cursor = TopologyCursor::new(&app.topology);
         app
@@ -1703,9 +1701,8 @@ mod tests {
         app.topology.workspaces[0].tabs[0].panes[1].agent = Some(crate::topology::AgentMeta {
             name: "claude".into(),
             state: crate::topology::AgentState::Working,
-            alias: None,
         });
-        app.entries = crate::topology::query_entries(&app.topology, false);
+        app.entries = crate::topology::query_entries(&app.topology);
         assert!(has_working_entry(&app));
     }
 
@@ -1715,7 +1712,6 @@ mod tests {
         app.topology.workspaces[0].tabs[0].panes[1].agent = Some(crate::topology::AgentMeta {
             name: "claude".into(),
             state: crate::topology::AgentState::Working,
-            alias: None,
         });
         app.spinner_tick = 1;
         let backend = TestBackend::new(80, 8);
@@ -1829,7 +1825,7 @@ mod tests {
             ],
             git: None,
         });
-        app.topology_entries = crate::topology::query_entries(&app.topology, false);
+        app.topology_entries = crate::topology::query_entries(&app.topology);
         app.topology_cursor = TopologyCursor::new(&app.topology);
         let backend = TestBackend::new(80, 12);
         let mut terminal = Terminal::new(backend).unwrap();
@@ -1985,15 +1981,6 @@ mod tests {
             })
             .collect::<Vec<_>>()
             .join("\n")
-    }
-
-    #[test]
-    fn herdr_plus_sources_share_color() {
-        let theme = Theme::terminal();
-        assert_eq!(
-            source_color(&theme, &Source::Project),
-            source_color(&theme, &Source::QuickAction)
-        );
     }
 
     #[test]
@@ -2394,7 +2381,7 @@ mod tests {
             .unwrap();
         let text = buffer_text(&terminal);
         assert!(text.contains(" Keybindings "));
-        assert!(text.contains("agents"));
+        assert!(text.contains("zoxide"));
         assert!(!text.contains("?/?"));
 
         handle_key(&mut app, key(KeyCode::Char('?')));
@@ -2456,8 +2443,8 @@ mod tests {
         let text = buffer_text(&terminal);
 
         assert!(text.contains("↓/j up/down"));
-        assert!(text.contains("⌃A agent"));
         assert!(text.contains("⌃Z zoxide"));
+        assert!(!text.contains("⌃A agent"));
         assert!(!text.contains("k move up"));
     }
 

@@ -46,7 +46,7 @@ The projections are exclusive:
 - An empty Query with no Source filter or the Workspace Source filter shows the live Topology. Each Workspace is one fixed four-line block: Workspace identity, `tabs`, the selected Tab's `panes`, and selected Pane detail.
 - A typed Query, or any non-Workspace Source filter, shows a flat Result list. Each row is one terminal line in the order `destination | Source | symbol+word status`, with Source and status pinned to the right edge.
 
-The exact `agent` Query token scopes results to agent Entries. `!name` narrows agent names, `@text` matches agent workspace or status text, `/path` matches paths, and `#status` matches status text. Marked Entries use the visible `bookmark` Source while keeping one destination row.
+The exact `agent` Query token scopes results to Panes running an agent. `!name` narrows agent names, `@text` matches agent workspace or status text, `/path` matches paths, and `#status` matches status text. Marked Entries use the visible `bookmark` Source while keeping one destination row.
 
 ## Sources and Enter actions
 
@@ -55,8 +55,6 @@ The exact `agent` Query token scopes results to agent Entries. `!name` narrows a
 | `workspace` | Focus the exact Workspace ID |
 | `tab` | Focus the exact Tab ID |
 | `pane` | Call Herdr `pane.focus` with the exact `pane_id` |
-| `agent` | Focus the agent target through Herdr |
-| `project` | Reuse or create a Workspace and apply the project tabs and splits |
 | `zoxide` / `root` | Reuse or create a directory Workspace; `Alt-Enter` applies the directory template |
 | `quick` | Invoke the Herdr Plus Quick Actions picker |
 | `plugin` | Run the integration's configured open command |
@@ -72,12 +70,12 @@ The Side pane is a persistent Herdr split. `helm-herdr.open-side` opens it when 
 
 Helm integrates with Herdr Plus without copying its UI:
 
-- project Entries read project TOML and create or reuse Workspaces, tabs, and splits;
+- directory templates read Herdr Plus project TOML and apply its tabs and splits to directory Workspaces;
 - the Quick Action Entry delegates to Herdr Plus.
 
 ## Configuration boundary
 
-Current Picker keys are `reuse_existing`, `create_missing`, `engine`, `source_order`, `source_priority_boost`, `agent_sort`, `check_updates`, `directory_template`, `directory_template_key`, and `[picker.filter_keys]`. Other current sections are `[notifications]`, `[jump_back]`, `[sources]`, `[[roots]]`, `[[agent_aliases]]`, and `[[integrations]]`.
+Current Picker keys are `reuse_existing`, `create_missing`, `engine`, `source_order`, `source_priority_boost`, `check_updates`, `directory_template`, `directory_template_key`, and `[picker.filter_keys]`. Other current sections are `[notifications]`, `[jump_back]`, `[sources]`, `[[roots]]`, and `[[integrations]]`.
 
 ## Color boundary
 

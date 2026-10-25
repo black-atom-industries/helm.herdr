@@ -4,9 +4,8 @@
 reuse_existing = true
 create_missing = true
 engine = "nucleo" # nucleo | skim | simple
-source_order = ["workspace", "agent", "project", "zoxide", "root", "quick", "plugin"]
+source_order = ["workspace", "zoxide", "root", "quick", "plugin"]
 source_priority_boost = 5
-agent_sort = "herdr" # herdr | priority | spaces
 check_updates = true
 # directory_template = "default.toml"
 # directory_template_key = "alt-enter"
@@ -25,10 +24,8 @@ pin_previous = true
 
 [sources]
 open_workspaces = true
-herdr_plus_projects = true
 zoxide = true
 roots = true
-agents = true
 herdr_plus_quick_actions = true
 
 [[roots]]
@@ -38,10 +35,4 @@ max_depth = 3
 [[roots]]
 path = "~/projects"
 max_depth = 3
-
-# [[agent_aliases]]
-# alias = "main ai dot"
-# agent = "claude"
-# workspace = "Dotfiles"
-# path = "dotfiles"
 

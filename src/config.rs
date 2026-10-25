@@ -25,8 +25,6 @@ pub(crate) struct Config {
     pub(crate) roots: Vec<RootConfig>,
     #[serde(default)]
     pub(crate) integrations: Vec<IntegrationConfig>,
-    #[serde(default)]
-    pub(crate) agent_aliases: Vec<AgentAliasConfig>,
 }
 
 #[derive(Clone, Deserialize)]
@@ -41,8 +39,6 @@ pub(crate) struct PickerConfig {
     pub(crate) source_order: Vec<String>,
     #[serde(default = "default_source_priority_boost")]
     pub(crate) source_priority_boost: i64,
-    #[serde(default = "default_agent_sort")]
-    pub(crate) agent_sort: String,
     #[serde(default = "yes")]
     pub(crate) check_updates: bool,
     #[serde(default)]
@@ -78,13 +74,9 @@ pub(crate) struct SourcesConfig {
     #[serde(default = "yes")]
     pub(crate) open_workspaces: bool,
     #[serde(default = "yes")]
-    pub(crate) herdr_plus_projects: bool,
-    #[serde(default = "yes")]
     pub(crate) zoxide: bool,
     #[serde(default = "yes")]
     pub(crate) roots: bool,
-    #[serde(default = "yes")]
-    pub(crate) agents: bool,
     #[serde(default = "yes")]
     pub(crate) herdr_plus_quick_actions: bool,
 }
@@ -93,10 +85,8 @@ impl SourcesConfig {
     pub(crate) fn enabled(&self, source: &Source) -> bool {
         match source {
             Source::Workspace => self.open_workspaces,
-            Source::Project => self.herdr_plus_projects,
             Source::Zoxide => self.zoxide,
             Source::Root => self.roots,
-            Source::Agent => self.agents,
             Source::QuickAction => self.herdr_plus_quick_actions,
             Source::Integration => true,
         }
@@ -124,27 +114,6 @@ pub(crate) struct ThemeConfig {
 }
 
 #[derive(Clone, Deserialize)]
-pub(crate) struct AgentAliasConfig {
-    pub(crate) alias: String,
-    pub(crate) agent: Option<String>,
-    pub(crate) workspace: Option<String>,
-    pub(crate) path: Option<String>,
-}
-
-impl AgentAliasConfig {
-    pub(crate) fn matches(&self, agent: &str, workspace: &str, path: &str) -> bool {
-        opt_matches(self.agent.as_deref(), agent)
-            && opt_matches(self.workspace.as_deref(), workspace)
-            && opt_matches(self.path.as_deref(), path)
-    }
-}
-
-fn opt_matches(needle: Option<&str>, haystack: &str) -> bool {
-    needle
-        .map(|value| haystack.to_lowercase().contains(&value.to_lowercase()))
-        .unwrap_or(true)
-}
-#[derive(Clone, Deserialize)]
 pub(crate) struct RootConfig {
     pub(crate) path: String,
     #[serde(default = "default_depth")]
@@ -160,24 +129,13 @@ fn default_engine() -> String {
     "nucleo".into()
 }
 fn default_source_order() -> Vec<String> {
-    [
-        "workspace",
-        "agent",
-        "project",
-        "zoxide",
-        "root",
-        "quick",
-        "plugin",
-    ]
-    .into_iter()
-    .map(String::from)
-    .collect()
+    ["workspace", "zoxide", "root", "quick", "plugin"]
+        .into_iter()
+        .map(String::from)
+        .collect()
 }
 fn default_source_priority_boost() -> i64 {
     5
-}
-fn default_agent_sort() -> String {
-    "herdr".into()
 }
 fn default_directory_template_key() -> String {
     "alt-enter".into()
@@ -187,10 +145,8 @@ fn default_notification_sound() -> String {
 }
 fn default_filter_key(source: &Source) -> Option<char> {
     match source {
-        Source::Agent => Some('a'),
         Source::QuickAction => Some('q'),
         Source::Workspace => Some('w'),
-        Source::Project => Some('p'),
         Source::Zoxide => Some('z'),
         Source::Root => Some('r'),
         Source::Integration => None,
@@ -224,7 +180,6 @@ impl Default for PickerConfig {
             engine: default_engine(),
             source_order: default_source_order(),
             source_priority_boost: default_source_priority_boost(),
-            agent_sort: default_agent_sort(),
             check_updates: true,
             directory_template: None,
             directory_template_key: default_directory_template_key(),
@@ -293,10 +248,8 @@ impl Default for SourcesConfig {
     fn default() -> Self {
         Self {
             open_workspaces: true,
-            herdr_plus_projects: true,
             zoxide: true,
             roots: true,
-            agents: true,
             herdr_plus_quick_actions: true,
         }
     }
@@ -327,7 +280,6 @@ impl Default for Config {
             sources: SourcesConfig::default(),
             theme: ThemeConfig::default(),
             integrations: vec![],
-            agent_aliases: vec![],
             roots: vec![
                 RootConfig {
                     path: "~/workspace".into(),
@@ -376,13 +328,12 @@ mod tests {
     use super::*;
 
     #[test]
-    fn default_source_order_prioritizes_open_workspaces_then_agents() {
+    fn default_source_order_prioritizes_open_workspaces() {
         let picker = PickerConfig::default();
 
         assert_eq!(picker.source_rank(&Source::Workspace), 0);
-        assert_eq!(picker.source_rank(&Source::Agent), 1);
-        assert_eq!(picker.source_rank(&Source::Zoxide), 3);
-        assert_eq!(picker.source_rank(&Source::Root), 4);
+        assert_eq!(picker.source_rank(&Source::Zoxide), 1);
+        assert_eq!(picker.source_rank(&Source::Root), 2);
         assert!(picker.source_bonus(&Source::Root) > picker.source_bonus(&Source::Integration));
     }
 
@@ -391,7 +342,7 @@ mod tests {
         let config: Config = toml::from_str(
             r#"
             [picker]
-            source_order = ["agent", "workspace"]
+            source_order = ["root", "workspace"]
 
             [sources]
             servers = false
@@ -401,7 +352,7 @@ mod tests {
         .unwrap();
 
         let sources = config.enabled_sources_in_order();
-        assert_eq!(sources[0], Source::Agent);
+        assert_eq!(sources[0], Source::Root);
         assert_eq!(sources[1], Source::Workspace);
     }
 
@@ -522,34 +473,46 @@ mod tests {
         let config: Config = toml::from_str(
             r#"
             [picker.filter_keys]
-            agent = "ctrl-g"
+            zoxide = "ctrl-g"
             "#,
         )
         .unwrap();
 
         assert_eq!(
             config.picker.filter_source_for_key('g'),
-            Some(Source::Agent)
+            Some(Source::Zoxide)
         );
-        assert_eq!(config.picker.filter_source_for_key('a'), None);
-        assert_eq!(config.picker.filter_key(&Source::Agent), Some('g'));
+        assert_eq!(config.picker.filter_source_for_key('z'), None);
+        assert_eq!(config.picker.filter_key(&Source::Zoxide), Some('g'));
     }
 
     #[test]
-    fn parses_agent_aliases() {
+    fn retired_source_keys_parse_and_are_ignored() {
         let config: Config = toml::from_str(
             r#"
+            [picker]
+            agent_sort = "priority"
+            source_order = ["agent", "project", "workspace", "zoxide"]
+
+            [picker.filter_keys]
+            agent = "ctrl-g"
+            project = "ctrl-h"
+
+            [sources]
+            agents = true
+            herdr_plus_projects = true
+
             [[agent_aliases]]
             alias = "main ai dot"
             agent = "claude"
-            workspace = "Dotfiles"
-            path = "dotfiles"
             "#,
         )
         .unwrap();
 
-        assert_eq!(config.agent_aliases.len(), 1);
-        assert!(config.agent_aliases[0].matches("claude", "Dotfiles", "/home/fenix/dotfiles"));
-        assert!(!config.agent_aliases[0].matches("codex", "Dotfiles", "/home/fenix/dotfiles"));
+        let sources = config.enabled_sources_in_order();
+        assert_eq!(sources[0], Source::Workspace);
+        assert_eq!(sources[1], Source::Zoxide);
+        assert_eq!(config.picker.filter_source_for_key('g'), None);
+        assert_eq!(config.picker.filter_source_for_key('h'), None);
     }
 }
