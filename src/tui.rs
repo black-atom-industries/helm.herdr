@@ -1237,7 +1237,7 @@ fn progress_cell(app: &App, position: usize) -> Option<Span<'static>> {
     ))
 }
 
-/// `█` for the done share and `░` for the rest, rounded to the nearest cell.
+/// `▰` for the done share and `▱` for the rest, rounded to the nearest cell.
 fn bar(done: u32, total: u32, cells: usize) -> String {
     let filled = if total == 0 {
         0
@@ -1245,7 +1245,7 @@ fn bar(done: u32, total: u32, cells: usize) -> String {
         let done = done.min(total) as usize;
         (done * cells + total as usize / 2) / total as usize
     };
-    format!("{}{}", "█".repeat(filled), "░".repeat(cells - filled))
+    format!("{}{}", "▰".repeat(filled), "▱".repeat(cells - filled))
 }
 
 /// Draws the detail pane and returns the largest useful scroll offset. The header
@@ -3157,8 +3157,8 @@ mod tests {
                 .insert(id.into(), vec![subagent("Port the tests", 3, 6, NOW - 192)]);
         }
         let (lines, _) = render_app(&app, 100, 20);
-        assert!(lines[line_index(&lines, "helm")].contains("████░░░░"));
-        assert!(!lines[line_index(&lines, "skills")].contains('█'));
+        assert!(lines[line_index(&lines, "helm")].contains("▰▰▰▰▱▱▱▱"));
+        assert!(!lines[line_index(&lines, "skills")].contains('▰'));
     }
 
     #[test]
@@ -3169,7 +3169,7 @@ mod tests {
             vec![subagent("Port the tests", 3, 6, NOW - 192)],
         );
         let (lines, _) = render_app(&app, 100, 40);
-        assert!(lines[line_index(&lines, "helm.herdr")].contains("████░░░░"));
+        assert!(lines[line_index(&lines, "helm.herdr")].contains("▰▰▰▰▱▱▱▱"));
     }
 
     #[test]

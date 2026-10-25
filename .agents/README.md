@@ -10,7 +10,7 @@ Compact, agent-only operating context for Helm for Herdr.
 
 ## Design
 
-The glance view and its keymap are designed on the canvas https://claude.ai/artifact/C6Sf6rv3FMeJYUXDr49swT (board C, keymap, marks, icons). The code is authoritative where they differ: key hints use ASCII names, bars use block elements, and the list's last columns are a plain age and the progress bar.
+The glance view and its keymap are designed on the canvas https://claude.ai/artifact/C6Sf6rv3FMeJYUXDr49swT (board C, keymap, marks, icons). The code is authoritative where they differ: key hints use ASCII names, and the list's last columns are a plain age and the progress bar.
 
 ## Local test build
 
