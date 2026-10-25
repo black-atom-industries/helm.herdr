@@ -208,7 +208,7 @@ The `[glance]` section sets the group windows and the look:
 [glance]
 active_minutes = 15   # activity this recent places a row in Active
 recent_hours = 4      # activity this recent places a row in Recent; older rows are Quiet
-icons = "unicode"     # "nerd" needs a Nerd Font
+icons = "nerd"        # "unicode" when the terminal font has no Nerd Font glyphs
 labels = "asdfg"      # keys that open the first visible rows; j and k are reserved
 ```
 

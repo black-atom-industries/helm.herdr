@@ -8,8 +8,8 @@ use crate::{
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub(crate) enum IconStyle {
-    #[default]
     Unicode,
+    #[default]
     Nerd,
 }
 

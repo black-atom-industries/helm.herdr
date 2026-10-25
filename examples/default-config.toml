@@ -65,8 +65,8 @@ enabled = true
 # Older workspaces fall into Quiet.
 active_minutes = 15
 recent_hours = 4
-# "unicode" (default) or "nerd" (needs a Nerd Font)
-icons = "unicode"
+# "nerd" (default, needs a Nerd Font) or "unicode"
+icons = "nerd"
 # Keys that open the first visible rows in Normal mode. j and k are reserved for moving.
 labels = "asdfg"
 

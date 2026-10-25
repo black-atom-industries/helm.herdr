@@ -478,19 +478,19 @@ mod tests {
         let default = Config::default().glance;
         assert_eq!(default.active_minutes, 15);
         assert_eq!(default.recent_hours, 4);
-        assert_eq!(default.icons, IconStyle::Unicode);
+        assert_eq!(default.icons, IconStyle::Nerd);
 
         let custom: Config = toml::from_str(
             r#"
             [glance]
             active_minutes = 5
-            icons = "nerd"
+            icons = "unicode"
             "#,
         )
         .unwrap();
         assert_eq!(custom.glance.active_minutes, 5);
         assert_eq!(custom.glance.recent_hours, 4);
-        assert_eq!(custom.glance.icons, IconStyle::Nerd);
+        assert_eq!(custom.glance.icons, IconStyle::Unicode);
     }
 
     #[test]
