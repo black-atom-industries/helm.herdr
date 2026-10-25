@@ -9,7 +9,7 @@ use serde::{Deserialize, Serialize};
 use crate::{
     config::Config,
     herdr::{herdr_json, herdr_json_args, notify_done, notify_error, run_herdr},
-    integrations::{command, herdr_plus, sessions},
+    integrations::{command, herdr_plus},
     matcher::match_score,
     model::{Entry, EntryAction, Source, WorkspaceKind, WorkspaceRef},
     paths::{canonical_str, herdr_plus_quick_actions_dir, home, plugin_config_dir},
@@ -123,13 +123,6 @@ impl App {
         }
         if self.config.sources.roots {
             push_unique(&mut entries, &mut seen, collect_roots(&self.config));
-        }
-        if self.config.sources.servers {
-            push_unique(
-                &mut entries,
-                &mut seen,
-                sessions::collect_remotes(&self.config),
-            );
         }
         if self.config.sources.agents {
             entries.extend(collect_agents(
@@ -569,7 +562,6 @@ impl App {
             | EntryAction::FocusWorkspace { .. }
             | EntryAction::FocusTab { .. } => (self.focus_action(&e.action), true, true),
             EntryAction::OpenProject => (self.open_project(&e), true, true),
-            EntryAction::OpenRemote { target } => (sessions::open_remote(target), false, true),
             EntryAction::InvokePluginAction { action } => (
                 run_herdr(["plugin", "action", "invoke", action]),
                 true,
@@ -662,7 +654,7 @@ impl App {
             Source::Agent => e.workspace_id.clone(),
             Source::Project => self.matching_project_workspace(e).map(|ws| ws.id.clone()),
             Source::Zoxide | Source::Root => self.matching_dir_workspace(e).map(|ws| ws.id.clone()),
-            Source::Server | Source::Session | Source::QuickAction | Source::Integration => None,
+            Source::QuickAction | Source::Integration => None,
         }
     }
 
@@ -1277,7 +1269,6 @@ fn pin_key(entry: &Entry) -> String {
             format!("pane:{}:{id}", session_key(session.as_deref()))
         }
         EntryAction::OpenProject => format!("project:{}", entry.key()),
-        EntryAction::OpenRemote { target } => format!("remote:{target}"),
         EntryAction::InvokePluginAction { action } => {
             format!("plugin:{}:{action}", entry.source_name())
         }
@@ -1296,7 +1287,6 @@ fn push_unique(entries: &mut Vec<Entry>, seen: &mut HashSet<String>, incoming: V
             EntryAction::FocusTab { session, id, .. } => {
                 format!("open:tab:{}:{id}", session_key(session.as_deref()))
             }
-            EntryAction::OpenRemote { target } => format!("remote:{target}"),
             EntryAction::RunCommand { command, .. } => format!("{}:{command}", e.source_name()),
             _ if matches!(e.source, Source::Project | Source::Zoxide | Source::Root) => {
                 format!("directory:{path_key}")
@@ -1490,8 +1480,6 @@ exit 0
         config.sources.zoxide = false;
         config.sources.roots = false;
         config.sources.agents = false;
-        config.sources.servers = false;
-        config.sources.sessions = false;
         config.sources.herdr_plus_quick_actions = false;
         config.jump_back.pin_previous = false;
         config

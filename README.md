@@ -14,7 +14,7 @@
 
 ![Helm walking from the api Workspace into web's preview Tab and focusing the vite Pane](docs/assets/changelog/0.6.0-topology.webp)
 
-Helm opens on your live session as Workspace → Tab → Pane, and Enter lands on the exact Pane you picked. Press `/` and type, and the same list reaches what is not open yet: zoxide directories, configured roots, Herdr Plus projects, agents, and remotes. Helm focuses what exists and creates a Workspace for what does not.
+Helm opens on your live session as Workspace → Tab → Pane, and Enter lands on the exact Pane you picked. Press `/` and type, and the same list reaches what is not open yet: zoxide directories, configured roots, Herdr Plus projects, and agents. Helm focuses what exists and creates a Workspace for what does not.
 
 > [!NOTE]
 > Part of the [Helm](https://github.com/black-atom-industries) family, next to [helm.tmux](https://github.com/black-atom-industries/helm.tmux). Forked from [thanhdat77/herdr-navigator](https://github.com/thanhdat77/herdr-navigator); thanks to thanhdat77 for the foundation.
@@ -76,7 +76,6 @@ Press `/` and type; until then, letters navigate. The topology turns into flat o
 | `project`   | Herdr Plus project TOML        | Reuse or create the project Workspace with its tabs and splits |
 | `zoxide`    | `zoxide query -l`              | Reuse or create a Workspace there                             |
 | `root`      | Configured `[[roots]]`         | Reuse or create a Workspace there                             |
-| `server`    | Configured remote targets      | Hand off to the remote Herdr server                           |
 | `quick`     | Herdr Plus Quick Actions       | Open the Quick Actions picker                                 |
 | `plugin`    | Your `[[integrations]]`        | Run the integration's open command                            |
 | `bookmark`  | Entries marked with `Ctrl-B`, ranked first | Same as the Entry before it was marked             |
@@ -89,8 +88,6 @@ The `workspace`, `tab`, and `pane` rows all come from the live session. Each `[s
 | `Ctrl-A`         | Agents                                                               |
 | `Ctrl-P` / `Ctrl-Q` | Herdr Plus projects / Quick Actions                               |
 | `Ctrl-Z` / `Ctrl-R` | zoxide / roots                                                    |
-| `Ctrl-S`         | Remotes                                                              |
-| `Ctrl-L`         | Sessions from integrations                                           |
 | `Ctrl-B`         | Mark or unmark the selected Entry                                    |
 | `Ctrl-X`         | Close the open Workspace behind the selected Entry                   |
 | `Alt-Enter`      | Open a zoxide or root directory with the shared template             |
@@ -146,7 +143,7 @@ herdr plugin config-dir helm-herdr
 
 ```toml
 [picker]
-source_order = ["workspace", "agent", "project", "zoxide", "root", "server", "quick", "plugin"]
+source_order = ["workspace", "agent", "project", "zoxide", "root", "quick", "plugin"]
 # directory_template = "default.toml"
 
 [theme]

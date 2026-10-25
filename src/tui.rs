@@ -1274,8 +1274,6 @@ fn source_color(theme: &Theme, source: &Source) -> Color {
         Source::Zoxide => theme.blue,
         Source::Root => theme.teal,
         Source::Agent => theme.yellow,
-        Source::Server => theme.green,
-        Source::Session => theme.green,
         Source::QuickAction => theme.mauve,
         Source::Integration => theme.red,
     }
@@ -2427,16 +2425,12 @@ mod tests {
     #[test]
     fn disabled_sources_are_absent_from_filter_bindings_and_footer() {
         let mut app = App::new(Config::default(), Theme::terminal());
-        app.config.sources.servers = false;
-        app.config.sources.sessions = false;
+        app.config.sources.zoxide = false;
 
         let bindings = keybindings(&app);
-        assert!(!bindings.iter().any(|binding| {
-            matches!(
-                binding.command,
-                Command::Filter(Source::Server) | Command::Filter(Source::Session)
-            )
-        }));
+        assert!(!bindings
+            .iter()
+            .any(|binding| { matches!(binding.command, Command::Filter(Source::Zoxide)) }));
 
         let backend = TestBackend::new(110, 20);
         let mut terminal = Terminal::new(backend).unwrap();
@@ -2446,8 +2440,7 @@ mod tests {
             })
             .unwrap();
         let text = buffer_text(&terminal);
-        assert!(!text.contains("server"));
-        assert!(!text.contains("session"));
+        assert!(!text.contains("zoxide"));
     }
 
     #[test]

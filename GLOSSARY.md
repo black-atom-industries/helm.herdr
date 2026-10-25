@@ -64,8 +64,6 @@
 | **Project source** | The Source of Herdr Plus project definitions. | Template source |
 | **Zoxide source** | The Source of directories returned by zoxide. | Directory history |
 | **Root source** | The Source of directories discovered below configured filesystem roots. | Scan source |
-| **Server source** | The Source of configured remote Herdr targets. | Remote source, SSH source |
-| **Session source** | The Source of configured session entries. | Session list |
 | **Quick Action source** | The Source of Herdr Plus Quick Actions. | Action menu |
 | **Integration source** | The Source of entries collected from an external command or JSON integration. | Plugin source |
 
@@ -94,7 +92,7 @@
 > **User:** "What is the difference between the Entry and the Entry row?"
 > **Agent:** "The **Entry** is the destination. The **Entry row** is its visual representation in the Result list."
 > **User:** "What happens when I press Enter?"
-> **Agent:** "The Picker applies the **Entry action** for the **Selected entry**, such as focusing a Workspace or opening a remote target."
+> **Agent:** "The Picker applies the **Entry action** for the **Selected entry**, such as focusing a Workspace or running an integration command."
 > **User:** "How do I reach a Pane?"
 > **Agent:** "The **Topology** shows the Workspace, its Tabs, the selected Tab's Panes, and the selected Pane detail. Enter focuses the exact Pane ID."
 

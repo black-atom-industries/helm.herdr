@@ -57,9 +57,7 @@ The exact `agent` Query token scopes results to agent Entries. `!name` narrows a
 | `pane` | Call Herdr `pane.focus` with the exact `pane_id` |
 | `agent` | Focus the agent target through Herdr |
 | `project` | Reuse or create a Workspace and apply the project tabs and splits |
-| `server` | Hand off to the configured remote Herdr target |
 | `zoxide` / `root` | Reuse or create a directory Workspace; `Alt-Enter` applies the directory template |
-| `session` | Run the configured session command |
 | `quick` | Invoke the Herdr Plus Quick Actions picker |
 | `plugin` | Run the integration's configured open command |
 | `bookmark` | Apply the marked Entry's underlying action |
@@ -79,7 +77,7 @@ Helm integrates with Herdr Plus without copying its UI:
 
 ## Configuration boundary
 
-Current Picker keys are `reuse_existing`, `create_missing`, `engine`, `source_order`, `source_priority_boost`, `agent_sort`, `check_updates`, `directory_template`, `directory_template_key`, and `[picker.filter_keys]`. Other current sections are `[notifications]`, `[jump_back]`, `[sources]`, `[[roots]]`, `[[agent_aliases]]`, `[[sessions.entries]]`, and `[[integrations]]`.
+Current Picker keys are `reuse_existing`, `create_missing`, `engine`, `source_order`, `source_priority_boost`, `agent_sort`, `check_updates`, `directory_template`, `directory_template_key`, and `[picker.filter_keys]`. Other current sections are `[notifications]`, `[jump_back]`, `[sources]`, `[[roots]]`, `[[agent_aliases]]`, and `[[integrations]]`.
 
 ## Color boundary
 

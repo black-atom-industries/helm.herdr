@@ -11,8 +11,6 @@ pub(crate) enum Source {
     Zoxide,
     Root,
     Agent,
-    Server,
-    Session,
     QuickAction,
     Integration,
 }
@@ -25,8 +23,6 @@ impl Source {
             Source::Zoxide => "zoxide",
             Source::Root => "root",
             Source::Agent => "agent",
-            Source::Server => "server",
-            Source::Session => "session",
             Source::QuickAction => "quick",
             Source::Integration => "plugin",
         }
@@ -39,8 +35,6 @@ impl Source {
             "zoxide" | "z" => Some(Source::Zoxide),
             "root" | "roots" | "scan" => Some(Source::Root),
             "agent" | "agents" => Some(Source::Agent),
-            "server" | "servers" | "remote" | "remotes" | "ssh" => Some(Source::Server),
-            "session" | "sessions" => Some(Source::Session),
             "quick" | "quick_action" | "quick_actions" | "herdr_plus_quick_actions" => {
                 Some(Source::QuickAction)
             }
@@ -49,12 +43,10 @@ impl Source {
         }
     }
 
-    pub(crate) fn all() -> [Source; 9] {
+    pub(crate) fn all() -> [Source; 7] {
         [
             Source::Workspace,
             Source::Project,
-            Source::Server,
-            Source::Session,
             Source::Zoxide,
             Source::Root,
             Source::Agent,
@@ -83,9 +75,6 @@ pub(crate) enum EntryAction {
         id: String,
     },
     OpenProject,
-    OpenRemote {
-        target: String,
-    },
     InvokePluginAction {
         action: String,
     },

@@ -58,13 +58,8 @@ fn entry_from_item(integration: &IntegrationConfig, item: IntegrationItem) -> En
     let command = render_template(&integration.open, &item);
     let id = item.id.clone();
     let kind = item.kind.clone();
-    let source = match kind.as_str() {
-        "server" | "remote-terminal" => Source::Server,
-        "session" => Source::Session,
-        _ => Source::Integration,
-    };
     Entry {
-        source,
+        source: Source::Integration,
         title: item.title,
         subtitle,
         path,
@@ -77,8 +72,7 @@ fn entry_from_item(integration: &IntegrationConfig, item: IntegrationItem) -> En
             notify_success: integration.notify_success,
             notify_error: integration.notify_error,
         },
-        source_label: (!matches!(kind.as_str(), "server" | "remote-terminal" | "session"))
-            .then(|| integration.label.clone()),
+        source_label: Some(integration.label.clone()),
         search_terms: vec![id, kind],
     }
 }
@@ -168,23 +162,7 @@ mod tests {
     }
 
     #[test]
-    fn session_kind_builds_session_source() {
-        let cfg = config();
-        let item = IntegrationItem {
-            id: "nn".into(),
-            title: "nn".into(),
-            subtitle: "session nn".into(),
-            path: Some("/tmp/session/nn".into()),
-            kind: "session".into(),
-        };
-        let entry = entry_from_item(&cfg, item);
-
-        assert_eq!(entry.source, Source::Session);
-        assert_eq!(entry.source_name(), "session");
-    }
-
-    #[test]
-    fn server_kind_builds_server_source() {
+    fn server_and_session_kinds_build_integration_source() {
         let cfg = config();
         let item = IntegrationItem {
             id: "s87".into(),
@@ -195,24 +173,8 @@ mod tests {
         };
         let entry = entry_from_item(&cfg, item);
 
-        assert_eq!(entry.source, Source::Server);
-        assert_eq!(entry.source_name(), "server");
-    }
-
-    #[test]
-    fn remote_terminal_kind_builds_server_source() {
-        let cfg = config();
-        let item = IntegrationItem {
-            id: "s211::term_abc".into(),
-            title: "term_abc".into(),
-            subtitle: "remote terminal".into(),
-            path: Some("remote:s211:term_abc".into()),
-            kind: "remote-terminal".into(),
-        };
-        let entry = entry_from_item(&cfg, item);
-
-        assert_eq!(entry.source, Source::Server);
-        assert_eq!(entry.source_name(), "server");
+        assert_eq!(entry.source, Source::Integration);
+        assert_eq!(entry.source_label.as_deref(), Some(cfg.label.as_str()));
     }
 
     #[test]

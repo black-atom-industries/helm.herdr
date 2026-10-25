@@ -341,8 +341,6 @@ fn source_help_label(source: &Source) -> &'static str {
         Source::Zoxide => "zoxide",
         Source::Root => "roots",
         Source::Agent => "agents",
-        Source::Server => "servers",
-        Source::Session => "sessions",
         Source::QuickAction => "quick actions",
         Source::Integration => "plugins",
     }
@@ -355,8 +353,6 @@ fn source_compact_label(source: &Source) -> &'static str {
         Source::Zoxide => "zoxide",
         Source::Root => "root",
         Source::Agent => "agent",
-        Source::Server => "server",
-        Source::Session => "session",
         Source::QuickAction => "quick",
         Source::Integration => "plugin",
     }

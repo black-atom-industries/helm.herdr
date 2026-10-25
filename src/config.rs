@@ -24,8 +24,6 @@ pub(crate) struct Config {
     #[serde(default)]
     pub(crate) roots: Vec<RootConfig>,
     #[serde(default)]
-    pub(crate) sessions: SessionsConfig,
-    #[serde(default)]
     pub(crate) integrations: Vec<IntegrationConfig>,
     #[serde(default)]
     pub(crate) agent_aliases: Vec<AgentAliasConfig>,
@@ -88,10 +86,6 @@ pub(crate) struct SourcesConfig {
     #[serde(default = "yes")]
     pub(crate) agents: bool,
     #[serde(default = "yes")]
-    pub(crate) servers: bool,
-    #[serde(default = "yes")]
-    pub(crate) sessions: bool,
-    #[serde(default = "yes")]
     pub(crate) herdr_plus_quick_actions: bool,
 }
 
@@ -103,26 +97,10 @@ impl SourcesConfig {
             Source::Zoxide => self.zoxide,
             Source::Root => self.roots,
             Source::Agent => self.agents,
-            Source::Server => self.servers,
-            Source::Session => self.sessions,
             Source::QuickAction => self.herdr_plus_quick_actions,
             Source::Integration => true,
         }
     }
-}
-
-#[derive(Clone, Default, Deserialize)]
-pub(crate) struct SessionsConfig {
-    #[serde(default)]
-    pub(crate) entries: Vec<SessionEntryConfig>,
-}
-
-#[derive(Clone, Deserialize)]
-pub(crate) struct SessionEntryConfig {
-    pub(crate) name: String,
-    pub(crate) remote: Option<String>,
-    #[serde(default)]
-    pub(crate) tags: Vec<String>,
 }
 
 #[derive(Clone, Deserialize)]
@@ -186,10 +164,8 @@ fn default_source_order() -> Vec<String> {
         "workspace",
         "agent",
         "project",
-        "session",
         "zoxide",
         "root",
-        "server",
         "quick",
         "plugin",
     ]
@@ -212,13 +188,11 @@ fn default_notification_sound() -> String {
 fn default_filter_key(source: &Source) -> Option<char> {
     match source {
         Source::Agent => Some('a'),
-        Source::Server => Some('s'),
         Source::QuickAction => Some('q'),
         Source::Workspace => Some('w'),
         Source::Project => Some('p'),
         Source::Zoxide => Some('z'),
         Source::Root => Some('r'),
-        Source::Session => Some('l'),
         Source::Integration => None,
     }
 }
@@ -323,8 +297,6 @@ impl Default for SourcesConfig {
             zoxide: true,
             roots: true,
             agents: true,
-            servers: true,
-            sessions: true,
             herdr_plus_quick_actions: true,
         }
     }
@@ -354,7 +326,6 @@ impl Default for Config {
             notifications: NotificationsConfig::default(),
             sources: SourcesConfig::default(),
             theme: ThemeConfig::default(),
-            sessions: SessionsConfig::default(),
             integrations: vec![],
             agent_aliases: vec![],
             roots: vec![
@@ -410,10 +381,9 @@ mod tests {
 
         assert_eq!(picker.source_rank(&Source::Workspace), 0);
         assert_eq!(picker.source_rank(&Source::Agent), 1);
-        assert_eq!(picker.source_rank(&Source::Session), 3);
-        assert_eq!(picker.source_rank(&Source::Root), 5);
-        assert_eq!(picker.source_rank(&Source::Server), 6);
-        assert!(picker.source_bonus(&Source::Root) > picker.source_bonus(&Source::Server));
+        assert_eq!(picker.source_rank(&Source::Zoxide), 3);
+        assert_eq!(picker.source_rank(&Source::Root), 4);
+        assert!(picker.source_bonus(&Source::Root) > picker.source_bonus(&Source::Integration));
     }
 
     #[test]
@@ -433,8 +403,6 @@ mod tests {
         let sources = config.enabled_sources_in_order();
         assert_eq!(sources[0], Source::Agent);
         assert_eq!(sources[1], Source::Workspace);
-        assert!(!sources.contains(&Source::Server));
-        assert!(!sources.contains(&Source::Session));
     }
 
     #[test]
@@ -554,21 +522,17 @@ mod tests {
         let config: Config = toml::from_str(
             r#"
             [picker.filter_keys]
-            server = "ctrl-g"
+            agent = "ctrl-g"
             "#,
         )
         .unwrap();
 
         assert_eq!(
             config.picker.filter_source_for_key('g'),
-            Some(Source::Server)
-        );
-        assert_eq!(config.picker.filter_source_for_key('s'), None);
-        assert_eq!(
-            config.picker.filter_source_for_key('a'),
             Some(Source::Agent)
         );
-        assert_eq!(config.picker.filter_key(&Source::Server), Some('g'));
+        assert_eq!(config.picker.filter_source_for_key('a'), None);
+        assert_eq!(config.picker.filter_key(&Source::Agent), Some('g'));
     }
 
     #[test]
@@ -587,25 +551,5 @@ mod tests {
         assert_eq!(config.agent_aliases.len(), 1);
         assert!(config.agent_aliases[0].matches("claude", "Dotfiles", "/home/fenix/dotfiles"));
         assert!(!config.agent_aliases[0].matches("codex", "Dotfiles", "/home/fenix/dotfiles"));
-    }
-
-    #[test]
-    fn parses_builtin_session_config() {
-        let config: Config = toml::from_str(
-            r#"
-            [[sessions.entries]]
-            name = "prod"
-            remote = "prod-host"
-            tags = ["api"]
-            "#,
-        )
-        .unwrap();
-
-        assert!(config.sources.sessions);
-        assert_eq!(config.sessions.entries[0].name, "prod");
-        assert_eq!(
-            config.sessions.entries[0].remote.as_deref(),
-            Some("prod-host")
-        );
     }
 }
