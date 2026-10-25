@@ -16,7 +16,7 @@ use crossterm::{
 };
 use ratatui::{
     backend::CrosstermBackend,
-    layout::{Constraint, Direction, Layout, Rect},
+    layout::{Constraint, Direction, Layout, Margin, Rect},
     style::{Color, Modifier, Style},
     text::{Line, Span, Text},
     widgets::{Block, Borders, Clear, List, ListItem, ListState, Paragraph},
@@ -477,7 +477,7 @@ fn draw(f: &mut Frame, app: &App) -> (ListHits, usize) {
     let full = f.area();
     f.render_widget(Clear, full);
     f.render_widget(
-        Block::default().style(Style::default().bg(app.theme.base_background)),
+        Block::default().style(Style::default().bg(app.theme.chrome_background())),
         full,
     );
     let area = content_area(full);
@@ -487,13 +487,35 @@ fn draw(f: &mut Frame, app: &App) -> (ListHits, usize) {
         .constraints([
             Constraint::Length(3),
             Constraint::Min(3),
-            Constraint::Length(1),
+            Constraint::Length(2),
         ])
         .split(area);
 
+    let bar = Block::default().style(Style::default().bg(app.theme.bar_background()));
+    f.render_widget(
+        bar.clone(),
+        Rect {
+            height: rows[0].bottom().saturating_sub(full.y),
+            ..full
+        },
+    );
+    f.render_widget(
+        bar,
+        Rect {
+            y: rows[2].y,
+            height: full.bottom().saturating_sub(rows[2].y),
+            ..full
+        },
+    );
     draw_header(f, app, rows[0]);
     let (list_hits, detail_max) = if app.glance_view() {
-        draw_glance(f, app, rows[1])
+        let inset = rows[1].x - full.x;
+        let body = Rect {
+            x: full.x,
+            width: rows[1].width + inset,
+            ..rows[1]
+        };
+        draw_glance(f, app, body)
     } else {
         (draw_list(f, app, rows[1]), 0)
     };
@@ -519,11 +541,10 @@ fn content_area(full: Rect) -> Rect {
 }
 
 fn draw_header(f: &mut Frame, app: &App, area: Rect) {
-    let block = Block::default()
-        .style(Style::default().bg(app.theme.panel_bg))
-        .borders(Borders::BOTTOM);
-    let inner = block.inner(area);
-    f.render_widget(block, area);
+    let inner = Rect {
+        height: area.height.saturating_sub(1),
+        ..area
+    };
     let lines = Layout::default()
         .direction(Direction::Vertical)
         .constraints([Constraint::Length(1), Constraint::Length(1)])
@@ -695,10 +716,11 @@ fn hint_line(app: &App, hints: &[(String, &'static str)]) -> Line<'static> {
 /// One line of compact hints. The left block drops hints from its end until
 /// it fits beside the right-aligned block.
 fn draw_key_hints(f: &mut Frame, app: &App, area: Rect) {
-    f.render_widget(
-        Block::default().style(Style::default().bg(app.theme.panel_bg)),
-        area,
-    );
+    let area = Rect {
+        y: area.y + 1.min(area.height),
+        height: area.height.saturating_sub(1),
+        ..area
+    };
     if app.close_armed {
         let name = app.selected_entry().map(display_title).unwrap_or_default();
         let line = Line::from(vec![
@@ -714,7 +736,7 @@ fn draw_key_hints(f: &mut Frame, app: &App, area: Rect) {
             ),
         ]);
         f.render_widget(
-            Paragraph::new(line).style(Style::default().bg(app.theme.panel_bg)),
+            Paragraph::new(line).style(Style::default().bg(app.theme.bar_background())),
             area,
         );
         return;
@@ -742,7 +764,7 @@ fn draw_key_hints(f: &mut Frame, app: &App, area: Rect) {
         .direction(Direction::Horizontal)
         .constraints([Constraint::Min(0), Constraint::Length(right_width as u16)])
         .split(area);
-    let style = Style::default().bg(app.theme.panel_bg);
+    let style = Style::default().bg(app.theme.bar_background());
     f.render_widget(
         Paragraph::new(hint_line(app, &left)).style(style),
         columns[0],
@@ -1095,7 +1117,8 @@ const SUBAGENT_BAR_CELLS: usize = 10;
 /// Returns the list hits and the largest useful detail scroll offset.
 fn draw_glance(f: &mut Frame, app: &App, area: Rect) -> (ListHits, usize) {
     if area.width < DETAIL_MIN_WIDTH {
-        return (draw_glance_list(f, app, area), 0);
+        let card = list_card(f, app, area);
+        return (draw_glance_list(f, app, card), 0);
     }
     let [list, border, detail] = Layout::horizontal([
         Constraint::Percentage(55),
@@ -1103,14 +1126,28 @@ fn draw_glance(f: &mut Frame, app: &App, area: Rect) -> (ListHits, usize) {
         Constraint::Percentage(45),
     ])
     .areas(area);
-    f.render_widget(
-        Block::default()
-            .borders(Borders::LEFT)
-            .border_style(Style::default().fg(app.theme.surface1)),
-        border,
-    );
+    let _ = border;
     let max_offset = draw_detail(f, app, detail);
-    (draw_glance_list(f, app, list), max_offset)
+    let card = list_card(f, app, list);
+    (draw_glance_list(f, app, card), max_offset)
+}
+
+/// Paints the list on the base background inside the chrome and returns the
+/// padded area its rows use.
+fn list_card(f: &mut Frame, app: &App, area: Rect) -> Rect {
+    f.render_widget(
+        Block::default().style(Style::default().bg(app.theme.base_background)),
+        area,
+    );
+    let inner = area.inner(Margin {
+        horizontal: 1,
+        vertical: 1,
+    });
+    Rect {
+        x: inner.x + 1,
+        width: inner.width.saturating_sub(1),
+        ..inner
+    }
 }
 
 fn draw_glance_list(f: &mut Frame, app: &App, area: Rect) -> ListHits {
@@ -1358,7 +1395,6 @@ fn draw_detail(f: &mut Frame, app: &App, area: Rect) -> usize {
         justified(left, chips, width),
         Line::styled(truncate_end(&display_path(entry), width), dim),
         Line::styled(truncate_end(&activity_sources(app, workspace), width), dim),
-        Line::styled("─".repeat(width), Style::default().fg(app.theme.surface1)),
         Line::raw(""),
     ];
 
@@ -1805,7 +1841,6 @@ fn draw_list(f: &mut Frame, app: &App, area: Rect) -> ListHits {
     state.select(selected_row);
     let block = Block::default()
         .title(format!(" RESULTS · {} ", app.filtered.len()))
-        .borders(Borders::RIGHT)
         .style(Style::default().bg(app.theme.base_background));
     let list_area = block.inner(area);
     let list = List::new(items)
@@ -2019,7 +2054,7 @@ mod tests {
     }
 
     #[test]
-    fn picker_default_surfaces_use_the_base_background() {
+    fn picker_layers_bars_chrome_and_the_list_background() {
         let app = App::new(Config::default(), Theme::terminal());
         let backend = TestBackend::new(80, 8);
         let mut terminal = Terminal::new(backend).unwrap();
@@ -2030,9 +2065,12 @@ mod tests {
             .unwrap();
         let buffer = terminal.backend().buffer();
 
-        assert_eq!(buffer[(0, 0)].bg, app.theme.base_background);
-        assert_eq!(buffer[(79, 1)].bg, app.theme.base_background);
-        assert_eq!(buffer[(0, 6)].bg, app.theme.base_background);
+        assert_eq!(buffer[(0, 0)].bg, app.theme.bar_background());
+        assert_eq!(buffer[(79, 1)].bg, app.theme.bar_background());
+        assert_eq!(buffer[(0, 7)].bg, app.theme.bar_background());
+        assert_eq!(buffer[(79, 4)].bg, app.theme.chrome_background());
+        assert_eq!(buffer[(0, 4)].bg, app.theme.base_background);
+        assert_eq!(buffer[(5, 4)].bg, app.theme.base_background);
     }
 
     #[test]
@@ -3273,10 +3311,10 @@ mod tests {
     #[test]
     fn detail_pane_hides_when_the_content_is_narrower_than_110_columns() {
         let app = detail_app(vec![claude_pane()], 0, ActivityState::default());
-        let (narrow, _) = render_app(&app, 112, 40);
-        assert!(!narrow.iter().any(|line| line.contains('│')));
-        let (wide, _) = render_app(&app, 113, 40);
-        assert!(wide.iter().any(|line| line.contains('│')));
+        let (narrow, _) = render_app(&app, 110, 40);
+        assert!(!narrow.iter().any(|line| line.contains("AGENTS")));
+        let (wide, _) = render_app(&app, 111, 40);
+        assert!(wide.iter().any(|line| line.contains("AGENTS")));
     }
 
     #[test]
@@ -3504,8 +3542,8 @@ mod tests {
     }
 
     #[test]
-    fn detail_keeps_every_agent_and_both_sections_at_120_by_24() {
-        let (lines, _) = render_app(&crowded_detail_app(), 120, 24);
+    fn detail_keeps_every_agent_and_both_sections_at_120_by_27() {
+        let (lines, _) = render_app(&crowded_detail_app(), 120, 27);
         let second = line_index(&lines, "codex · Second agent");
         assert!(line_index(&lines, "AGENTS") < second);
         assert!(second < line_index(&lines, "CHANGES · 3 files"));

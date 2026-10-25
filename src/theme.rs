@@ -162,6 +162,29 @@ impl Theme {
         ]
     }
 
+    /// The frame around the list: header, footer and detail pane. A neutral
+    /// step from the base background toward the text color.
+    pub(crate) fn chrome_background(&self) -> Color {
+        self.toward_text(5, self.surface0)
+    }
+
+    /// The header and footer bands, one step stronger than the chrome.
+    pub(crate) fn bar_background(&self) -> Color {
+        self.toward_text(10, self.surface1)
+    }
+
+    fn toward_text(&self, percent: u16, fallback: Color) -> Color {
+        match (self.base_background, self.text) {
+            (Color::Rgb(br, bg, bb), Color::Rgb(tr, tg, tb)) => {
+                let mix = |b: u8, t: u8| {
+                    ((u16::from(b) * (100 - percent) + u16::from(t) * percent) / 100) as u8
+                };
+                Color::Rgb(mix(br, tr), mix(bg, tg), mix(bb, tb))
+            }
+            _ => fallback,
+        }
+    }
+
     pub(crate) fn group_background(&self) -> Color {
         self.derived_background(7)
     }
