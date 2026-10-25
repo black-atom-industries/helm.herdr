@@ -67,7 +67,7 @@ active_minutes = 15
 recent_hours = 4
 # "nerd" (default, needs a Nerd Font) or "unicode"
 icons = "nerd"
-# Keys that open the first visible rows in Normal mode. j and k are reserved for moving.
+# Keys that select the first visible rows in Normal mode. j, k, l, q and x are reserved.
 labels = "asdfg"
 
 [sources]

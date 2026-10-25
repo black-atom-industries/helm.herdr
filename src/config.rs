@@ -76,7 +76,10 @@ impl GlanceConfig {
     pub(crate) fn labels(&self) -> Vec<char> {
         let mut labels: Vec<char> = Vec::new();
         for ch in self.labels.chars().map(|ch| ch.to_ascii_lowercase()) {
-            if ch.is_ascii_lowercase() && !matches!(ch, 'j' | 'k') && !labels.contains(&ch) {
+            if ch.is_ascii_lowercase()
+                && !matches!(ch, 'j' | 'k' | 'l' | 'q' | 'x')
+                && !labels.contains(&ch)
+            {
                 labels.push(ch);
             }
         }
@@ -503,7 +506,7 @@ mod tests {
         let custom: Config = toml::from_str(
             r#"
             [glance]
-            labels = "AjsKsk1"
+            labels = "AjsKsklqx1"
             "#,
         )
         .unwrap();

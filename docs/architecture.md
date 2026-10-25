@@ -119,9 +119,9 @@ Changes and commits come from `git status`, `git diff --numstat` and `git log` o
 | `plugin` | Run the integration's configured open command |
 | `bookmark` | Apply the marked Entry's underlying action |
 
-In Normal mode, `j`/`k` and `Up`/`Down` move through the visible rows across groups. The first visible Workspace rows carry the letters from `[glance] labels` (`asdfg` by default, never `j` or `k`), and pressing one opens that row. Search mode hides the labels, and they return after `Esc`.
+In Normal mode, `j`/`k` and `Up`/`Down` move through the visible rows across groups. The first visible Workspace rows carry the letters from `[glance] labels` (`asdfg` by default, never `j`, `k`, `l`, `q` or `x`), and pressing one selects that row. Pressing the same label again right away opens it, so `aa` opens the first row and `a3` its third Tab. Search mode hides the labels, and they return after `Esc`.
 
-`Enter` opens the selected Workspace at its last active Tab, and `1`–`9` open that Tab of the selected Workspace. `]` jumps to the first row of the next group. `[` jumps to the first row of the current group, or to the previous group's first row when it is already on that row. `!` jumps to the next row that needs you, including pinned rows. `-` opens the Previous workspace. `Shift-J` and `Shift-K` scroll the detail pane, and the offset resets when the selection moves to another row.
+`Enter` opens the selected Workspace at its last active Tab, and `1`–`9` open that Tab of the selected Workspace. `]` jumps to the first row of the next group. `[` jumps to the first row of the current group, or to the previous group's first row when it is already on that row. `!` jumps to the next row that needs you, including pinned rows. `l` opens the Previous workspace, and `q` closes Helm. `x` arms closing the selected Workspace and the footer asks for a second `x`; any other key cancels, and `^X` closes at once. `Shift-J` and `Shift-K` scroll the detail pane, and the offset resets when the selection moves to another row.
 
 ## Side behavior
 

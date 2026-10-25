@@ -59,7 +59,7 @@ When the Picker opens, each group lists its rows by newest activity first. A row
 
 | Column   | Shows                                                                                   |
 | -------- | --------------------------------------------------------------------------------------- |
-| label    | The `[glance] labels` letter of the first rows, which opens the row                     |
+| label    | The `[glance] labels` letter of the first rows, which selects the row                   |
 | status   | The state icon of the Workspace's agent                                                 |
 | name     | The Workspace name                                                                      |
 | branch   | The git branch                                                                          |
@@ -71,15 +71,16 @@ The glance reloads Herdr's state every 3 seconds and keeps the selection on the 
 
 | Key                  | Action                                                                             |
 | -------------------- | ---------------------------------------------------------------------------------- |
-| `a` `s` `d` `f` `g`  | Open the row with that label. The letters come from `[glance] labels`              |
+| `a` `s` `d` `f` `g`  | Select the row with that label; press it twice (`aa`) to open. Letters come from `[glance] labels` |
 | `j` / `k`, `↓` / `↑` | Move to the next or previous row                                                   |
 | `enter`              | Open the selected Workspace at its last active Tab                                 |
 | `1`–`9`              | Open that Tab of the selected Workspace                                            |
 | `]` / `[`            | Jump to the first row of the next group; `[` goes to the current group's first row, then to the previous group |
 | `!`                  | Jump to the next row that needs you, wrapping around                               |
-| `-`                  | Open the Previous workspace                                                        |
+| `l`                  | Open the Previous workspace                                                        |
+| `q`, `esc`           | Close Helm (`esc` first leaves search)                                             |
 | `^B`                 | Pin or unpin the selected row to the top                                           |
-| `^X`                 | Close the Workspace of the selected row                                            |
+| `x` `x`, `^X`        | Close the Workspace of the selected row; `x` asks for a second `x`, `^X` closes at once |
 | `J` / `K`            | Scroll the detail pane                                                             |
 | `/`                  | Search                                                                             |
 | `?`                  | Show the keys sheet                                                                |
@@ -209,7 +210,7 @@ The `[glance]` section sets the group windows and the look:
 active_minutes = 15   # activity this recent places a row in Active
 recent_hours = 4      # activity this recent places a row in Recent; older rows are Quiet
 icons = "nerd"        # "unicode" when the terminal font has no Nerd Font glyphs
-labels = "asdfg"      # keys that open the first visible rows; j and k are reserved
+labels = "asdfg"      # keys that select the first visible rows; j, k, l, q and x are reserved
 ```
 
 Helm checks GitHub for a new release at most once a day. When one exists, the header shows a badge, and `F5` installs it through Herdr. `picker.check_updates = false` turns that off.

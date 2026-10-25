@@ -60,6 +60,8 @@ pub(crate) struct App {
     row_ranks: HashMap<String, (Group, usize)>,
     pub(crate) now: i64,
     pub(crate) detail_scroll: DetailScroll,
+    pub(crate) last_label: Option<char>,
+    pub(crate) close_armed: bool,
     /// Largest useful detail offset, set by the last render.
     pub(crate) detail_max_offset: usize,
     /// Running Claude subagents, keyed by pane id.
@@ -104,6 +106,8 @@ impl App {
             row_ranks: HashMap::new(),
             now: 0,
             detail_scroll: DetailScroll::default(),
+            last_label: None,
+            close_armed: false,
             detail_max_offset: 0,
             subagents: HashMap::new(),
             git_detail: HashMap::new(),

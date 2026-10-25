@@ -286,6 +286,8 @@ fn handle_mouse(app: &mut App, mouse: MouseEvent, hits: &ListHits) -> Action {
 }
 
 fn handle_key(app: &mut App, key: KeyEvent) -> Action {
+    let previous_label = app.last_label.take();
+    let close_armed = std::mem::take(&mut app.close_armed);
     let command = keybindings(app)
         .into_iter()
         .find_map(|binding| binding.command_for(app, key));
@@ -298,6 +300,16 @@ fn handle_key(app: &mut App, key: KeyEvent) -> Action {
     }
 
     if let Some(command) = command {
+        if command == Command::ArmClose {
+            if close_armed {
+                return Action::CloseWorkspace;
+            }
+            app.close_armed = app.selected_entry().is_some();
+            return Action::Continue;
+        }
+        if command == Command::SelectLabel {
+            return select_label(app, key, previous_label);
+        }
         return execute_command(app, command, key);
     }
 
@@ -312,6 +324,27 @@ fn handle_key(app: &mut App, key: KeyEvent) -> Action {
             }
         }
     }
+    Action::Continue
+}
+
+fn select_label(app: &mut App, key: KeyEvent, previous_label: Option<char>) -> Action {
+    let KeyCode::Char(ch) = key.code else {
+        return Action::Continue;
+    };
+    let slot = app
+        .config
+        .glance
+        .labels()
+        .iter()
+        .position(|label| *label == ch);
+    let Some(position) = slot.and_then(|slot| app.labelled_positions().get(slot).copied()) else {
+        return Action::Continue;
+    };
+    app.selected = position;
+    if previous_label == Some(ch) {
+        return Action::Open;
+    }
+    app.last_label = Some(ch);
     Action::Continue
 }
 
@@ -333,21 +366,7 @@ fn execute_command(app: &mut App, command: Command, key: KeyEvent) -> Action {
             .selected_entry()
             .map(|_| Action::OpenTemplate)
             .unwrap_or(Action::Continue),
-        Command::OpenLabel => {
-            let slot = app
-                .config
-                .glance
-                .labels()
-                .iter()
-                .position(|ch| key.code == KeyCode::Char(*ch));
-            match slot.and_then(|slot| app.labelled_positions().get(slot).copied()) {
-                Some(position) => {
-                    app.selected = position;
-                    Action::Open
-                }
-                None => Action::Continue,
-            }
-        }
+        Command::SelectLabel => select_label(app, key, None),
         Command::OpenTab => match key.code {
             KeyCode::Char(ch) if ('1'..='9').contains(&ch) => {
                 let number = usize::from(ch as u8 - b'0');
@@ -417,6 +436,7 @@ fn execute_command(app: &mut App, command: Command, key: KeyEvent) -> Action {
             Action::Continue
         }
         Command::CloseWorkspace => Action::CloseWorkspace,
+        Command::ArmClose => Action::Continue,
         Command::ToggleMark => {
             if let Err(error) = app.toggle_selected_pin() {
                 crate::herdr::notify_error(
@@ -657,6 +677,26 @@ fn hint_line(app: &App, hints: &[(String, &'static str)]) -> Line<'static> {
 /// One line of compact hints. The left block drops hints from its end until
 /// it fits beside the right-aligned block.
 fn draw_key_hints(f: &mut Frame, app: &App, area: Rect) {
+    if app.close_armed {
+        let name = app.selected_entry().map(display_title).unwrap_or_default();
+        let line = Line::from(vec![
+            Span::styled(
+                "x",
+                Style::default()
+                    .fg(app.theme.red)
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(
+                format!(" again to close {name} · any other key cancels"),
+                Style::default().fg(app.theme.red),
+            ),
+        ]);
+        f.render_widget(
+            Paragraph::new(line).style(Style::default().bg(app.theme.panel_bg)),
+            area,
+        );
+        return;
+    }
     let mut left = Vec::new();
     let mut right = Vec::new();
     for binding in keybindings(app) {
@@ -2622,7 +2662,57 @@ mod tests {
     }
 
     #[test]
-    fn label_opens_the_labelled_row_and_is_ignored_while_searching() {
+    fn x_twice_closes_the_workspace_and_any_other_key_cancels() {
+        let mut app = glance_app(
+            NOW,
+            None,
+            vec![
+                commit_workspace("w1", "alpha", NOW - 60),
+                commit_workspace("w2", "beta", NOW - 120),
+            ],
+            ActivityState::default(),
+        );
+        assert_eq!(
+            handle_key(&mut app, key(KeyCode::Char('x'))),
+            Action::Continue
+        );
+        assert!(app.close_armed);
+        let (lines, _) = render_app(&app, 160, 40);
+        assert!(lines.last().unwrap().contains("x again to close alpha"));
+        assert_eq!(
+            handle_key(&mut app, key(KeyCode::Char('x'))),
+            Action::CloseWorkspace
+        );
+
+        handle_key(&mut app, key(KeyCode::Char('x')));
+        handle_key(&mut app, key(KeyCode::Char('j')));
+        assert!(!app.close_armed);
+        assert_eq!(
+            handle_key(&mut app, key(KeyCode::Char('x'))),
+            Action::Continue
+        );
+    }
+
+    #[test]
+    fn q_closes_in_normal_mode_and_types_while_searching() {
+        let mut app = glance_app(
+            NOW,
+            None,
+            vec![commit_workspace("w1", "alpha", NOW - 60)],
+            ActivityState::default(),
+        );
+        handle_key(&mut app, key(KeyCode::Char('/')));
+        assert_eq!(
+            handle_key(&mut app, key(KeyCode::Char('q'))),
+            Action::Continue
+        );
+        assert_eq!(app.query, "q");
+        handle_key(&mut app, key(KeyCode::Esc));
+        assert_eq!(handle_key(&mut app, key(KeyCode::Char('q'))), Action::Quit);
+    }
+
+    #[test]
+    fn label_selects_the_labelled_row_and_is_ignored_while_searching() {
         let mut app = glance_app(
             NOW,
             None,
@@ -2635,8 +2725,20 @@ mod tests {
         );
         assert_eq!(selected_title(&app), "alpha");
 
+        assert_eq!(
+            handle_key(&mut app, key(KeyCode::Char('s'))),
+            Action::Continue
+        );
+        assert_eq!(selected_title(&app), "beta");
         assert_eq!(handle_key(&mut app, key(KeyCode::Char('s'))), Action::Open);
         assert_eq!(selected_title(&app), "beta");
+
+        handle_key(&mut app, key(KeyCode::Char('a')));
+        handle_key(&mut app, key(KeyCode::Char('j')));
+        assert_eq!(
+            handle_key(&mut app, key(KeyCode::Char('a'))),
+            Action::Continue
+        );
 
         handle_key(&mut app, key(KeyCode::Char('/')));
         assert_eq!(
@@ -2782,7 +2884,7 @@ mod tests {
         );
         app.selected = 1;
 
-        assert_eq!(handle_key(&mut app, key(KeyCode::Char('-'))), Action::Open);
+        assert_eq!(handle_key(&mut app, key(KeyCode::Char('l'))), Action::Open);
         assert_eq!(selected_title(&app), "dots");
     }
 
@@ -2900,7 +3002,7 @@ mod tests {
         assert!(wide[1].contains("^R roots"));
         assert!(wide[1].contains("^Z zoxide"));
         let footer = wide.last().unwrap();
-        assert!(footer.contains("a–g open row"));
+        assert!(footer.contains("a–g select row"));
         assert!(footer.contains("enter open"));
         assert!(footer.contains("1–9 tab"));
         assert!(footer.contains("] [ group"));
@@ -2911,7 +3013,7 @@ mod tests {
 
         let (narrow, _) = render_app(&app, 100, 40);
         let footer = narrow.last().unwrap();
-        assert!(footer.contains("a–g open row"));
+        assert!(footer.contains("a–g select row"));
         assert!(footer.ends_with("? keys   esc close"));
     }
 
@@ -2925,7 +3027,7 @@ mod tests {
         );
         let (lines, _) = render_app(&app, 80, 40);
         let footer = lines.last().unwrap();
-        assert!(footer.contains("a–g open row"));
+        assert!(footer.contains("a–g select row"));
         assert!(!footer.contains("/ search"));
         assert!(!footer.contains("^B pin"));
         assert!(footer.ends_with("? keys   esc close"));

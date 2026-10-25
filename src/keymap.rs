@@ -11,7 +11,7 @@ pub(crate) enum Command {
     Back,
     Open,
     OpenTemplate,
-    OpenLabel,
+    SelectLabel,
     OpenTab,
     OpenPrevious,
     MoveUp,
@@ -26,6 +26,7 @@ pub(crate) enum Command {
     DeleteWord,
     Clear,
     CloseWorkspace,
+    ArmClose,
     ToggleMark,
     ToggleHelp,
     Update,
@@ -211,14 +212,15 @@ pub(crate) fn keybindings(app: &App) -> Vec<Keybind> {
     if let (Some(first), Some(last)) = (labels.first(), labels.last()) {
         let keys = labels
             .iter()
-            .map(|ch| normal_key(Command::OpenLabel, KeyCode::Char(*ch), ch.to_string()))
+            .map(|ch| normal_key(Command::SelectLabel, KeyCode::Char(*ch), ch.to_string()))
             .collect();
         let range = if first == last {
             first.to_string()
         } else {
             format!("{first}–{last}")
         };
-        bindings.push(binding(keys, "open labelled row", "Open", Some("open row")).keys_as(range));
+        bindings
+            .push(binding(keys, "select labelled row", "Move", Some("select row")).keys_as(range));
     }
 
     bindings.push(binding(
@@ -329,20 +331,23 @@ pub(crate) fn keybindings(app: &App) -> Vec<Keybind> {
     }
 
     bindings.push(binding(
-        vec![normal_key(Command::OpenPrevious, KeyCode::Char('-'), "-")],
+        vec![normal_key(Command::OpenPrevious, KeyCode::Char('l'), "l")],
         "open previous workspace",
         "Open",
         None,
     ));
 
     bindings.push(binding(
-        vec![key(
-            Command::CloseWorkspace,
-            KeyCode::Char('x'),
-            KeyModifiers::CONTROL,
-            "^X",
-        )],
-        "close workspace",
+        vec![
+            normal_key(Command::ArmClose, KeyCode::Char('x'), "x"),
+            key(
+                Command::CloseWorkspace,
+                KeyCode::Char('x'),
+                KeyModifiers::CONTROL,
+                "^X",
+            ),
+        ],
+        "close workspace (x twice, ^X at once)",
         "Act",
         None,
     ));
@@ -449,6 +454,7 @@ pub(crate) fn keybindings(app: &App) -> Vec<Keybind> {
         binding(
             vec![
                 key(Command::Back, KeyCode::Esc, KeyModifiers::NONE, "Esc"),
+                normal_key(Command::Back, KeyCode::Char('q'), "q"),
                 key(
                     Command::Back,
                     KeyCode::Char('c'),
