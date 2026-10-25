@@ -1,7 +1,7 @@
 # Helm for Herdr
 
 <p align="center">
-  <strong>One popup to reach every workspace, tab, pane, and directory in Herdr.</strong>
+  <strong>One popup to reach every workspace in Herdr, and every directory you work in.</strong>
 </p>
 
 <p align="center">
@@ -12,9 +12,7 @@
   <img alt="Linux and macOS" src="https://img.shields.io/badge/platform-Linux%20%7C%20macOS-c084fc" />
 </p>
 
-![Helm walking from the api Workspace into web's preview Tab and focusing the vite Pane](docs/assets/changelog/0.6.0-topology.webp)
-
-Helm opens on your live session as Workspace → Tab → Pane, and Enter lands on the exact Pane you picked. Press `/` and type, and the same list reaches what is not open yet: zoxide directories and configured roots. Helm focuses what exists and creates a Workspace for what does not.
+Helm opens on a glance of your open Workspaces, grouped by what needs you and how recently each one was active. Enter opens the selected Workspace at the Tab you used last. Press `/` and type, and the same list reaches zoxide directories and configured roots that are not open yet. Helm focuses what exists and creates a Workspace for what does not.
 
 > [!NOTE]
 > Part of the [Helm](https://github.com/black-atom-industries) family, next to [helm.tmux](https://github.com/black-atom-industries/helm.tmux). Forked from [thanhdat77/herdr-navigator](https://github.com/thanhdat77/herdr-navigator); thanks to thanhdat77 for the foundation.
@@ -47,53 +45,100 @@ width = "90%"
 height = "90%"
 ```
 
-## Topology
+## Glance
 
-With an empty Query, every open Workspace is a four-line block: the Workspace, its Tabs, the selected Tab's Panes, and the selected Pane's detail.
+The glance lists each open Workspace once, in one of five groups:
 
-| Key                  | Action                                                       |
-| -------------------- | ------------------------------------------------------------ |
-| `a`–`g`              | Open the row with that label, for the first five rows        |
-| `j` / `k`, `↓` / `↑` | Move to the next or previous row                             |
-| `Enter`              | Open the selected Workspace at its last active Tab           |
-| `1`–`9`              | Open that Tab of the selected Workspace                      |
-| `]` / `[`            | Jump to the first row of the next group; `[` goes to the current group's first row, then to the previous group's |
-| `!`                  | Jump to the next row that needs you, wrapping around         |
-| `-`                  | Open the previous Workspace                                  |
-| `Shift-J` / `Shift-K` | Scroll the detail pane                                      |
+- **Pinned**: Workspaces marked with `^B`, ahead of everything else.
+- **Needs you**: an agent that is waiting, blocked or done.
+- **Active**: a working agent, or activity within `active_minutes`.
+- **Recent**: activity within `recent_hours`.
+- **Quiet**: everything else.
 
-## Query
+Each group lists its rows by newest activity first. A row has these columns, left to right:
 
-![Typing "do" mixes the docs Workspace with zoxide and root directories, then "infra" opens a new Workspace from a root](docs/assets/changelog/0.6.0-query.webp)
+| Column   | Shows                                                                                   |
+| -------- | --------------------------------------------------------------------------------------- |
+| label    | The `[glance] labels` letter of the first rows, which opens the row                     |
+| status   | The state icon of the Workspace's agent                                                 |
+| name     | The Workspace name                                                                      |
+| branch   | The git branch                                                                          |
+| mark     | `here` on the focused Workspace, `last` on the Previous workspace                       |
+| age      | How long ago the activity that placed the row in its group happened, such as `4m`       |
+| progress | While an agent works, the summed progress of its running subagents, as an 8-cell bar   |
 
-Press `/` and type; until then, letters navigate. The topology turns into flat one-line rows, each showing its destination, then its Source and status on the right. A few tokens narrow the match: `agent` or a bare `@` for agents only, `!claude` for an agent name, `@idle` for a Workspace or status, `#idle` for a status alone, `/dotfiles` for a path.
+The glance reloads Herdr's state every 3 seconds and keeps the selection on the same Workspace. Labels are hidden while you search.
 
-| Row         | Comes from                     | Enter does                                                    |
-| ----------- | ------------------------------ | ------------------------------------------------------------- |
-| `workspace` | Open Workspaces                | Focus the Workspace                                           |
-| `zoxide`    | `zoxide query -l`              | Reuse or create a Workspace there                             |
-| `root`      | Configured `[[roots]]`         | Reuse or create a Workspace there                             |
-| `quick`     | Herdr Plus Quick Actions       | Open the Quick Actions picker                                 |
-| `plugin`    | Your `[[integrations]]`        | Run the integration's open command                            |
-| `bookmark`  | Entries marked with `Ctrl-B`, ranked first | Same as the Entry before it was marked             |
+| Key                  | Action                                                                             |
+| -------------------- | ---------------------------------------------------------------------------------- |
+| `a` `s` `d` `f` `g`  | Open the row with that label. The letters come from `[glance] labels`              |
+| `j` / `k`, `↓` / `↑` | Move to the next or previous row                                                   |
+| `enter`              | Open the selected Workspace at its last active Tab                                 |
+| `1`–`9`              | Open that Tab of the selected Workspace                                            |
+| `]` / `[`            | Jump to the first row of the next group; `[` goes to the current group's first row, then to the previous group |
+| `!`                  | Jump to the next row that needs you, wrapping around                               |
+| `-`                  | Open the Previous workspace                                                        |
+| `^B`                 | Pin or unpin the selected row to the top                                           |
+| `^X`                 | Close the Workspace of the selected row                                            |
+| `J` / `K`            | Scroll the detail pane                                                             |
+| `/`                  | Search                                                                             |
+| `?`                  | Show the keys sheet                                                                |
+| `esc` / `^C`         | Close                                                                              |
 
-The `workspace` rows come from the live session. Each `[sources]` entry in the config can be turned off, and missing optional tools drop out quietly.
+## Detail pane
 
-| Key              | Action                                                               |
-| ---------------- | -------------------------------------------------------------------- |
-| `Ctrl-W`         | Back to the glance of open Workspaces                                |
-| `Ctrl-Q`         | Herdr Plus Quick Actions                                             |
-| `Ctrl-Z` / `Ctrl-R` | zoxide / roots                                                    |
-| `Ctrl-B`         | Pin or unpin the selected Entry to the top                           |
-| `Ctrl-X`         | Close the open Workspace behind the selected Entry                   |
-| `Alt-Enter`      | Open a zoxide or root directory with the shared template             |
-| `Ctrl-U`         | Clear the Query and filter                                           |
-| `Ctrl-Backspace` | Delete the last Query word                                           |
-| `?`              | Show the active keybindings                                          |
-| `Esc`            | Leave Search; outside Search, close                                  |
-| `Ctrl-C`         | Close                                                                |
+Beside the list, the detail pane describes the selected Workspace. It appears when the popup is at least 110 columns wide and takes 45% of the width. It shows:
 
-`[picker.filter_keys]` remaps the Source shortcuts.
+- the Workspace name, branch and path, and numbered Tab chips with the focused Tab filled
+- its agents, with the state of each and the time since that state began
+- running Claude subagents under their agent, each with a `PROGRESS` bar
+- uncommitted changes
+- recent commits
+
+Changes and commits each show up to 6 rows, and `J` and `K` scroll them together. The scroll resets when the selection moves to another row.
+
+### Subagent progress
+
+Subagent progress is read from Claude Code transcripts in `~/.claude/projects`. Helm reads those files and writes nothing. Other agents show no progress.
+
+A subagent counts as running while its transcript changed in the last 10 minutes and its newest progress line is short of its total. The subagent writes that line in its assistant messages:
+
+```text
+PROGRESS: 3/6 · Research markers
+```
+
+A `SubagentStart` hook can add the instruction to each subagent, so the line appears without anyone asking for it.
+
+## Search
+
+Press `/` and type. Search keeps the group layout and narrows the rows in place. A few tokens narrow the match further:
+
+| Token    | Matches                                                   |
+| -------- | --------------------------------------------------------- |
+| `agent`  | Workspaces with an agent. A bare `@` does the same        |
+| `!claude` | An agent name                                            |
+| `@idle`  | Workspace or status text                                  |
+| `#idle`  | Status text only                                          |
+| `/dotfiles` | A path                                                 |
+
+While a Query is active, two more groups follow Quiet:
+
+- **Directories**: zoxide and root directories. `enter` reuses or creates a Workspace there, and `alt-enter` applies the directory template.
+- **Other**: Herdr Plus Quick Actions and your `[[integrations]]`. `enter` runs them.
+
+The source filter keys switch to one source at a time. The rows then form a flat list, one line per Entry, with its Source and status on the right. `^W` returns to the glance.
+
+| Key                 | Action                                                  |
+| ------------------- | ------------------------------------------------------- |
+| `^W`                | Workspaces, back to the glance                          |
+| `^Z` / `^R` / `^Q`  | zoxide / roots / Quick Actions                          |
+| `esc`               | Leave Search and keep the Query                         |
+| `^U`                | Clear the Query and filter                              |
+| `backspace`         | Delete the last Query character                         |
+| `^backspace`        | Delete the last Query word                              |
+| `alt-enter`         | Open a zoxide or root directory with the directory template |
+
+`[picker.filter_keys]` remaps the source filter keys.
 
 ## More moves
 
@@ -113,7 +158,7 @@ The previous Workspace carries a `last` mark in the glance. `[jump_back] enabled
 
 ### Side pane
 
-`helm-herdr.open-side` keeps Helm in a split beside your work. It stays open after `Enter`; invoking the action again focuses it, and invoking it while focused closes it.
+`helm-herdr.open-side` keeps Helm in a split beside your work. It stays open after `enter`; invoking the action again focuses it, and invoking it while focused closes it.
 
 ```toml
 [[keys.command]]
@@ -125,7 +170,7 @@ description = "helm side pane"
 
 ### Directory template
 
-Point `picker.directory_template` at a Herdr Plus project file, and `Alt-Enter` applies its tabs, panes, labels, and commands to any zoxide or root directory. An already open Workspace gets fresh template tabs appended. `Enter` keeps opening normally.
+Point `picker.directory_template` at a Herdr Plus project file, and `alt-enter` applies its tabs, panes, labels, and commands to any zoxide or root directory. An already open Workspace gets fresh template tabs appended. `enter` keeps opening normally.
 
 ## Configuration
 
@@ -155,6 +200,16 @@ path = "~/code"
 max_depth = 2
 ```
 
+The `[glance]` section sets the group windows and the look:
+
+```toml
+[glance]
+active_minutes = 15   # activity this recent places a row in Active
+recent_hours = 4      # activity this recent places a row in Recent; older rows are Quiet
+icons = "unicode"     # "nerd" needs a Nerd Font
+labels = "asdfg"      # keys that open the first visible rows; j and k are reserved
+```
+
 Helm checks GitHub for a new release at most once a day. When one exists, the header shows a badge, and `F5` installs it through Herdr. `picker.check_updates = false` turns that off.
 
 ## Add your own source
@@ -170,7 +225,7 @@ collect = "bookmarks list --json"
 open = "bookmarks open {{id}}"
 ```
 
-`collect` prints an array of `{ "id", "title", "subtitle", "path", "kind" }` objects. Helm shell-quotes each `{{field}}` before running `open`. [`docs/plugin-integrations.md`](docs/plugin-integrations.md) has the full contract.
+`collect` prints an array of `{ "id", "title", "subtitle", "path", "kind" }` objects. Helm shell-quotes each `{{field}}` before running `open`. Integration entries appear in the Other group while you search. [`docs/plugin-integrations.md`](docs/plugin-integrations.md) has the full contract.
 
 ## Requirements
 

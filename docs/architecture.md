@@ -34,6 +34,7 @@ Helm keeps its state in the plugin config directory (`HERDR_PLUGIN_CONFIG_DIR`).
 | `recent-workspaces.json` | Picker and jump back | Workspace IDs per Herdr session, most recent first |
 | `focused-workspace`, `jump-back-workspace` | `track-focus` | The last focused Workspace and the Previous workspace |
 | `activity.json` | `track-focus`, `track-agent` | When each Workspace was last focused and when each Pane's agent status last changed |
+| `pinned-entries.json` | Picker (`^B`) | Marked Entries, which sit in the Pinned group |
 
 `activity.json` has this shape:
 
@@ -69,6 +70,12 @@ src/glance.rs    glance grouping, row signals, ages and status icons
 src/detail.rs    detail pane git reads and Claude subagent transcripts
 src/topology.rs  live Workspace/Tab/Pane model and Git identity
 src/herdr.rs     Herdr CLI and socket calls
+src/recent.rs   recent Workspace order and the Previous workspace per Herdr session
+src/paths.rs     plugin config and state file paths
+src/matcher.rs   Query matching engines
+src/theme.rs     palette, inherited from Herdr when enabled
+src/update.rs    GitHub release check and update install
+src/integrations/ built-in Herdr Plus adapter and command integrations
 ```
 
 ## Query projections
@@ -127,7 +134,7 @@ Helm integrates with Herdr Plus without copying its UI:
 
 ## Configuration boundary
 
-Current Picker keys are `reuse_existing`, `create_missing`, `engine`, `source_order`, `source_priority_boost`, `check_updates`, `directory_template`, `directory_template_key`, and `[picker.filter_keys]`. Other current sections are `[notifications]`, `[jump_back]`, `[glance]`, `[sources]`, `[[roots]]`, and `[[integrations]]`. `[glance]` holds `active_minutes`, `recent_hours`, `icons` and `labels`.
+Current Picker keys are `reuse_existing`, `create_missing`, `engine`, `source_order`, `source_priority_boost`, `check_updates`, `directory_template`, `directory_template_key`, and `[picker.filter_keys]`. Other current sections are `[theme]`, `[notifications]`, `[jump_back]`, `[glance]`, `[sources]`, `[[roots]]`, and `[[integrations]]`. `[glance]` holds `active_minutes`, `recent_hours`, `icons` and `labels`.
 
 ## Color boundary
 

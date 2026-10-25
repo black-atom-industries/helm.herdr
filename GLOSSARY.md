@@ -38,7 +38,7 @@
 | Term | Definition | Aliases to avoid |
 | --- | --- | --- |
 | **Entry** | A navigable destination represented in the Result list. | Result, item |
-| **Entry row** | The one-line rendering of an Entry as `destination | Source | symbol+word status`. | Result row, list item |
+| **Entry row** | The one-line rendering of an Entry in a flat Result list, as `destination | Source | symbol+word status`. | Result row, list item |
 | **Selected entry** | The Entry currently targeted by keyboard or mouse actions. | Highlighted row, active item |
 | **Marked entry** | An Entry explicitly kept ahead of normal source ordering. | Pinned item, favorite |
 | **Entry action** | The operation performed when the User opens the Selected entry. | Result behavior, command |
@@ -56,7 +56,7 @@
 | **Other group** | The group of quick action and plugin Entries, shown in the Glance only while a Query is active. | Other source |
 | **Signal** | The age column of a row, showing when the activity that placed it in its Warmth group happened, such as `4m`. | Reason, badge |
 | **Topology** | The live Workspace → Tab → Pane structure read from Herdr. | Workspace list |
-| **Detail pane** | The part of the Glance beside the list that describes the Selected entry's Workspace: its agents, changes and recent commits. | Side panel, preview |
+| **Detail pane** | The part of the Glance beside the list that describes the Selected entry's Workspace: its Tab chips, agents, changes and recent commits. | Side panel, preview |
 | **Current workspace** | The local Workspace that currently owns the focused Herdr surface. | Active project, current project |
 | **Previous workspace** | The local Workspace visited immediately before the Current workspace. | Last workspace, previous project |
 
