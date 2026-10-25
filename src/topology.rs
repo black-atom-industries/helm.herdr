@@ -54,6 +54,8 @@ pub(crate) struct PaneNode {
     pub(crate) focused: bool,
     pub(crate) title: Option<String>,
     pub(crate) agent: Option<AgentMeta>,
+    /// The Claude session UUID, which names the transcript directory.
+    pub(crate) agent_session: Option<String>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -315,6 +317,10 @@ fn parse_workspaces(
                                 .unwrap_or(false),
                             title,
                             agent,
+                            agent_session: pane
+                                .get("agent_session")
+                                .or_else(|| external.and_then(|value| value.get("agent_session")))
+                                .and_then(|session| value_string(session, &["value"])),
                         }
                     })
                     .collect::<Vec<_>>();

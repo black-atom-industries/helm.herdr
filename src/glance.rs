@@ -286,25 +286,16 @@ fn working_signal(evidence: &Evidence) -> Option<Signal> {
         })
 }
 
-/// Blocked agents read as "waiting" in the signal, the word the user sees.
-fn signal_word(state: AgentState) -> &'static str {
-    match state {
-        AgentState::Blocked => "waiting",
-        other => other.label(),
-    }
-}
-
+/// The age of the activity that placed the row in its group. The detail pane names its source.
 pub(crate) fn signal_text(signal: &Signal, now: i64) -> String {
     match signal {
         Signal::Agent {
-            state,
-            since: Some(at),
-        } => format!("{} {}", signal_word(*state), age(now, *at)),
-        Signal::Agent { state, since: None } => signal_word(*state).to_string(),
-        Signal::Commit(at) => format!("commit {}", age(now, *at)),
-        Signal::Focus(at) => format!("focus {}", age(now, *at)),
-        Signal::Age(at) => age(now, *at),
-        Signal::None => String::new(),
+            since: Some(at), ..
+        }
+        | Signal::Commit(at)
+        | Signal::Focus(at)
+        | Signal::Age(at) => age(now, *at),
+        Signal::Agent { since: None, .. } | Signal::None => String::new(),
     }
 }
 
@@ -400,7 +391,7 @@ mod tests {
             state: AgentState::Blocked,
             since: Some(NOW - 240),
         };
-        assert_eq!(signal_text(&signal, NOW), "waiting 4m");
+        assert_eq!(signal_text(&signal, NOW), "4m");
     }
 
     #[test]
@@ -411,7 +402,7 @@ mod tests {
             THRESHOLDS,
         );
         assert_eq!(verdict.group, Group::Active);
-        assert_eq!(signal_text(&verdict.signal, NOW), "working 14m");
+        assert_eq!(signal_text(&verdict.signal, NOW), "14m");
     }
 
     #[test]
@@ -472,11 +463,11 @@ mod tests {
         };
         assert_eq!(
             signal_text(&classify(&focus_wins, NOW, THRESHOLDS).signal, NOW),
-            "focus 1m"
+            "1m"
         );
         assert_eq!(
             signal_text(&classify(&commit_wins, NOW, THRESHOLDS).signal, NOW),
-            "commit 6m"
+            "6m"
         );
     }
 
@@ -507,7 +498,7 @@ mod tests {
         };
         let verdict = classify(&evidence, NOW, THRESHOLDS);
         assert_eq!(verdict.group, Group::Active);
-        assert_eq!(signal_text(&verdict.signal, NOW), "focus 0s");
+        assert_eq!(signal_text(&verdict.signal, NOW), "0s");
     }
 
     #[test]

@@ -6,6 +6,7 @@ use std::{
 mod activity;
 mod app;
 mod config;
+mod detail;
 mod glance;
 mod herdr;
 mod integrations;

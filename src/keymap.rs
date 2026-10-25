@@ -155,7 +155,7 @@ fn directory_template_key(value: &str) -> Option<KeySpec> {
             Command::OpenTemplate,
             KeyCode::Enter,
             KeyModifiers::ALT,
-            "⌥↵",
+            "alt-enter",
         )),
         _ => {
             let key_char = parse_ctrl_key(value)?;
@@ -163,7 +163,7 @@ fn directory_template_key(value: &str) -> Option<KeySpec> {
                 Command::OpenTemplate,
                 KeyCode::Char(key_char),
                 KeyModifiers::CONTROL,
-                format!("⌃{}", key_char.to_ascii_uppercase()),
+                format!("^{}", key_char.to_ascii_uppercase()),
             ))
         }
     }
@@ -222,7 +222,12 @@ pub(crate) fn keybindings(app: &App) -> Vec<Keybind> {
     }
 
     bindings.push(binding(
-        vec![key(Command::Open, KeyCode::Enter, KeyModifiers::NONE, "↵")],
+        vec![key(
+            Command::Open,
+            KeyCode::Enter,
+            KeyModifiers::NONE,
+            "enter",
+        )],
         "open at last active tab",
         "Open",
         Some("open"),
@@ -273,7 +278,7 @@ pub(crate) fn keybindings(app: &App) -> Vec<Keybind> {
             Command::ToggleMark,
             KeyCode::Char('b'),
             KeyModifiers::CONTROL,
-            "⌃B",
+            "^B",
         )],
         "pin to the top",
         "Act",
@@ -307,7 +312,7 @@ pub(crate) fn keybindings(app: &App) -> Vec<Keybind> {
             "Move",
             None,
         )
-        .keys_as("⇧J ⇧K"),
+        .keys_as("J K"),
     );
 
     if app.directory_template_for_selected().is_some() {
@@ -335,7 +340,7 @@ pub(crate) fn keybindings(app: &App) -> Vec<Keybind> {
             Command::CloseWorkspace,
             KeyCode::Char('x'),
             KeyModifiers::CONTROL,
-            "⌃X",
+            "^X",
         )],
         "close workspace",
         "Act",
@@ -347,7 +352,7 @@ pub(crate) fn keybindings(app: &App) -> Vec<Keybind> {
             Command::Clear,
             KeyCode::Char('u'),
             KeyModifiers::CONTROL,
-            "⌃U",
+            "^U",
         )],
         "clear query and filter",
         "Find",
@@ -358,7 +363,7 @@ pub(crate) fn keybindings(app: &App) -> Vec<Keybind> {
             Command::DeleteChar,
             KeyCode::Backspace,
             KeyModifiers::NONE,
-            "⌫",
+            "backspace",
         )],
         "delete query character",
         "Find",
@@ -373,13 +378,13 @@ pub(crate) fn keybindings(app: &App) -> Vec<Keybind> {
                 Command::DeleteWord,
                 KeyCode::Backspace,
                 KeyModifiers::CONTROL,
-                "⌃⌫",
+                "^backspace",
             ),
             key(
                 Command::DeleteWord,
                 KeyCode::Char('h'),
                 KeyModifiers::CONTROL,
-                "⌃⌫",
+                "^backspace",
             ),
         ],
         "delete query word",
@@ -396,7 +401,7 @@ pub(crate) fn keybindings(app: &App) -> Vec<Keybind> {
                 Command::Filter(source.clone()),
                 KeyCode::Char(filter_key),
                 KeyModifiers::CONTROL,
-                format!("⌃{}", filter_key.to_ascii_uppercase()),
+                format!("^{}", filter_key.to_ascii_uppercase()),
             )],
             source_help_label(&source),
             "Sources",
@@ -448,7 +453,7 @@ pub(crate) fn keybindings(app: &App) -> Vec<Keybind> {
                     Command::Back,
                     KeyCode::Char('c'),
                     KeyModifiers::CONTROL,
-                    "⌃C",
+                    "^C",
                 ),
             ],
             "back, then close",

@@ -66,6 +66,7 @@ src/config.rs    plugin config loading and defaults
 src/model.rs     Source/Entry/EntryAction models
 src/sources.rs   source collectors
 src/glance.rs    glance grouping, row signals, ages and status icons
+src/detail.rs    detail pane git reads and Claude subagent transcripts
 src/topology.rs  live Workspace/Tab/Pane model and Git identity
 src/herdr.rs     Herdr CLI and socket calls
 ```
@@ -91,9 +92,13 @@ The glance has one row per open Workspace, in five Warmth groups:
 - **Recent**: activity within `recent_hours`.
 - **Quiet**: everything else.
 
-Activity is the newest of the Workspace's focus time, its last commit, and the newest agent status change whose status still matches the live state. Each group lists its rows by newest activity first. The Signal text names the fact that placed the row in its group, such as `waiting 4m`, `commit 6m`, `focus 38m` or `9d`.
+Activity is the newest of the Workspace's focus time, its last commit, and the newest agent status change whose status still matches the live state. Each group lists its rows by newest activity first. The Signal column shows only the age of that activity, such as `4m` or `9d`, left-aligned like the other columns. The detail pane names the sources, such as `last commit 6m · focused 38m`.
 
 `here` marks the focused Workspace, and `last` marks the Previous workspace. Search adds a Directories group for root and zoxide matches, and an Other group for quick action and plugin matches, both only while a Query is active. The glance reloads the Herdr snapshot and activity every 3 seconds on a background thread, and reads git identities at open and then every 30 seconds. It keeps the selection on the same Workspace.
+
+The detail pane sits beside the list when the popup is at least 110 columns wide, and takes 45% of the width. It shows the selected Workspace's name, branch and path, numbered tab chips with the focused tab filled, then its agents, uncommitted changes and recent commits. A main agent shows its state and the time since that state began. Running Claude subagents appear under their agent, with a `PROGRESS: n/m` bar read from their transcripts in `~/.claude/projects`; Helm only reads those files. The list's progress bar is the last column of a row. It sums the running subagents of a Workspace into an 8-cell bar, and shows only while the Workspace has a working agent.
+
+Changes and commits come from `git status`, `git diff --numstat` and `git log` on a background thread. Each Workspace's git read is kept for 10 seconds. The changes and commits lists each show up to 6 rows and share one scroll offset, which `Shift-J` and `Shift-K` move. The offset resets when the selection moves to another row.
 
 ## Sources and Enter actions
 

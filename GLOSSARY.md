@@ -54,8 +54,9 @@
 | **Row label** | A letter from `[glance] labels` that opens its Glance row in one keystroke. | Shortcut letter, hotkey |
 | **Warmth group** | One of Pinned, Needs you, Active, Recent, or Quiet, which places a Workspace in the Glance. | Bucket, section |
 | **Other group** | The group of quick action and plugin Entries, shown in the Glance only while a Query is active. | Other source |
-| **Signal** | The fact that placed a row in its Warmth group, shown as text such as `waiting 4m`. | Reason, badge |
+| **Signal** | The age column of a row, showing when the activity that placed it in its Warmth group happened, such as `4m`. | Reason, badge |
 | **Topology** | The live Workspace → Tab → Pane structure read from Herdr. | Workspace list |
+| **Detail pane** | The part of the Glance beside the list that describes the Selected entry's Workspace: its agents, changes and recent commits. | Side panel, preview |
 | **Current workspace** | The local Workspace that currently owns the focused Herdr surface. | Active project, current project |
 | **Previous workspace** | The local Workspace visited immediately before the Current workspace. | Last workspace, previous project |
 

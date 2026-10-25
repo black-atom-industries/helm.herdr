@@ -2,7 +2,7 @@ use std::{
     cmp::Reverse,
     collections::{HashMap, HashSet},
     env, fs,
-    path::Path,
+    path::{Path, PathBuf},
 };
 
 use serde::{Deserialize, Serialize};
@@ -10,12 +10,13 @@ use serde::{Deserialize, Serialize};
 use crate::{
     activity::{now_unix_secs, parse_agent_status_event, ActivityState},
     config::Config,
+    detail::{self, CachedGit, GitDetail, Subagent},
     glance::{self, GlanceRow, Group, Mark, Thresholds},
     herdr::{herdr_json, herdr_json_args, notify_done, notify_error, run_herdr},
     integrations::{command, herdr_plus},
     matcher::match_score,
     model::{Entry, EntryAction, Source, WorkspaceKind, WorkspaceRef},
-    paths::{canonical_str, herdr_plus_quick_actions_dir, plugin_config_dir},
+    paths::{self, canonical_str, herdr_plus_quick_actions_dir, plugin_config_dir},
     recent::RecentState,
     sources::{collect_open_topology, collect_roots, collect_zoxide},
     theme::Theme,
@@ -56,6 +57,12 @@ pub(crate) struct App {
     pub(crate) glance: HashMap<String, GlanceRow>,
     pub(crate) now: i64,
     pub(crate) detail_scroll: DetailScroll,
+    /// Largest useful detail offset, set by the last render.
+    pub(crate) detail_max_offset: usize,
+    /// Running Claude subagents, keyed by pane id.
+    pub(crate) subagents: HashMap<String, Vec<Subagent>>,
+    /// Git reads of the glance workspaces, keyed by workspace key.
+    pub(crate) git_detail: HashMap<String, CachedGit>,
     #[cfg(test)]
     pub(crate) herdr_control: Option<Box<dyn HerdrControl>>,
     initial_selection_pending: bool,
@@ -93,6 +100,9 @@ impl App {
             glance: HashMap::new(),
             now: 0,
             detail_scroll: DetailScroll::default(),
+            detail_max_offset: 0,
+            subagents: HashMap::new(),
+            git_detail: HashMap::new(),
             #[cfg(test)]
             herdr_control: None,
             initial_selection_pending: true,
@@ -169,6 +179,7 @@ impl App {
         self.topology = workspaces.topology;
         self.activity = workspaces.activity;
         self.previous_workspace_id = workspaces.previous;
+        self.subagents = workspaces.subagents;
         self.now = now;
         self.topology_entries = topology::query_entries(&self.topology);
         self.entries
@@ -483,7 +494,75 @@ impl App {
 
     pub(crate) fn scroll_detail(&mut self, delta: isize) {
         self.sync_detail_scroll();
-        self.detail_scroll.offset = self.detail_scroll.offset.saturating_add_signed(delta);
+        let offset = self.detail_scroll.offset.saturating_add_signed(delta);
+        self.detail_scroll.offset = offset.min(self.detail_max_offset);
+    }
+
+    pub(crate) fn workspace_node(&self, entry: &Entry) -> Option<&topology::WorkspaceNode> {
+        let EntryAction::FocusWorkspace { session, id } = &entry.action else {
+            return None;
+        };
+        self.topology
+            .workspaces
+            .iter()
+            .find(|workspace| &workspace.id == id && &workspace.session == session)
+    }
+
+    /// The selected glance workspace, resolved once for rendering and git reads.
+    pub(crate) fn selected_workspace(&self) -> Option<SelectedWorkspace<'_>> {
+        let entry = self.selected_entry()?;
+        let row = self.glance_row(entry)?;
+        let workspace = self.workspace_node(entry)?;
+        let EntryAction::FocusWorkspace { session, id } = &entry.action else {
+            return None;
+        };
+        Some(SelectedWorkspace {
+            entry,
+            workspace,
+            row,
+            key: workspace_key(session.as_deref(), id),
+        })
+    }
+
+    /// The git cache key and working directory of the selected glance workspace.
+    pub(crate) fn detail_target(&self) -> Option<(String, PathBuf)> {
+        let selected = self.selected_workspace()?;
+        (!selected.entry.path.as_os_str().is_empty())
+            .then(|| (selected.key, selected.entry.path.clone()))
+    }
+
+    /// Whether a git read is missing or older than the detail TTL.
+    pub(crate) fn git_refresh_due(&self, key: &str, now: i64) -> bool {
+        self.git_detail
+            .get(key)
+            .is_none_or(|cached| now - cached.fetched_at >= DETAIL_TTL_SECS)
+    }
+
+    pub(crate) fn cache_git(&mut self, key: String, detail: GitDetail, now: i64) {
+        self.git_detail.insert(
+            key,
+            CachedGit {
+                detail,
+                fetched_at: now,
+            },
+        );
+    }
+
+    /// Summed progress of the running subagents in a workspace.
+    pub(crate) fn subagent_progress(
+        &self,
+        workspace: &topology::WorkspaceNode,
+    ) -> Option<(u32, u32)> {
+        let (done, total) = workspace
+            .tabs
+            .iter()
+            .flat_map(|tab| &tab.panes)
+            .filter_map(|pane| self.subagents.get(&pane.id))
+            .flatten()
+            .fold((0, 0), |(done, total), subagent| {
+                (done + subagent.done, total + subagent.total)
+            });
+        (total > 0).then_some((done, total))
     }
 
     /// Resets the detail offset when the selection has moved to another entry.
@@ -1061,10 +1140,12 @@ pub(crate) fn track_agent() -> Result<(), String> {
     update_activity(|activity| activity.record_agent_status(&pane_id, &status, now))
 }
 
+#[derive(Default)]
 pub(crate) struct Workspaces {
     pub(crate) topology: OpenTopology,
     pub(crate) activity: ActivityState,
     pub(crate) previous: Option<String>,
+    pub(crate) subagents: HashMap<String, Vec<Subagent>>,
 }
 
 /// Reads the Herdr snapshot and activity. Git identities come from `cached`
@@ -1082,6 +1163,8 @@ pub(crate) fn load_workspaces(config: &Config, cached: Option<&OpenTopology>) ->
     } else {
         OpenTopology::default()
     };
+    let now = now_unix_secs();
+    let subagents = detail::scan_subagents(&topology, &paths::home().join(".claude/projects"), now);
     Workspaces {
         topology,
         activity: ActivityState::load(),
@@ -1090,6 +1173,7 @@ pub(crate) fn load_workspaces(config: &Config, cached: Option<&OpenTopology>) ->
             .enabled
             .then(|| read_previous_workspace().ok())
             .flatten(),
+        subagents,
     }
 }
 
@@ -1120,6 +1204,15 @@ fn reuse_git(topology: &mut OpenTopology, cached: &OpenTopology) {
     for (index, enriched) in unknown.into_iter().zip(probe.workspaces) {
         topology.workspaces[index].git = enriched.git;
     }
+}
+
+const DETAIL_TTL_SECS: i64 = 10;
+
+pub(crate) struct SelectedWorkspace<'a> {
+    pub(crate) entry: &'a Entry,
+    pub(crate) workspace: &'a topology::WorkspaceNode,
+    pub(crate) row: &'a GlanceRow,
+    pub(crate) key: String,
 }
 
 fn workspace_key(session: Option<&str>, id: &str) -> String {
@@ -1956,6 +2049,7 @@ exit 0
                 },
                 activity: ActivityState::default(),
                 previous: None,
+                subagents: HashMap::new(),
             },
             NOW,
         );
@@ -1996,6 +2090,7 @@ exit 0
                 },
                 activity: ActivityState::default(),
                 previous: None,
+                subagents: HashMap::new(),
             },
             NOW,
         );
@@ -2009,6 +2104,7 @@ exit 0
             topology: OpenTopology { workspaces },
             activity: ActivityState::default(),
             previous: None,
+            subagents: HashMap::new(),
         };
         app.apply_workspaces(
             snapshot(vec![
@@ -2043,6 +2139,7 @@ exit 0
             topology: OpenTopology { workspaces },
             activity: ActivityState::default(),
             previous: None,
+            subagents: HashMap::new(),
         };
         app.apply_workspaces(
             snapshot(vec![
@@ -2069,6 +2166,7 @@ exit 0
                 },
                 activity: ActivityState::default(),
                 previous: None,
+                subagents: HashMap::new(),
             },
             NOW,
         );
@@ -2102,6 +2200,7 @@ exit 0
                 cwd: PathBuf::from("/repos/helm"),
                 focused: false,
                 title: None,
+                agent_session: None,
                 agent: Some(AgentMeta {
                     name: "claude".into(),
                     state: AgentState::Working,
@@ -2116,6 +2215,7 @@ exit 0
                 },
                 activity: ActivityState::default(),
                 previous: None,
+                subagents: HashMap::new(),
             },
             NOW,
         );
@@ -2143,6 +2243,7 @@ exit 0
                 },
                 activity: ActivityState::default(),
                 previous: None,
+                subagents: HashMap::new(),
             },
             NOW,
         );

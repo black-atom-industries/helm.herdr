@@ -1,5 +1,6 @@
 use std::{
     io,
+    path::PathBuf,
     sync::mpsc::{self, Receiver, TryRecvError},
     thread,
     time::{Duration, Instant},
@@ -24,15 +25,16 @@ use ratatui::{
 
 use crate::{
     activity::now_unix_secs,
-    app::{load_workspaces, App, InputMode, Workspaces},
+    app::{load_workspaces, App, InputMode, SelectedWorkspace, Workspaces},
     config::Config,
+    detail::{self, Change, Commit, GitDetail, Subagent},
     glance::{self, Group, Mark},
     keymap::{keybindings, Command},
     model::{Entry, Source},
     paths::home,
     sources::status_icon_at,
     theme::Theme,
-    topology::{repository_color, AgentState, OpenTopology},
+    topology::{repository_color, AgentState, OpenTopology, PaneNode, WorkspaceNode},
 };
 
 fn open_action_error(error: String, persist: bool) -> io::Result<()> {
@@ -51,6 +53,7 @@ pub(crate) fn tui_loop(
     mut update_check: Option<Receiver<Option<String>>>,
 ) -> io::Result<()> {
     enable_raw_mode()?;
+    let mut detail_job: Option<(String, Receiver<GitDetail>)> = None;
     let mut out = io::stdout();
     execute!(out, EnterAlternateScreen, EnableMouseCapture)?;
     let mut terminal = Terminal::new(CrosstermBackend::new(out))?;
@@ -71,9 +74,16 @@ pub(crate) fn tui_loop(
             app.apply_workspaces(workspaces, now_unix_secs());
         }
         app.sync_detail_scroll();
-        terminal.draw(|f| list_hits = draw(f, app))?;
+        drive_detail(app, &mut detail_job, now_unix_secs());
+        let mut detail_max = 0;
+        terminal.draw(|f| {
+            let (hits, max) = draw(f, app);
+            list_hits = hits;
+            detail_max = max;
+        })?;
+        app.detail_max_offset = detail_max;
         let animate = has_working_entry(app);
-        let frame = if animate || update_check.is_some() {
+        let frame = if animate || update_check.is_some() || detail_job.is_some() {
             Duration::from_millis(125)
         } else {
             Duration::from_secs(1)
@@ -155,6 +165,34 @@ const GIT_REFRESH: Duration = Duration::from_secs(30);
 /// Reloads the snapshot and activity every few seconds. Git identities are
 /// read again only once `GIT_REFRESH` has passed; until then they come from
 /// the last load.
+/// Keeps at most one git read in flight for the selected workspace, and stores
+/// its result once it arrives.
+fn drive_detail(app: &mut App, job: &mut Option<(String, Receiver<GitDetail>)>, now: i64) {
+    match job.take() {
+        Some((key, receiver)) => match receiver.try_recv() {
+            Ok(detail) => app.cache_git(key, detail, now),
+            Err(TryRecvError::Empty) => *job = Some((key, receiver)),
+            Err(TryRecvError::Disconnected) => {}
+        },
+        None => {
+            let Some((key, cwd)) = app.detail_target() else {
+                return;
+            };
+            if app.git_refresh_due(&key, now) {
+                *job = Some((key, spawn_git_read(cwd)));
+            }
+        }
+    }
+}
+
+fn spawn_git_read(cwd: PathBuf) -> Receiver<GitDetail> {
+    let (sender, receiver) = mpsc::channel();
+    thread::spawn(move || {
+        let _ = sender.send(detail::read_git(&cwd));
+    });
+    receiver
+}
+
 fn spawn_workspace_refresh(config: Config, mut known: OpenTopology) -> Receiver<Workspaces> {
     let (sender, receiver) = mpsc::channel();
     thread::spawn(move || {
@@ -413,7 +451,7 @@ fn execute_command(app: &mut App, command: Command, key: KeyEvent) -> Action {
     }
 }
 
-fn draw(f: &mut Frame, app: &App) -> ListHits {
+fn draw(f: &mut Frame, app: &App) -> (ListHits, usize) {
     let area = f.area();
     f.render_widget(Clear, area);
 
@@ -427,13 +465,17 @@ fn draw(f: &mut Frame, app: &App) -> ListHits {
         .split(area);
 
     draw_header(f, app, rows[0]);
-    let list_hits = draw_list(f, app, rows[1]);
+    let (list_hits, detail_max) = if app.glance_view() {
+        draw_glance(f, app, rows[1])
+    } else {
+        (draw_list(f, app, rows[1]), 0)
+    };
 
     draw_key_hints(f, app, rows[2]);
     if app.input_mode == InputMode::Help {
         draw_keybindings_help(f, app, area);
     }
-    list_hits
+    (list_hits, detail_max)
 }
 
 const HEADER_COUNTS_MIN_WIDTH: u16 = 90;
@@ -981,7 +1023,35 @@ fn fit_cell(value: &str, width: usize) -> String {
     format!("{clipped}{}", " ".repeat(padding))
 }
 
-fn draw_glance(f: &mut Frame, app: &App, area: Rect) -> ListHits {
+const DETAIL_MIN_WIDTH: u16 = 110;
+const DETAIL_SECTION_MIN_ROWS: usize = 3;
+const DETAIL_SECTION_MAX_ROWS: usize = 6;
+const DETAIL_NUMBER_WIDTH: usize = 6;
+const SUBAGENT_BAR_CELLS: usize = 10;
+
+/// The glance list, with the detail pane on the right when the list is wide enough.
+/// Returns the list hits and the largest useful detail scroll offset.
+fn draw_glance(f: &mut Frame, app: &App, area: Rect) -> (ListHits, usize) {
+    if area.width < DETAIL_MIN_WIDTH {
+        return (draw_glance_list(f, app, area), 0);
+    }
+    let [list, border, detail] = Layout::horizontal([
+        Constraint::Percentage(55),
+        Constraint::Length(1),
+        Constraint::Percentage(45),
+    ])
+    .areas(area);
+    f.render_widget(
+        Block::default()
+            .borders(Borders::LEFT)
+            .border_style(Style::default().fg(app.theme.surface1)),
+        border,
+    );
+    let max_offset = draw_detail(f, app, detail);
+    (draw_glance_list(f, app, list), max_offset)
+}
+
+fn draw_glance_list(f: &mut Frame, app: &App, area: Rect) -> ListHits {
     let visible: Vec<(usize, Group, GlanceCells)> = app
         .filtered
         .iter()
@@ -1063,18 +1133,18 @@ fn draw_glance(f: &mut Frame, app: &App, area: Rect) -> ListHits {
             .and_then(|slot| labels.get(slot))
         {
             Some(ch) => Span::styled(
-                format!(" {ch}"),
+                format!(" {ch} "),
                 Style::default()
                     .fg(app.theme.accent)
                     .bg(app.theme.surface0)
                     .add_modifier(Modifier::BOLD),
             ),
-            None => Span::raw("  "),
+            None => Span::raw("   "),
         };
-        items.push(ListItem::new(Line::from(vec![
+        let mut spans = vec![
             Span::raw(" "),
             label,
-            Span::raw("  "),
+            Span::raw(" "),
             Span::styled(
                 fit_cell(cells.icon, 1),
                 Style::default().fg(cells.icon_color),
@@ -1092,22 +1162,21 @@ fn draw_glance(f: &mut Frame, app: &App, area: Rect) -> ListHits {
                 Style::default().fg(app.theme.subtext0),
             ),
             Span::raw("  "),
-            Span::raw(" ".repeat(GLANCE_PROGRESS_WIDTH)),
-            Span::raw("  "),
             Span::styled(
                 fit_cell(mark, GLANCE_MARK_WIDTH),
                 Style::default().fg(mark_color),
             ),
             Span::raw("  "),
             Span::styled(
-                format!(
-                    "{}{}",
-                    " ".repeat(signal_width.saturating_sub(Span::raw(&cells.signal).width())),
-                    truncate_terminal(&cells.signal, signal_width)
-                ),
+                fit_cell(&cells.signal, signal_width),
                 Style::default().fg(app.theme.subtext0),
             ),
-        ])));
+        ];
+        if let Some(bar) = progress_cell(app, *position) {
+            spans.push(Span::raw("  "));
+            spans.push(bar);
+        }
+        items.push(ListItem::new(Line::from(spans)));
         hit_rows.push(Some(*position));
     }
 
@@ -1143,10 +1212,391 @@ fn draw_glance(f: &mut Frame, app: &App, area: Rect) -> ListHits {
     ListHits { area, rows }
 }
 
-fn draw_list(f: &mut Frame, app: &App, area: Rect) -> ListHits {
-    if app.glance_view() {
-        return draw_glance(f, app, area);
+/// The summed subagent bar of a workspace with a working agent, `None` otherwise.
+fn progress_cell(app: &App, position: usize) -> Option<Span<'static>> {
+    let workspace = app
+        .filtered
+        .get(position)
+        .and_then(|index| app.workspace_node(&app.entries[*index]))?;
+    let working = workspace
+        .tabs
+        .iter()
+        .flat_map(|tab| &tab.panes)
+        .any(|pane| {
+            pane.agent
+                .as_ref()
+                .is_some_and(|agent| agent.state == AgentState::Working)
+        });
+    if !working {
+        return None;
     }
+    let (done, total) = app.subagent_progress(workspace)?;
+    Some(Span::styled(
+        bar(done, total, GLANCE_PROGRESS_WIDTH),
+        Style::default().fg(app.theme.yellow),
+    ))
+}
+
+/// `█` for the done share and `░` for the rest, rounded to the nearest cell.
+fn bar(done: u32, total: u32, cells: usize) -> String {
+    let filled = if total == 0 {
+        0
+    } else {
+        let done = done.min(total) as usize;
+        (done * cells + total as usize / 2) / total as usize
+    };
+    format!("{}{}", "█".repeat(filled), "░".repeat(cells - filled))
+}
+
+/// Draws the detail pane and returns the largest useful scroll offset. The header
+/// and agents sit at the top, and the changes and commits sections are anchored
+/// to the bottom with a height that depends only on the pane height.
+fn draw_detail(f: &mut Frame, app: &App, area: Rect) -> usize {
+    let Some(SelectedWorkspace {
+        entry,
+        workspace,
+        row,
+        key,
+    }) = app.selected_workspace()
+    else {
+        return 0;
+    };
+    let area = Rect {
+        x: area.x + 2,
+        width: area.width.saturating_sub(3),
+        ..area
+    };
+    let width = area.width as usize;
+    let dim = Style::default().fg(app.theme.subtext0);
+
+    let chips = tab_chips(app, workspace);
+    let chips_width: usize = chips.iter().map(|span| span.width()).sum();
+    let name_room = width.saturating_sub(chips_width + 1);
+    let name = truncate_terminal(&row.name, name_room);
+    let branch_room = name_room.saturating_sub(Span::raw(&name).width() + 2);
+    let mut left = vec![Span::styled(
+        name.clone(),
+        Style::default()
+            .fg(app.theme.text)
+            .add_modifier(Modifier::BOLD),
+    )];
+    if branch_room > 0 && !row.branch.is_empty() {
+        left.push(Span::styled(
+            format!("  {}", truncate_terminal(&row.branch, branch_room)),
+            dim,
+        ));
+    }
+    let header = vec![
+        justified(left, chips, width),
+        Line::styled(truncate_end(&display_path(entry), width), dim),
+        Line::styled(truncate_end(&activity_sources(app, workspace), width), dim),
+        Line::styled("─".repeat(width), Style::default().fg(app.theme.surface1)),
+        Line::raw(""),
+    ];
+
+    let git = app.git_detail.get(&key).map(|cached| &cached.detail);
+    let changes: &[Change] = git.map_or(&[], |git| &git.changes);
+    let commits: &[Commit] = git.map_or(&[], |git| &git.commits);
+    let rows = ((area.height as usize).saturating_sub(header.len() + 3) / 2)
+        .clamp(DETAIL_SECTION_MIN_ROWS, DETAIL_SECTION_MAX_ROWS);
+    let lower_height = (3 + 2 * rows).min(area.height as usize) as u16;
+    let [top, bottom] =
+        Layout::vertical([Constraint::Min(0), Constraint::Length(lower_height)]).areas(area);
+
+    let mut top_lines = header;
+    top_lines.extend(agent_lines(app, workspace, width));
+    f.render_widget(Paragraph::new(top_lines), top);
+
+    let changes_overflow = changes.len().saturating_sub(rows);
+    let commits_overflow = commits.len().saturating_sub(rows);
+    let max_offset = changes_overflow + commits_overflow;
+    let offset = app.detail_scroll.offset.min(max_offset);
+    let changes_start = offset.min(changes_overflow);
+    let commits_start = (offset - changes_start).min(commits_overflow);
+    let loaded = git.is_some();
+    let mut lower = changes_section(app, changes, loaded, changes_start, rows, width);
+    lower.push(Line::raw(""));
+    lower.extend(commits_section(
+        app,
+        commits,
+        loaded,
+        commits_start,
+        rows,
+        width,
+    ));
+    f.render_widget(Paragraph::new(lower), bottom);
+    max_offset
+}
+
+/// The activity behind the row's age: the last commit and the last focus.
+fn activity_sources(app: &App, workspace: &WorkspaceNode) -> String {
+    let commit = workspace
+        .git
+        .as_ref()
+        .and_then(|git| git.last_commit_at)
+        .map(|at| format!("last commit {}", glance::age(app.now, at)));
+    let focus = app
+        .activity
+        .workspaces
+        .get(&workspace.id)
+        .map(|recorded| format!("focused {}", glance::age(app.now, recorded.focused_at)));
+    [commit, focus]
+        .into_iter()
+        .flatten()
+        .collect::<Vec<_>>()
+        .join(" · ")
+}
+
+fn tab_chips(app: &App, workspace: &WorkspaceNode) -> Vec<Span<'static>> {
+    let mut spans = Vec::new();
+    for (index, tab) in workspace.tabs.iter().enumerate() {
+        if index > 0 {
+            spans.push(Span::raw(" "));
+        }
+        let number = format!(" {} ", index + 1);
+        let label = format!(" {} ", tab.label);
+        if tab.focused {
+            let style = Style::default()
+                .fg(app.theme.base_background)
+                .bg(app.theme.accent);
+            spans.push(Span::styled(number, style));
+            spans.push(Span::styled(label, style));
+        } else {
+            spans.push(Span::styled(
+                number,
+                Style::default().fg(app.theme.accent).bg(app.theme.surface0),
+            ));
+            spans.push(Span::styled(label, Style::default().fg(app.theme.subtext0)));
+        }
+    }
+    spans
+}
+
+fn agent_lines(app: &App, workspace: &WorkspaceNode, width: usize) -> Vec<Line<'static>> {
+    let panes: Vec<&PaneNode> = workspace
+        .tabs
+        .iter()
+        .flat_map(|tab| &tab.panes)
+        .filter(|pane| pane.agent.is_some())
+        .collect();
+    if panes.is_empty() {
+        return Vec::new();
+    }
+    let dim = Style::default().fg(app.theme.subtext0);
+    let mut lines = vec![Line::styled("AGENTS", dim)];
+    for pane in panes {
+        let Some(agent) = pane.agent.as_ref() else {
+            continue;
+        };
+        let since = app
+            .activity
+            .panes
+            .get(&pane.id)
+            .filter(|recorded| AgentState::parse(&recorded.status) == agent.state)
+            .map(|recorded| recorded.since);
+        let elapsed = since
+            .map(|since| glance::age(app.now, since))
+            .unwrap_or_default();
+        let title = match &pane.title {
+            Some(title) => format!("{} · {title}", agent.name),
+            None => agent.name.clone(),
+        };
+        let title = truncate_terminal(&title, width.saturating_sub(elapsed.len() + 4));
+        let icon = glance::status_icon(agent.state, app.config.glance.icons, app.spinner_tick);
+        lines.push(justified(
+            vec![
+                Span::styled(
+                    icon,
+                    Style::default().fg(agent_state_color(&app.theme, agent.state)),
+                ),
+                Span::raw(" "),
+                Span::styled(title, Style::default().fg(app.theme.text)),
+            ],
+            vec![Span::styled(elapsed, dim)],
+            width,
+        ));
+        for subagent in app.subagents.get(&pane.id).into_iter().flatten() {
+            lines.push(subagent_line(app, subagent, width));
+        }
+    }
+    lines
+}
+
+fn subagent_line(app: &App, subagent: &Subagent, width: usize) -> Line<'static> {
+    let dim = Style::default().fg(app.theme.subtext0);
+    let ratio = format!("{}/{}", subagent.done.min(subagent.total), subagent.total);
+    let elapsed = glance::age(app.now, subagent.started_at);
+    let right_width = SUBAGENT_BAR_CELLS + 1 + ratio.len() + 2 + elapsed.len();
+    let step = truncate_terminal(&subagent.step, width.saturating_sub(4 + right_width + 1));
+    justified(
+        vec![
+            Span::styled("  └ ", dim),
+            Span::styled(step, Style::default().fg(app.theme.text)),
+        ],
+        vec![
+            Span::styled(
+                bar(subagent.done, subagent.total, SUBAGENT_BAR_CELLS),
+                Style::default().fg(app.theme.yellow),
+            ),
+            Span::styled(format!(" {ratio}  {elapsed}"), dim),
+        ],
+        width,
+    )
+}
+
+fn changes_section(
+    app: &App,
+    changes: &[Change],
+    loaded: bool,
+    start: usize,
+    rows: usize,
+    width: usize,
+) -> Vec<Line<'static>> {
+    let dim = Style::default().fg(app.theme.subtext0);
+    let added: u32 = changes.iter().filter_map(|change| change.added).sum();
+    let removed: u32 = changes.iter().filter_map(|change| change.removed).sum();
+    let (heading, totals) = if !loaded || changes.is_empty() {
+        ("CHANGES".to_string(), Vec::new())
+    } else {
+        let heading = match changes.len() {
+            1 => "CHANGES · 1 file".to_string(),
+            count => format!("CHANGES · {count} files"),
+        };
+        (heading, count_spans(Some(added), Some(removed), app))
+    };
+    let mut body = Vec::new();
+    if !loaded {
+        body.push(Line::styled("…", dim));
+    } else if changes.is_empty() {
+        body.push(Line::styled("clean", dim));
+    } else {
+        let (visible, hidden) = window(changes, start, rows);
+        let path_room = width.saturating_sub(2 * DETAIL_NUMBER_WIDTH + 2);
+        for change in visible {
+            let state_color = match change.state {
+                'A' => app.theme.green,
+                'D' => app.theme.red,
+                _ => app.theme.yellow,
+            };
+            body.push(justified(
+                vec![
+                    Span::styled(change.state.to_string(), Style::default().fg(state_color)),
+                    Span::raw(" "),
+                    Span::raw(truncate_left(&change.path, path_room)),
+                ],
+                count_spans(change.added, change.removed, app),
+                width,
+            ));
+        }
+        if let Some(hidden) = hidden {
+            body.push(Line::styled(format!("↓ {hidden} more"), dim));
+        }
+    }
+    let mut lines = vec![justified(vec![Span::styled(heading, dim)], totals, width)];
+    lines.extend(pad_rows(body, rows));
+    lines
+}
+
+fn commits_section(
+    app: &App,
+    commits: &[Commit],
+    loaded: bool,
+    start: usize,
+    rows: usize,
+    width: usize,
+) -> Vec<Line<'static>> {
+    let dim = Style::default().fg(app.theme.subtext0);
+    let mut body = Vec::new();
+    if !loaded {
+        body.push(Line::styled("…", dim));
+    } else if commits.is_empty() {
+        body.push(Line::styled("no commits", dim));
+    } else {
+        let (visible, hidden) = window(commits, start, rows);
+        for commit in visible {
+            let age = glance::age(app.now, commit.committed_at);
+            let subject_room = width.saturating_sub(commit.hash.len() + 2 + age.len() + 1);
+            body.push(justified(
+                vec![
+                    Span::styled(commit.hash.clone(), Style::default().fg(app.theme.accent)),
+                    Span::raw("  "),
+                    Span::raw(truncate_end(&commit.subject, subject_room)),
+                ],
+                vec![Span::styled(age, dim)],
+                width,
+            ));
+        }
+        if let Some(hidden) = hidden {
+            body.push(Line::styled(format!("↓ {hidden} more"), dim));
+        }
+    }
+    let mut lines = vec![Line::styled("RECENT COMMITS", dim)];
+    lines.extend(pad_rows(body, rows));
+    lines
+}
+
+/// The rows of `items` from `start`. When more follow, the last row becomes a
+/// count of the hidden items.
+fn window<T>(items: &[T], start: usize, rows: usize) -> (&[T], Option<usize>) {
+    let rest = items.len().saturating_sub(start);
+    if rest <= rows {
+        (&items[start..], None)
+    } else {
+        (&items[start..start + rows - 1], Some(rest - (rows - 1)))
+    }
+}
+
+fn pad_rows(mut body: Vec<Line<'static>>, rows: usize) -> Vec<Line<'static>> {
+    body.resize_with(rows, || Line::raw(""));
+    body
+}
+
+fn count_spans(added: Option<u32>, removed: Option<u32>, app: &App) -> Vec<Span<'static>> {
+    let shown = |value: Option<u32>, sign: char| {
+        value
+            .filter(|count| *count > 0)
+            .map(|count| format!("{sign}{count}"))
+            .unwrap_or_default()
+    };
+    vec![
+        Span::styled(
+            format!("{:>width$}", shown(added, '+'), width = DETAIL_NUMBER_WIDTH),
+            Style::default().fg(app.theme.green),
+        ),
+        Span::styled(
+            format!(
+                "{:>width$}",
+                shown(removed, '-'),
+                width = DETAIL_NUMBER_WIDTH
+            ),
+            Style::default().fg(app.theme.red),
+        ),
+    ]
+}
+
+/// Puts `left` at the start and `right` at the end of one `width`-wide line.
+fn justified(left: Vec<Span<'static>>, right: Vec<Span<'static>>, width: usize) -> Line<'static> {
+    let used: usize = left.iter().chain(&right).map(|span| span.width()).sum();
+    let mut spans = left;
+    spans.push(Span::raw(" ".repeat(width.saturating_sub(used))));
+    spans.extend(right);
+    Line::from(spans)
+}
+
+fn truncate_left(value: &str, max_chars: usize) -> String {
+    let count = value.chars().count();
+    if count <= max_chars {
+        return value.into();
+    }
+    if max_chars == 0 {
+        return String::new();
+    }
+    std::iter::once('…')
+        .chain(value.chars().skip(count - (max_chars - 1)))
+        .collect()
+}
+
+fn draw_list(f: &mut Frame, app: &App, area: Rect) -> ListHits {
     let row_width = area.width.saturating_sub(3) as usize;
     let source_width = source_column_width(app);
     let detailed_layout = detailed_layout(app, row_width, source_width);
@@ -1713,6 +2163,7 @@ mod tests {
             cwd: PathBuf::from(cwd),
             focused: false,
             title: None,
+            agent_session: None,
             agent: agent.map(|(name, state)| AgentMeta {
                 name: name.into(),
                 state,
@@ -1759,6 +2210,7 @@ mod tests {
                 topology: OpenTopology { workspaces },
                 activity,
                 previous: previous.map(str::to_string),
+                subagents: Default::default(),
             },
             now,
         );
@@ -1768,7 +2220,7 @@ mod tests {
     fn render_app(app: &App, width: u16, height: u16) -> (Vec<String>, ListHits) {
         let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
         let mut hits = ListHits::default();
-        terminal.draw(|f| hits = draw(f, app)).unwrap();
+        terminal.draw(|f| hits = draw(f, app).0).unwrap();
         let text = buffer_text(&terminal);
         (text.lines().map(str::to_string).collect(), hits)
     }
@@ -1824,7 +2276,7 @@ mod tests {
             activity,
         );
 
-        let (lines, _) = render_app(&app, 110, 20);
+        let (lines, _) = render_app(&app, 100, 20);
         let headings = ["NEEDS YOU · 1", "ACTIVE · 1", "RECENT · 1", "QUIET · 1"]
             .map(|label| line_index(&lines, label));
         assert!(headings.windows(2).all(|pair| pair[0] < pair[1]));
@@ -1841,6 +2293,7 @@ mod tests {
     #[test]
     fn glance_rows_align_branch_and_signal_columns_across_rows() {
         let mut activity = ActivityState::default();
+        activity.record_agent_status("p-helm", "working", NOW - 14 * 60);
         activity.record_agent_status("p-skills", "blocked", NOW - 4 * 60);
         let app = glance_app(
             NOW,
@@ -1873,25 +2326,25 @@ mod tests {
             activity,
         );
 
-        let (lines, _) = render_app(&app, 110, 20);
+        let (lines, _) = render_app(&app, 100, 20);
         let rows = [
-            ("helm-branch", "helm", "working"),
-            ("skills-branch", "skills", "waiting 4m"),
-            ("lazyjira-branch", "lazyjira", "commit 2h"),
+            ("helm-branch", "helm", "14m"),
+            ("skills-branch", "skills", "4m"),
+            ("lazyjira-branch", "lazyjira", "2h"),
         ];
         let branch_columns: Vec<usize> = rows
             .iter()
             .map(|(branch, _, _)| column_of(&lines[line_index(&lines, branch)], branch))
             .collect();
         assert!(branch_columns.windows(2).all(|pair| pair[0] == pair[1]));
-        let signal_ends: Vec<usize> = rows
+        let signal_starts: Vec<usize> = rows
             .iter()
             .map(|(_, name, signal)| {
                 let line = &lines[line_index(&lines, name)];
-                column_of(line, signal) + signal.chars().count()
+                column_of(line, signal)
             })
             .collect();
-        assert!(signal_ends.windows(2).all(|pair| pair[0] == pair[1]));
+        assert!(signal_starts.windows(2).all(|pair| pair[0] == pair[1]));
     }
 
     #[test]
@@ -1907,7 +2360,7 @@ mod tests {
             ActivityState::default(),
         );
 
-        let (lines, _) = render_app(&app, 110, 20);
+        let (lines, _) = render_app(&app, 100, 20);
         assert!(lines[line_index(&lines, "helm")].contains("here"));
         assert!(lines[line_index(&lines, "skills")].contains("last"));
         assert!(!lines[line_index(&lines, "koyo")].contains("here"));
@@ -2298,6 +2751,7 @@ mod tests {
             ActivityState::default(),
         );
 
+        app.detail_max_offset = 10;
         handle_key(&mut app, shift_key('J'));
         handle_key(&mut app, shift_key('J'));
         assert_eq!(app.detail_scroll.offset, 2);
@@ -2336,7 +2790,7 @@ mod tests {
         app.rebuild_glance();
         app.apply_filter();
 
-        let (lines, _) = render_app(&app, 160, 40);
+        let (lines, _) = render_app(&app, 100, 40);
         let label_at = |name: &str| lines[line_index(&lines, name)].chars().nth(2).unwrap();
         assert_eq!(label_at("golf"), 'a');
         assert_eq!(label_at("alpha"), 's');
@@ -2347,7 +2801,7 @@ mod tests {
         assert_eq!(label_at("foxtrot"), ' ');
 
         handle_key(&mut app, key(KeyCode::Char('/')));
-        let (lines, _) = render_app(&app, 160, 40);
+        let (lines, _) = render_app(&app, 100, 40);
         assert_eq!(lines[line_index(&lines, "golf")].chars().nth(2), Some(' '));
     }
 
@@ -2395,23 +2849,22 @@ mod tests {
         assert!(wide[0].contains("1 active"));
         assert!(wide[0].contains("1 quiet"));
         assert!(!wide[0].contains("recent"));
-        assert!(wide[1].contains("⌃W workspaces"));
-        assert!(wide[1].contains("⌃R roots"));
-        assert!(wide[1].contains("⌃Z zoxide"));
+        assert!(wide[1].contains("^W workspaces"));
+        assert!(wide[1].contains("^R roots"));
+        assert!(wide[1].contains("^Z zoxide"));
         let footer = wide.last().unwrap();
         assert!(footer.contains("a–g open row"));
-        assert!(footer.contains("↵ open"));
+        assert!(footer.contains("enter open"));
         assert!(footer.contains("1–9 tab"));
         assert!(footer.contains("] [ group"));
         assert!(footer.contains("! needs you"));
         assert!(footer.contains("/ search"));
-        assert!(footer.contains("⌃B pin"));
+        assert!(footer.contains("^B pin"));
         assert!(footer.ends_with("? keys   esc close"));
 
         let (narrow, _) = render_app(&app, 100, 40);
         let footer = narrow.last().unwrap();
         assert!(footer.contains("a–g open row"));
-        assert!(footer.contains("⌃B pin"));
         assert!(footer.ends_with("? keys   esc close"));
     }
 
@@ -2427,7 +2880,7 @@ mod tests {
         let footer = lines.last().unwrap();
         assert!(footer.contains("a–g open row"));
         assert!(!footer.contains("/ search"));
-        assert!(!footer.contains("⌃B pin"));
+        assert!(!footer.contains("^B pin"));
         assert!(footer.ends_with("? keys   esc close"));
     }
 
@@ -2486,7 +2939,217 @@ mod tests {
         for section in [" Move", " Open", " Find", " Sources", " Act"] {
             assert!(text.contains(section), "{section}");
         }
-        assert!(text.contains("⇧J ⇧K"));
+        assert!(text.contains("J K"));
         assert!(text.contains("a–g"));
+    }
+
+    const WORKSPACE_KEY: &str = "<default>::w1";
+
+    fn subagent(step: &str, done: u32, total: u32, started_at: i64) -> Subagent {
+        Subagent {
+            step: step.into(),
+            done,
+            total,
+            started_at,
+        }
+    }
+
+    fn commits() -> Vec<Commit> {
+        vec![
+            Commit {
+                hash: "3f1a9c0".into(),
+                subject: "Cycle checkboxes in visual mode".into(),
+                committed_at: NOW - 7_200,
+            },
+            Commit {
+                hash: "b82e4d1".into(),
+                subject: "Keep indentation on list continuation".into(),
+                committed_at: NOW - 86_400,
+            },
+        ]
+    }
+
+    fn dirty_git() -> GitDetail {
+        GitDetail {
+            changes: vec![
+                Change {
+                    state: 'M',
+                    path: "lua/mdn/lists.lua".into(),
+                    added: Some(42),
+                    removed: Some(12),
+                },
+                Change {
+                    state: 'A',
+                    path: "tests/lists_spec.lua".into(),
+                    added: Some(31),
+                    removed: Some(0),
+                },
+                Change {
+                    state: '?',
+                    path: "notes.md".into(),
+                    added: None,
+                    removed: None,
+                },
+            ],
+            commits: commits(),
+        }
+    }
+
+    /// One workspace with three tabs, the first holding `panes`.
+    fn detail_app(panes: Vec<PaneNode>, focused_tab: usize, activity: ActivityState) -> App {
+        let mut workspace = glance_workspace("w1", "helm.herdr", true, Some(NOW - 360), panes);
+        workspace.tabs[0].label = "Agents".into();
+        for label in ["Edit", "Shells"] {
+            workspace.tabs.push(TabNode {
+                id: format!("w1:{label}"),
+                label: label.into(),
+                focused: false,
+                panes: Vec::new(),
+            });
+        }
+        for (index, tab) in workspace.tabs.iter_mut().enumerate() {
+            tab.focused = index == focused_tab;
+        }
+        glance_app(NOW, None, vec![workspace], activity)
+    }
+
+    fn claude_pane() -> PaneNode {
+        pane(
+            "p1",
+            "/repos/helm.herdr",
+            Some(("claude", AgentState::Working)),
+        )
+    }
+
+    #[test]
+    fn detail_sections_keep_their_height_for_clean_and_dirty_repos() {
+        let mut clean = detail_app(vec![claude_pane()], 0, ActivityState::default());
+        clean.cache_git(
+            WORKSPACE_KEY.into(),
+            GitDetail {
+                changes: Vec::new(),
+                commits: commits(),
+            },
+            NOW,
+        );
+        let mut dirty = detail_app(vec![claude_pane()], 0, ActivityState::default());
+        dirty.cache_git(WORKSPACE_KEY.into(), dirty_git(), NOW);
+
+        let (clean_lines, _) = render_app(&clean, 180, 45);
+        let (dirty_lines, _) = render_app(&dirty, 180, 45);
+        assert_eq!(
+            line_index(&clean_lines, "RECENT COMMITS"),
+            line_index(&dirty_lines, "RECENT COMMITS")
+        );
+        assert!(clean_lines.iter().any(|line| line.contains("clean")));
+        assert!(dirty_lines
+            .iter()
+            .any(|line| line.contains("CHANGES · 3 files")));
+    }
+
+    #[test]
+    fn detail_pane_hides_below_110_columns() {
+        let app = detail_app(vec![claude_pane()], 0, ActivityState::default());
+        let (narrow, _) = render_app(&app, 109, 40);
+        assert!(!narrow.iter().any(|line| line.contains('│')));
+        let (wide, _) = render_app(&app, 110, 40);
+        assert!(wide.iter().any(|line| line.contains('│')));
+    }
+
+    #[test]
+    fn tab_chips_do_not_move_when_the_focused_tab_changes() {
+        let first = render_app(
+            &detail_app(vec![claude_pane()], 0, ActivityState::default()),
+            180,
+            45,
+        )
+        .0;
+        let second = render_app(
+            &detail_app(vec![claude_pane()], 1, ActivityState::default()),
+            180,
+            45,
+        )
+        .0;
+        assert_eq!(first, second);
+        assert!(first.iter().any(|line| line.contains("1  Agents")));
+    }
+
+    #[test]
+    fn list_progress_shows_only_for_workspaces_with_a_working_agent() {
+        let mut app = glance_app(
+            NOW,
+            None,
+            vec![
+                glance_workspace(
+                    "w1",
+                    "helm",
+                    true,
+                    None,
+                    vec![pane(
+                        "p-helm",
+                        "/repos/helm",
+                        Some(("claude", AgentState::Working)),
+                    )],
+                ),
+                glance_workspace(
+                    "w2",
+                    "skills",
+                    false,
+                    None,
+                    vec![pane(
+                        "p-skills",
+                        "/repos/skills",
+                        Some(("claude", AgentState::Blocked)),
+                    )],
+                ),
+            ],
+            ActivityState::default(),
+        );
+        for id in ["p-helm", "p-skills"] {
+            app.subagents
+                .insert(id.into(), vec![subagent("Port the tests", 3, 6, NOW - 192)]);
+        }
+        let (lines, _) = render_app(&app, 100, 20);
+        assert!(lines[line_index(&lines, "helm")].contains("████░░░░"));
+        assert!(!lines[line_index(&lines, "skills")].contains('█'));
+    }
+
+    #[test]
+    fn list_progress_column_shows_summed_subagent_progress() {
+        let mut app = detail_app(vec![claude_pane()], 0, ActivityState::default());
+        app.subagents.insert(
+            "p1".into(),
+            vec![subagent("Port the tests", 3, 6, NOW - 192)],
+        );
+        let (lines, _) = render_app(&app, 100, 40);
+        assert!(lines[line_index(&lines, "helm.herdr")].contains("████░░░░"));
+    }
+
+    #[test]
+    fn glance_detail_renders_agents_changes_and_commits_at_180_by_45() {
+        let mut agent = claude_pane();
+        agent.title = Some("Port the glance detail pane".into());
+        let mut activity = ActivityState::default();
+        activity.record_agent_status("p1", "working", NOW - 14 * 60);
+        let mut app = detail_app(vec![agent], 0, activity);
+        app.subagents.insert(
+            "p1".into(),
+            vec![
+                subagent("Port the list continuation tests", 4, 6, NOW - 192),
+                subagent("Research concealed list markers", 1, 4, NOW - 48),
+            ],
+        );
+        app.cache_git(WORKSPACE_KEY.into(), dirty_git(), NOW);
+
+        let (lines, _) = render_app(&app, 180, 45);
+        assert!(line_index(&lines, "AGENTS") < line_index(&lines, "CHANGES · 3 files"));
+        assert!(line_index(&lines, "CHANGES · 3 files") < line_index(&lines, "RECENT COMMITS"));
+        assert!(lines
+            .iter()
+            .any(|line| line.contains("└ Port the list continuation tests")));
+        assert!(lines.iter().any(|line| line.contains("1  Agents")));
+        if let Ok(path) = std::env::var("HELM_GLANCE_DUMP") {
+            std::fs::write(path, lines.join("\n")).unwrap();
+        }
     }
 }
