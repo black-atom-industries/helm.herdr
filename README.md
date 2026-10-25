@@ -65,7 +65,7 @@ The arrow keys mirror `h` `j` `k` `l`.
 
 ![Typing "do" mixes the docs Workspace with zoxide and root directories, then "infra" opens a new Workspace from a root](docs/assets/changelog/0.6.0-query.webp)
 
-Press `/` and type; until then, letters navigate. The topology turns into flat one-line rows, each showing its Source, status, and destination. A few tokens narrow the match: `agent` or a bare `@` for agents only, `!claude` for an agent name, `@idle` for a Workspace or status, `#idle` for a status alone, `/dotfiles` for a path.
+Press `/` and type; until then, letters navigate. The topology turns into flat one-line rows, each showing its destination, then its Source and status on the right. A few tokens narrow the match: `agent` or a bare `@` for agents only, `!claude` for an agent name, `@idle` for a Workspace or status, `#idle` for a status alone, `/dotfiles` for a path.
 
 | Row         | Comes from                     | Enter does                                                    |
 | ----------- | ------------------------------ | ------------------------------------------------------------- |

@@ -38,7 +38,7 @@
 | Term | Definition | Aliases to avoid |
 | --- | --- | --- |
 | **Entry** | A navigable destination represented in the Result list. | Result, item |
-| **Entry row** | The one-line rendering of an Entry as `Source | symbol+word status | destination`. | Result row, list item |
+| **Entry row** | The one-line rendering of an Entry as `destination | Source | symbol+word status`. | Result row, list item |
 | **Selected entry** | The Entry currently targeted by keyboard or mouse actions. | Highlighted row, active item |
 | **Marked entry** | An Entry explicitly kept ahead of normal source ordering. | Pinned item, favorite |
 | **Entry action** | The operation performed when the User opens the Selected entry. | Result behavior, command |

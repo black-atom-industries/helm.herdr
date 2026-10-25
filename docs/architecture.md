@@ -44,7 +44,7 @@ src/herdr.rs     Herdr CLI and socket calls
 The projections are exclusive:
 
 - An empty Query with no Source filter or the Workspace Source filter shows the live Topology. Each Workspace is one fixed four-line block: Workspace identity, `tabs`, the selected Tab's `panes`, and selected Pane detail.
-- A typed Query, or any non-Workspace Source filter, shows a flat Result list. Each row is one terminal line in the order `Source | symbol+word status | destination`.
+- A typed Query, or any non-Workspace Source filter, shows a flat Result list. Each row is one terminal line in the order `destination | Source | symbol+word status`, with Source and status pinned to the right edge.
 
 The exact `agent` Query token scopes results to agent Entries. `!name` narrows agent names, `@text` matches agent workspace or status text, `/path` matches paths, and `#status` matches status text. Marked Entries use the visible `bookmark` Source while keeping one destination row.
 

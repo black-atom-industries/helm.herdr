@@ -891,7 +891,7 @@ fn detailed_layout(app: &App, row_width: usize, source_width: usize) -> Detailed
         .max()
         .unwrap_or(0);
     let status_width = state_width.saturating_add(2);
-    let source_budget = source_width.saturating_add(1);
+    let source_budget = source_width.saturating_add(2);
     let right_width = metadata_width(row_width.saturating_add(3) as u16).min(
         row_width.saturating_sub(source_budget.saturating_add(status_width).saturating_add(4)),
     );
@@ -1147,7 +1147,6 @@ fn draw_list(f: &mut Frame, app: &App, area: Rect) -> ListHits {
                     )
                 })
                 .unwrap_or_default();
-            let status_text_width = Span::raw(&status_text).width();
             let topology_entry = is_topology_entry(e);
             let raw_path = e.path.display().to_string();
             let raw_metadata = if topology_entry || e.source == Source::Agent {
@@ -1166,7 +1165,7 @@ fn draw_list(f: &mut Frame, app: &App, area: Rect) -> ListHits {
             };
             let metadata_width = Span::raw(&metadata).width();
             let path_width = row_width
-                .saturating_sub(source_width.saturating_add(1))
+                .saturating_sub(source_width.saturating_add(2))
                 .saturating_sub(detailed_layout.status_width)
                 .saturating_sub(detailed_layout.title_width)
                 .saturating_sub(2)
@@ -1186,17 +1185,7 @@ fn draw_list(f: &mut Frame, app: &App, area: Rect) -> ListHits {
             let status_color = status
                 .map(|status| agent_status_color(&app.theme, status))
                 .unwrap_or(color);
-            let mut title_spans = source_spans(app, e, source_width);
-            title_spans.extend([
-                Span::styled(status_text, Style::default().fg(status_color)),
-                Span::raw(
-                    " ".repeat(
-                        detailed_layout
-                            .status_width
-                            .saturating_sub(status_text_width),
-                    ),
-                ),
-            ]);
+            let mut title_spans = Vec::new();
             if topology_entry {
                 let destination_width_used = Span::raw(&destination).width();
                 title_spans.extend(breadcrumb_spans(app, e, &destination));
@@ -1227,6 +1216,10 @@ fn draw_list(f: &mut Frame, app: &App, area: Rect) -> ListHits {
                     " ".repeat(detailed_layout.right_width.saturating_sub(metadata_width)),
                 ));
             }
+            title_spans.push(Span::raw(" "));
+            title_spans.extend(source_spans(app, e, source_width));
+            title_spans.push(Span::raw(" "));
+            title_spans.push(Span::styled(status_text, Style::default().fg(status_color)));
             items.push(ListItem::new(Line::from(title_spans)));
         }
         item_entries.push(Some(row));
@@ -1374,7 +1367,7 @@ mod tests {
             ("tab", "repo › main › Tab"),
             ("pane", "repo › main › Tab › Pane"),
         ];
-        let mut destination_column = None;
+        let mut source_column = None;
         for (source, destination) in rows {
             let (row_index, line) = text
                 .lines()
@@ -1383,14 +1376,9 @@ mod tests {
                 .unwrap();
             assert!(!line.contains("old-"));
             assert!(!line.contains("/old/"));
-            assert_eq!(line.find(source), Some(0));
-            let destination_start = line.find(destination).unwrap();
-            let column = Span::raw(&line[..destination_start]).width();
-            if let Some(expected) = destination_column {
-                assert_eq!(column, expected);
-            } else {
-                destination_column = Some(column);
-            }
+            assert!(line.starts_with(destination));
+            let column = text_column(line, &format!(" {source} "));
+            assert_eq!(*source_column.get_or_insert(column), column);
             let repository_start = line.find("repo").unwrap() as u16;
             let repository_cell = &buffer[(repository_start, row_index as u16)];
             assert_eq!(repository_cell.fg, repository_color);
@@ -1479,6 +1467,10 @@ mod tests {
         assert_eq!(cursor.depth, TopologyDepth::Tab);
     }
 
+    fn text_column(line: &str, needle: &str) -> usize {
+        Span::raw(&line[..line.find(needle).unwrap()]).width()
+    }
+
     fn entry(source: Source, title: &str) -> Entry {
         Entry {
             source,
@@ -1538,7 +1530,7 @@ mod tests {
     }
 
     #[test]
-    fn flat_rows_put_status_before_aligned_destinations() {
+    fn flat_rows_put_destination_before_aligned_type_and_status() {
         let mut app = App::new(Config::default(), Theme::terminal());
         let mut idle = entry(Source::Agent, "first-destination");
         idle.search_terms.push("agent-status:idle".into());
@@ -1569,6 +1561,7 @@ mod tests {
             ("third-destination", "⠋", "working", app.theme.yellow),
         ];
 
+        let mut type_column = None;
         for (destination, symbol, status, color) in expected {
             let (row, line) = text
                 .lines()
@@ -1576,15 +1569,20 @@ mod tests {
                 .find(|(_, line)| line.contains(destination))
                 .unwrap();
             assert_eq!(line.matches(status).count(), 1);
-            assert_eq!(line.chars().take(5).collect::<String>(), "agent");
-            assert_eq!(line.chars().nth(9), symbol.chars().next());
+            assert!(line.starts_with(destination));
+            let column = text_column(line, "agent");
+            assert_eq!(*type_column.get_or_insert(column), column);
+            let symbol_x = column + 10;
+            assert_eq!(line.chars().nth(symbol_x), symbol.chars().next());
             assert_eq!(
-                line.chars().skip(11).take(status.len()).collect::<String>(),
+                line.chars()
+                    .skip(symbol_x + 2)
+                    .take(status.len())
+                    .collect::<String>(),
                 status
             );
-            assert_eq!(line.chars().nth(18), destination.chars().next());
-            assert_eq!(buffer[(9, row as u16)].fg, color);
-            assert_eq!(buffer[(11, row as u16)].fg, color);
+            assert_eq!(buffer[(symbol_x as u16, row as u16)].fg, color);
+            assert_eq!(buffer[(symbol_x as u16 + 2, row as u16)].fg, color);
         }
 
         let (_row, ordinary_line) = text
@@ -1592,9 +1590,12 @@ mod tests {
             .enumerate()
             .find(|(_, line)| line.contains("ordinary"))
             .unwrap();
-        assert!(ordinary_line.chars().skip(9).take(9).all(|c| c == ' '));
-        assert_eq!(ordinary_line.chars().nth(18), Some('o'));
+        assert!(ordinary_line.starts_with("ordinary"));
         assert!(ordinary_line.contains("remaining metadata"));
+        assert_eq!(
+            text_column(ordinary_line, " open "),
+            type_column.unwrap() - 1
+        );
     }
 
     fn topology_test_app() -> App {
@@ -2161,8 +2162,8 @@ mod tests {
             .find(|(_, line)| line.contains("Destination"))
             .unwrap();
         let line = line.to_string();
-        let source_x = line.find("open").unwrap() as u16;
-        let parent_x = line.find("repo").unwrap() as u16;
+        let source_x = text_column(&line, "open") as u16;
+        let parent_x = text_column(&line, "repo") as u16;
         assert_eq!(buffer[(source_x, row as u16)].fg, flat.theme.overlay0);
         assert!(!buffer[(source_x, row as u16)]
             .modifier
