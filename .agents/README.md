@@ -5,8 +5,7 @@ Compact, agent-only operating context for Helm for Herdr.
 ## Reading order
 
 1. This file for local workflow conventions.
-2. `.agents/product-marketing.md` only for product positioning or marketing work.
-3. Source code and `herdr-plugin.toml` remain authoritative for implementation behavior.
+2. Source code and `herdr-plugin.toml` remain authoritative for implementation behavior.
 
 ## Designs
 
@@ -14,7 +13,7 @@ Design canvases (Claude Design artifacts), newest first. The code is authoritati
 
 | Date | Canvas | Covers |
 | --- | --- | --- |
-| 2026-10-25 | [Helm glance view](https://claude.ai/artifact/C6Sf6rv3FMeJYUXDr49swT) | Glance list, detail pane, keymap, here/last marks, status icons. Code differs: key hints use ASCII names, and the list ends with a plain age and the progress bar. |
+| 2026-10-25 | [Helm glance view](https://claude.ai/artifact/C6Sf6rv3FMeJYUXDr49swT) | Glance list, detail pane, keymap, here/last marks, status icons. Row D is the glance as built on 2026-10-26; rows A–C are earlier explorations. Row E covers sessions: other sessions in Needs you only, the ^S sessions view, session mark variants, the switch flow with the tab bar segment. Row F walks the session flows as stories, screen by screen, and is the approved sessions design (Compare A: other sessions inside Needs you with an @session tag). |
 
 ## Local test build
 
