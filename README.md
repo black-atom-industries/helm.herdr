@@ -62,7 +62,7 @@ Every open Workspace sits in one group:
 
 Activity is the newest of three things: when you last focused the Workspace, its last commit, and its agents' last state change. Each row shows how long ago that was, such as `4m`.
 
-A row also shows its agent's state icon and the git branch. Right after the row's letter, `●` sits on the Workspace you are in and a dim `◌` on the one before. While an agent works, a bar at the end of the row sums the progress of its subagents. The last line of the list is a legend for these marks and icons: here, last, working, waits, done and idle. It shows in the Sessions view too, and a narrow list drops legend entries from the right.
+A row also shows its agent's state icon and the git branch. While an agent works, a bar at the end of the row sums the progress of its subagents. A dim header row at the top of the list names the columns, KEY, ST, WORKSPACE, BRANCH, AGE and PROGRESS, and stays in place while the rows scroll. The last line of the list is a legend for the state icons: working, waits, done and idle. It shows in the Sessions view too, and a narrow list drops legend entries from the right.
 
 The first five rows get a letter (`a` `s` `d` `f` `g`). Press it once to select the row, twice to open it. Rows hold their place while Helm is open, so the letters don't jump around under you.
 
@@ -86,7 +86,7 @@ tab_bar_right = [
 
 ### Sessions view
 
-`^S` lists your Herdr sessions, one row each. Running holds the session you are in, marked `●`, then the others by their newest Workspace focus or agent change. Stopped holds the sessions that don't answer, dimmed, with `start` where the count would be. A row shows the session's most urgent agent icon, `N need you` when Workspaces wait on you, its Workspace count, and the age of its newest activity. Search narrows the rows by session name.
+`^S` lists your Herdr sessions, one row each. Running holds the session you are in, then the others by their newest Workspace focus or agent change. Stopped holds the sessions that don't answer, dimmed, with `start` where the count would be. A row shows the session's most urgent agent icon, `N need you` when Workspaces wait on you, its Workspace count, and the age of its newest activity, under the headers KEY, SESSION, WORKSPACES and AGE. Search narrows the rows by session name.
 
 The detail pane shows the selected session's directory and state, then its Workspaces in Needs you, Hot, Warm and Cold, numbered `1`–`9`, then its agents. A stopped session shows `stopped · enter starts it`. `J` and `K` scroll a long detail.
 

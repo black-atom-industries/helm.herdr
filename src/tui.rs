@@ -28,7 +28,7 @@ use crate::{
     app::{load_workspaces, App, InputMode, SelectedWorkspace, Workspaces},
     config::Config,
     detail::{self, Change, Commit, GitDetail, Subagent},
-    glance::{self, Group, IconStyle, Mark},
+    glance::{self, Group, IconStyle},
     keymap::{keybindings, Command},
     model::{workspace_key, Entry, EntryAction, Source},
     paths::home,
@@ -1285,10 +1285,10 @@ fn detailed_layout(app: &App, row_width: usize, source_width: usize) -> Detailed
     }
 }
 
-/// Columns besides name, branch and signal: margin, label, mark and icon,
-/// a one-column gap after label and mark, a two-column gap after icon, name,
-/// branch and signal, and the progress bar.
-const GLANCE_FIXED_WIDTH: usize = 1 + 3 + 1 + 1 + 1 + 1 + 4 * 2 + 8;
+/// Columns besides name, branch and signal: margin, label and icon, a
+/// one-column gap after label, a two-column gap after icon, name, branch and
+/// signal, and the progress bar.
+const GLANCE_FIXED_WIDTH: usize = 1 + 3 + 1 + 1 + 4 * 2 + 8;
 const GLANCE_PROGRESS_WIDTH: usize = 8;
 const GLANCE_SIGNAL_MAX: usize = 24;
 
@@ -1302,7 +1302,6 @@ struct GlanceCells {
     tag_color: Color,
     name_color: Color,
     branch: String,
-    mark: Mark,
     signal: String,
 }
 
@@ -1322,7 +1321,6 @@ fn glance_cells(app: &App, entry: &Entry) -> GlanceCells {
             tag_color: app.theme.mauve,
             name_color: repository_color(&row.repository, &[], &app.theme),
             branch: row.branch.clone(),
-            mark: row.mark,
             signal: glance::signal_text(&row.signal, app.now),
         },
         None => GlanceCells {
@@ -1333,7 +1331,6 @@ fn glance_cells(app: &App, entry: &Entry) -> GlanceCells {
             tag_color: app.theme.mauve,
             name_color: app.theme.text,
             branch: display_path(entry),
-            mark: Mark::None,
             signal: String::new(),
         },
     }
@@ -1366,11 +1363,6 @@ fn session_cells(app: &App, entry: &Entry, state: &SessionState) -> GlanceCells 
             format!("{} ws", summary.workspaces)
         } else {
             "start".into()
-        },
-        mark: if state.current {
-            Mark::Here
-        } else {
-            Mark::None
         },
         signal: summary
             .last_active
@@ -1499,8 +1491,6 @@ fn draw_legend(f: &mut Frame, app: &App, card: Rect) -> Rect {
         )
     };
     let entries = [
-        ("●", app.theme.accent, "here"),
-        ("◌", app.theme.subtext0, "last"),
         state(AgentState::Working, "working"),
         state(AgentState::Blocked, "waits"),
         state(AgentState::Done, "done"),
@@ -1511,7 +1501,7 @@ fn draw_legend(f: &mut Frame, app: &App, card: Rect) -> Rect {
     let mut used = 1;
     for (glyph, color, word) in entries {
         let gap = if spans.len() > 1 { 2 } else { 0 };
-        let width = gap + Span::raw(glyph).width() + 1 + word.len();
+        let width = gap + Span::raw(glyph).width() + 2 + word.len();
         if used + width > legend.width as usize {
             break;
         }
@@ -1519,7 +1509,7 @@ fn draw_legend(f: &mut Frame, app: &App, card: Rect) -> Rect {
             spans.push(Span::raw("  "));
         }
         spans.push(Span::styled(glyph, Style::default().fg(color)));
-        spans.push(Span::styled(format!(" {word}"), dim));
+        spans.push(Span::styled(format!("  {word}"), dim));
         used += width;
     }
     f.render_widget(Paragraph::new(Line::from(spans)), legend);
@@ -1551,25 +1541,65 @@ fn draw_glance_list(f: &mut Frame, app: &App, area: Rect) -> ListHits {
         })
         .collect();
 
+    let (state_header, name_header, branch_header) = if app.sessions_view() {
+        ("", "SESSION", "WORKSPACES")
+    } else {
+        ("ST", "WORKSPACE", "BRANCH")
+    };
     let name_width = visible
         .iter()
         .map(|(_, _, cells)| name_cell_width(cells))
         .max()
-        .unwrap_or(0);
+        .unwrap_or(0)
+        .max(name_header.len());
     let branch_width = visible
         .iter()
         .map(|(_, _, cells)| Span::raw(&cells.branch).width())
         .max()
-        .unwrap_or(0);
+        .unwrap_or(0)
+        .max(branch_header.len());
     let signal_width = visible
         .iter()
         .map(|(_, _, cells)| Span::raw(&cells.signal).width())
         .max()
         .unwrap_or(0)
-        .min(GLANCE_SIGNAL_MAX);
+        .clamp("AGE".len(), GLANCE_SIGNAL_MAX);
     let flex = (area.width as usize).saturating_sub(GLANCE_FIXED_WIDTH + signal_width);
     let name_width = name_width.min(flex * 3 / 5);
     let branch_width = branch_width.min(flex.saturating_sub(name_width));
+
+    let area = if visible.is_empty() {
+        area
+    } else {
+        let [header, _, rows] = Layout::vertical([
+            Constraint::Length(1),
+            Constraint::Length(1),
+            Constraint::Min(0),
+        ])
+        .areas(area);
+        let mut columns = vec![
+            " KEY ".into(),
+            fit_cell(state_header, 3),
+            fit_cell(name_header, name_width),
+            "  ".into(),
+            fit_cell(branch_header, branch_width),
+            "  ".into(),
+            fit_cell("AGE", signal_width),
+        ];
+        if !app.sessions_view() {
+            columns.extend(["  ".into(), "PROGRESS".into()]);
+        }
+        f.render_widget(
+            Paragraph::new(Line::styled(
+                columns.concat(),
+                Style::default()
+                    .fg(app.theme.subtext0)
+                    .add_modifier(Modifier::BOLD),
+            )),
+            header,
+        );
+        rows
+    };
 
     let labels = app.config.glance.labels();
     let labelled = if app.input_mode == InputMode::Normal {
@@ -1599,15 +1629,6 @@ fn draw_glance_list(f: &mut Frame, app: &App, area: Rect) -> ListHits {
         if *position == app.selected {
             selected_item = Some(items.len());
         }
-        let mark_color = match cells.mark {
-            Mark::Here => app.theme.accent,
-            Mark::Last | Mark::None => app.theme.subtext0,
-        };
-        let mark = match cells.mark {
-            Mark::Here => "●",
-            Mark::Last => "◌",
-            Mark::None => " ",
-        };
         let label = match labelled
             .iter()
             .position(|&slot| slot == *position)
@@ -1625,8 +1646,6 @@ fn draw_glance_list(f: &mut Frame, app: &App, area: Rect) -> ListHits {
         let mut spans = vec![
             Span::raw(" "),
             label,
-            Span::raw(" "),
-            Span::styled(mark, Style::default().fg(mark_color)),
             Span::raw(" "),
             Span::styled(
                 fit_cell(cells.icon, 1),
@@ -2040,7 +2059,7 @@ fn draw_session_detail(f: &mut Frame, app: &App, area: Rect) -> usize {
         .map(|(row, _)| Span::raw(&row.branch).width())
         .max()
         .unwrap_or(0)
-        .min(width.saturating_sub(name_width + 18));
+        .min(width.saturating_sub(name_width + 16));
     let mut group = None;
     for (index, (row, _)) in rows.iter().enumerate() {
         if group != Some(row.group) {
@@ -2060,11 +2079,6 @@ fn draw_session_detail(f: &mut Frame, app: &App, area: Rect) -> usize {
         } else {
             " ".into()
         };
-        let (mark, mark_color) = match row.mark {
-            Mark::Here => ("●", app.theme.accent),
-            Mark::Last => ("◌", app.theme.subtext0),
-            Mark::None => (" ", app.theme.subtext0),
-        };
         lines.push(justified(
             vec![
                 Span::styled(
@@ -2073,8 +2087,6 @@ fn draw_session_detail(f: &mut Frame, app: &App, area: Rect) -> usize {
                         .fg(app.theme.accent)
                         .add_modifier(Modifier::BOLD),
                 ),
-                Span::raw(" "),
-                Span::styled(mark, Style::default().fg(mark_color)),
                 Span::raw(" "),
                 Span::styled(
                     fit_cell(
@@ -3012,12 +3024,9 @@ mod tests {
         for (icons, legend) in [
             (
                 IconStyle::Nerd,
-                "● here  ◌ last  ⠋ working  \u{F009E} waits  \u{F05E0} done  \u{F0766} idle",
+                "⠋  working  \u{F009E}  waits  \u{F05E0}  done  \u{F0766}  idle",
             ),
-            (
-                IconStyle::Unicode,
-                "● here  ◌ last  ◐ working  ● waits  ✔ done  ○ idle",
-            ),
+            (IconStyle::Unicode, "◐  working  ●  waits  ✔  done  ○  idle"),
         ] {
             let mut app = glance_app(
                 NOW,
@@ -3049,7 +3058,7 @@ mod tests {
             .unwrap();
         assert_eq!(
             buffer_text(&terminal).trim_end(),
-            " ● here  ◌ last  ⠋ working"
+            " ⠋  working  \u{F009E}  waits  \u{F05E0}  done"
         );
     }
 
@@ -3104,7 +3113,7 @@ mod tests {
             activity,
         );
 
-        let (lines, _) = render_app(&app, 100, 22);
+        let (lines, _) = render_app(&app, 100, 24);
         let labels = ["NEEDS YOU", "HOT", "WARM", "COLD"];
         let headings = labels.map(|label| line_index(&lines, label));
         assert!(headings.windows(2).all(|pair| pair[0] < pair[1]));
@@ -3157,7 +3166,7 @@ mod tests {
             activity,
         );
 
-        let (lines, _) = render_app(&app, 100, 20);
+        let (lines, _) = render_app(&app, 100, 22);
         let rows = [
             ("helm-branch", "helm", "14m"),
             ("skills-branch", "skills", "4m"),
@@ -3179,8 +3188,8 @@ mod tests {
     }
 
     #[test]
-    fn a_dot_after_the_label_shows_the_current_and_previous_workspace() {
-        let app = glance_app(
+    fn the_state_icon_follows_the_label_and_the_previous_workspace_still_drives_l() {
+        let mut app = glance_app(
             NOW,
             Some("w2"),
             vec![
@@ -3191,54 +3200,19 @@ mod tests {
             ActivityState::default(),
         );
 
-        let (lines, _) = render_app(&app, 100, 20);
-        let helm = &lines[line_index(&lines, "helm-branch")];
-        let skills = &lines[line_index(&lines, "skills-branch")];
-        let koyo = &lines[line_index(&lines, "koyo-branch")];
-        let column = column_of(helm, "●");
-        assert_eq!(column_of(skills, "◌"), column);
-        assert_eq!(koyo.chars().nth(column), Some(' '));
-        assert_eq!(column, column_of(helm, " a ") + 4);
-        assert!(column < column_of(helm, "helm"));
-        for line in [helm, skills, koyo] {
-            assert!(!line.contains("here"));
-            assert!(!line.contains("last"));
+        let (lines, _) = render_app(&app, 100, 22);
+        for name in ["helm", "skills", "koyo"] {
+            let line = &lines[line_index(&lines, &format!("{name}-branch"))];
+            assert!(!line.contains('●') && !line.contains('◌'), "{line}");
         }
-        assert!(!koyo.contains('●') && !koyo.contains('◌'));
-    }
+        let helm = &lines[line_index(&lines, "helm-branch")];
+        assert_eq!(column_of(helm, "helm"), column_of(helm, " a ") + 7);
+        assert!(!lines
+            .iter()
+            .any(|line| line.contains(" here") || line.contains('◌')));
 
-    #[test]
-    fn the_current_dot_takes_the_accent_and_the_previous_dot_the_dim_colour() {
-        let app = glance_app(
-            NOW,
-            Some("w2"),
-            vec![
-                glance_workspace("w1", "helm", true, Some(NOW - 60), vec![]),
-                glance_workspace("w2", "skills", false, Some(NOW - 120), vec![]),
-            ],
-            ActivityState::default(),
-        );
-        let mut terminal = Terminal::new(TestBackend::new(100, 20)).unwrap();
-        terminal
-            .draw(|f| {
-                draw(f, &app);
-            })
-            .unwrap();
-        let buffer = terminal.backend().buffer();
-        let colour_of = |row: &str, symbol: &str| {
-            let y = buffer_text(&terminal)
-                .lines()
-                .position(|line| line.contains(row))
-                .unwrap_or_else(|| panic!("no line contains {row:?}")) as u16;
-            (0..buffer.area.width)
-                .map(|x| &buffer[(x, y)])
-                .find(|cell| cell.symbol() == symbol)
-                .unwrap_or_else(|| panic!("the {row:?} row shows no {symbol:?}"))
-                .fg
-        };
-        assert_ne!(app.theme.accent, app.theme.subtext0);
-        assert_eq!(colour_of("helm-branch", "●"), app.theme.accent);
-        assert_eq!(colour_of("skills-branch", "◌"), app.theme.subtext0);
+        assert_eq!(handle_key(&mut app, key(KeyCode::Char('l'))), Action::Open);
+        assert_eq!(selected_title(&app), "skills");
     }
 
     #[test]
@@ -3435,6 +3409,54 @@ mod tests {
         let (lines, _) = render_app(&app, 160, 40);
         assert!(line_index(&lines, "PINNED") < line_index(&lines, "NEEDS YOU"));
         assert!(lines[line_index(&lines, "fonts")].contains("9d"));
+
+        let pinned = line_index(&lines, "PINNED");
+        let header = &lines[pinned - 2];
+        assert!(lines[pinned - 1].chars().take(80).all(|ch| ch == ' '));
+        let fonts = &lines[line_index(&lines, "fonts")];
+        assert_eq!(
+            column_of(header, "ST"),
+            column_of(&lines[pinned], "PINNED") + 4
+        );
+        assert_eq!(
+            column_of(header, "KEY"),
+            column_of(&lines[pinned], "PINNED")
+        );
+        assert_eq!(column_of(header, "WORKSPACE"), column_of(fonts, "fonts"));
+        assert_eq!(
+            column_of(header, "BRANCH"),
+            column_of(fonts, "fonts-branch")
+        );
+        assert_eq!(column_of(header, "AGE"), column_of(fonts, "9d"));
+        assert_eq!(
+            column_of(header, "PROGRESS"),
+            column_of(header, "AGE") + "AGE".len() + 2
+        );
+    }
+
+    #[test]
+    fn the_column_header_stays_on_top_while_the_list_scrolls() {
+        let workspaces = (0..30)
+            .map(|n| {
+                commit_workspace(
+                    &format!("w{n}"),
+                    &format!("repo{n:02}"),
+                    NOW - 86_400 * (n + 1),
+                )
+            })
+            .collect();
+        let mut app = glance_app(NOW, None, workspaces, ActivityState::default());
+        app.selected = app.filtered.len() - 1;
+
+        let (lines, hits) = render_app(&app, 160, 32);
+        let header = line_index(&lines, "WORKSPACE");
+        assert!(lines[header].contains("BRANCH"));
+        assert!(!lines.iter().any(|line| line.contains("COLD")));
+        assert!(!lines.iter().any(|line| line.contains("repo00")));
+        assert!(line_index(&lines, "repo29") > header);
+        let first_hit = hits.rows.first().unwrap().0.start;
+        assert_eq!(first_hit, hits.area.y);
+        assert!(hits.rows.iter().all(|(rows, _)| rows.start >= hits.area.y));
     }
 
     fn shift_key(ch: char) -> KeyEvent {
@@ -4414,7 +4436,6 @@ mod tests {
             tag_color: Color::Reset,
             name_color: Color::Reset,
             branch: String::new(),
-            mark: Mark::None,
             signal: String::new(),
         };
         let text = |width| {
@@ -4600,19 +4621,28 @@ mod tests {
         assert!(column_of(strip, "^S") < column_of(strip, "^Z"));
         assert!(line_index(&lines, "RUNNING") < line_index(&lines, "STOPPED"));
         assert_eq!(
-            line_index(&lines, "● here  ◌ last"),
+            line_index(&lines, "⠋  working  "),
             line_index(&lines, "q quit") - 3
         );
         let work = &lines[line_index(&lines, "work 1 need you")];
         let b = &lines[line_index(&lines, "b 1 need you")];
         let c = &lines[line_index(&lines, " c ")];
         let default = &lines[line_index(&lines, "default")];
-        assert!(work.contains('●') && work.contains("3 ws"));
+        assert!(!work.contains('●') && work.contains("3 ws"));
         assert!(b.contains("2 ws") && b.contains("10m"));
         assert!(c.contains("1 ws") && c.contains("1m"));
         assert!(default.contains("start") && !default.contains(" ws"));
         assert_eq!(column_of(work, "3 ws"), column_of(b, "2 ws"));
         assert_eq!(column_of(b, "2 ws"), column_of(default, "start"));
+        let header = &lines[line_index(&lines, "RUNNING") - 2];
+        assert!(!header.contains("ST ") && !header.contains("PROGRESS"));
+        assert_eq!(column_of(header, "KEY"), column_of(work, " a "));
+        assert_eq!(
+            column_of(header, "SESSION"),
+            column_of(work, "work 1 need you")
+        );
+        assert_eq!(column_of(header, "WORKSPACES"), column_of(work, "3 ws"));
+        assert_eq!(column_of(header, "AGE"), column_of(b, "10m"));
 
         let footer = lines.last().unwrap();
         for hint in [
@@ -4669,10 +4699,12 @@ mod tests {
         let detail_column = column_of(&lines[warm], "WARM");
         let gap: String = lines[warm - 1].chars().skip(detail_column).collect();
         assert!(gap.trim().is_empty(), "no blank line before WARM");
-        for (number, label, mark) in [(1, "helm", '●'), (2, "dots", '◌'), (3, "old", ' ')] {
+        for (number, label) in [(1, "helm"), (2, "dots"), (3, "old")] {
             let line = &lines[line_index(&lines, &format!("{label}-branch"))];
-            let detail = &line[line.find(&format!("{number} {mark}")).unwrap()..];
+            let detail: String = line.chars().skip(detail_column).collect();
+            assert!(detail.starts_with(&format!("{number} ")), "{line}");
             assert!(detail.contains(label), "{number} {label}: {line}");
+            assert!(!detail.contains('●') && !detail.contains('◌'), "{line}");
             let Some(EntryAction::FocusWorkspace { id, .. }) = app.session_action(Some(number))
             else {
                 panic!("no workspace for {number}");
@@ -4700,7 +4732,11 @@ mod tests {
         assert!(lines
             .iter()
             .any(|line| line.contains("stopped · enter starts it")));
-        assert!(!lines.iter().any(|line| line.contains("WORKSPACES")));
+        assert!(!lines.iter().any(|line| line
+            .chars()
+            .skip(80)
+            .collect::<String>()
+            .contains("WORKSPACES")));
     }
 
     #[test]
