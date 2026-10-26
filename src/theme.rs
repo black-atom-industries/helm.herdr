@@ -162,15 +162,21 @@ impl Theme {
         ]
     }
 
+    /// The popup's ground, a slight lift from the base background toward the
+    /// text color.
+    pub(crate) fn popup_background(&self) -> Color {
+        self.toward_text(4, self.base_background)
+    }
+
     /// The frame around the list: header, footer and detail pane. A neutral
     /// step from the base background toward the text color.
     pub(crate) fn chrome_background(&self) -> Color {
-        self.toward_text(5, self.surface0)
+        self.toward_text(9, self.surface0)
     }
 
     /// The header and footer bands, one step stronger than the chrome.
     pub(crate) fn bar_background(&self) -> Color {
-        self.toward_text(10, self.surface1)
+        self.toward_text(14, self.surface1)
     }
 
     fn toward_text(&self, percent: u16, fallback: Color) -> Color {

@@ -501,7 +501,7 @@ fn draw(f: &mut Frame, app: &App) -> (ListHits, usize) {
     let full = f.area();
     f.render_widget(Clear, full);
     f.render_widget(
-        Block::default().style(Style::default().bg(app.theme.base_background)),
+        Block::default().style(Style::default().bg(app.theme.popup_background())),
         full,
     );
     let area = content_area(full);
@@ -515,7 +515,7 @@ fn draw(f: &mut Frame, app: &App) -> (ListHits, usize) {
         ])
         .split(area);
 
-    let bar = Block::default().style(Style::default().bg(app.theme.base_background));
+    let bar = Block::default().style(Style::default().bg(app.theme.popup_background()));
     f.render_widget(
         bar.clone(),
         Rect {
@@ -559,7 +559,7 @@ fn draw_too_small(f: &mut Frame, app: &App) {
     let area = f.area();
     f.render_widget(Clear, area);
     f.render_widget(
-        Block::default().style(Style::default().bg(app.theme.base_background)),
+        Block::default().style(Style::default().bg(app.theme.popup_background())),
         area,
     );
     let message = format!(
@@ -807,7 +807,7 @@ fn draw_key_hints(f: &mut Frame, app: &App, area: Rect) {
             ),
         ]);
         f.render_widget(
-            Paragraph::new(line).style(Style::default().bg(app.theme.base_background)),
+            Paragraph::new(line).style(Style::default().bg(app.theme.popup_background())),
             area,
         );
         return;
@@ -835,7 +835,7 @@ fn draw_key_hints(f: &mut Frame, app: &App, area: Rect) {
         .direction(Direction::Horizontal)
         .constraints([Constraint::Min(0), Constraint::Length(right_width as u16)])
         .split(area);
-    let style = Style::default().bg(app.theme.base_background);
+    let style = Style::default().bg(app.theme.popup_background());
     f.render_widget(
         Paragraph::new(hint_line(app, &left)).style(style),
         columns[0],
@@ -1201,9 +1201,9 @@ fn draw_glance(f: &mut Frame, app: &App, area: Rect) -> (ListHits, usize) {
         return (draw_glance_list(f, app, card), 0);
     }
     let [list, border, detail] = Layout::horizontal([
-        Constraint::Percentage(55),
+        Constraint::Percentage(50),
         Constraint::Length(2),
-        Constraint::Percentage(45),
+        Constraint::Percentage(50),
     ])
     .areas(area);
     let _ = border;
@@ -1555,7 +1555,7 @@ fn tab_chips(app: &App, workspace: &WorkspaceNode) -> Vec<Span<'static>> {
         let label = format!(" {} ", tab.label);
         if tab.focused {
             let style = Style::default()
-                .fg(app.theme.base_background)
+                .fg(app.theme.popup_background())
                 .bg(app.theme.accent);
             spans.push(Span::styled(number, style));
             spans.push(Span::styled(label, style));
@@ -1925,7 +1925,7 @@ fn draw_list(f: &mut Frame, app: &App, area: Rect) -> ListHits {
     state.select(selected_row);
     let block = Block::default()
         .title(format!(" RESULTS · {} ", app.filtered.len()))
-        .style(Style::default().bg(app.theme.base_background));
+        .style(Style::default().bg(app.theme.popup_background()));
     let list_area = block.inner(area);
     let list = List::new(items)
         .block(block)
@@ -2138,7 +2138,7 @@ mod tests {
     }
 
     #[test]
-    fn picker_paints_list_card_and_detail_panel_on_the_base_background() {
+    fn picker_paints_list_card_and_detail_panel_on_the_popup_background() {
         let app = detail_app(vec![claude_pane()], 0, ActivityState::default());
         let backend = TestBackend::new(120, 30);
         let mut terminal = Terminal::new(backend).unwrap();
@@ -2152,21 +2152,21 @@ mod tests {
         let theme = &app.theme;
 
         for (x, y) in [(0, 0), (119, 1), (0, 29), (2, 1), (117, 28)] {
-            assert_eq!(bg(x, y), theme.base_background, "({x}, {y})");
+            assert_eq!(bg(x, y), theme.popup_background(), "({x}, {y})");
         }
-        assert_eq!(bg(0, 4), theme.base_background);
-        assert_eq!(bg(1, 4), theme.base_background);
+        assert_eq!(bg(0, 4), theme.popup_background());
+        assert_eq!(bg(1, 4), theme.popup_background());
         assert_eq!(bg(2, 4), theme.bar_background());
         assert_eq!(bg(3, 4), theme.bar_background());
 
         let gap = (3..119)
             .find(|&x| bg(x, 4) != theme.bar_background())
             .unwrap();
-        assert_eq!(bg(gap, 4), theme.base_background);
-        assert_eq!(bg(gap + 1, 4), theme.base_background);
+        assert_eq!(bg(gap, 4), theme.popup_background());
+        assert_eq!(bg(gap + 1, 4), theme.popup_background());
         assert_eq!(bg(gap + 2, 4), theme.chrome_background());
         assert_eq!(bg(118, 4), theme.chrome_background());
-        assert_eq!(bg(119, 4), theme.base_background);
+        assert_eq!(bg(119, 4), theme.popup_background());
     }
 
     #[test]
