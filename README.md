@@ -62,7 +62,7 @@ Every open Workspace sits in one group:
 
 Activity is the newest of three things: when you last focused the Workspace, its last commit, and its agents' last state change. Each row shows how long ago that was, such as `4m`.
 
-A row also shows its agent's state icon and the git branch. Right after the row's letter, `●` sits on the Workspace you are in and a dim `◌` on the one before. While an agent works, a bar at the end of the row sums the progress of its subagents.
+A row also shows its agent's state icon and the git branch. Right after the row's letter, `●` sits on the Workspace you are in and a dim `◌` on the one before. While an agent works, a bar at the end of the row sums the progress of its subagents. The last line of the list is a legend for these marks and icons: here, last, working, waits, done and idle. It shows in the Sessions view too, and a narrow list drops legend entries from the right.
 
 The first five rows get a letter (`a` `s` `d` `f` `g`). Press it once to select the row, twice to open it. Rows hold their place while Helm is open, so the letters don't jump around under you.
 
