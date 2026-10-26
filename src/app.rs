@@ -18,6 +18,7 @@ use crate::{
     model::{workspace_key, Entry, EntryAction, Source, WorkspaceKind, WorkspaceRef},
     paths::{self, canonical_str, herdr_plus_quick_actions_dir, plugin_config_dir},
     recent::RecentState,
+    sessions::{self, Session},
     sources::{collect_open_topology, collect_roots, collect_zoxide},
     theme::Theme,
     topology::{self, OpenTopology},
@@ -54,6 +55,8 @@ pub(crate) struct App {
     pub(crate) spinner_tick: u32,
     pub(crate) update_available: Option<String>,
     pub(crate) topology: OpenTopology,
+    /// The Herdr session Helm runs in; Workspaces of any other session are elsewhere.
+    pub(crate) session: Option<String>,
     pub(crate) topology_entries: Vec<Entry>,
     pub(crate) activity: ActivityState,
     pub(crate) glance: HashMap<String, GlanceRow>,
@@ -65,6 +68,8 @@ pub(crate) struct App {
     pub(crate) last_label: Option<char>,
     pub(crate) close_armed: bool,
     pub(crate) cold_armed: bool,
+    /// A footer message that the next key clears.
+    pub(crate) notice: Option<&'static str>,
     /// Largest useful detail offset, set by the last render.
     pub(crate) detail_max_offset: usize,
     /// Running Claude subagents, keyed by pane id.
@@ -107,6 +112,7 @@ impl App {
             spinner_tick: 0,
             update_available: None,
             topology: OpenTopology::default(),
+            session: None,
             topology_entries: Vec::new(),
             activity: ActivityState::default(),
             glance: HashMap::new(),
@@ -116,6 +122,7 @@ impl App {
             last_label: None,
             close_armed: false,
             cold_armed: false,
+            notice: None,
             detail_max_offset: 0,
             subagents: HashMap::new(),
             git_detail: HashMap::new(),
@@ -138,7 +145,7 @@ impl App {
             normalize_recent_state(&mut self.recent_state, &open_entries);
             self.recent_state.save();
         }
-        if let Some(activity) = prune_activity(&workspaces.topology) {
+        if let Some(activity) = prune_activity(&workspaces.local_topology()) {
             workspaces.activity = activity;
         }
 
@@ -178,7 +185,15 @@ impl App {
     /// selected entry on the same destination.
     pub(crate) fn apply_workspaces(&mut self, workspaces: Workspaces, now: i64) {
         // A failed Herdr read comes back empty. Keep the last good list instead.
-        if workspaces.topology.workspaces.is_empty() && !self.topology.workspaces.is_empty() {
+        let has_local = |topology: &OpenTopology, session: &Option<String>| {
+            topology
+                .workspaces
+                .iter()
+                .any(|workspace| &workspace.session == session)
+        };
+        if !has_local(&workspaces.topology, &workspaces.session)
+            && has_local(&self.topology, &self.session)
+        {
             return;
         }
         let selected = self.selected_entry().map(entry_identity);
@@ -198,6 +213,7 @@ impl App {
 
     fn set_workspace_state(&mut self, workspaces: Workspaces, now: i64) {
         self.topology = workspaces.topology;
+        self.session = workspaces.session;
         self.activity = workspaces.activity;
         self.previous_workspace_id = workspaces.previous;
         self.subagents = workspaces.subagents;
@@ -217,22 +233,33 @@ impl App {
             .topology
             .workspaces
             .iter()
-            .map(|workspace| {
+            .filter_map(|workspace| {
+                let elsewhere = workspace.session != self.session;
                 let entry = self
                     .topology_entries
                     .iter()
                     .find(|entry| {
                         matches!(&entry.action, EntryAction::FocusWorkspace { session, id } if id == &workspace.id && session == &workspace.session)
-                    });
+                    })
+                    .filter(|_| !elsewhere);
                 let pinned = entry.is_some_and(|entry| self.is_pinned(entry));
                 let cold = entry.is_some_and(|entry| self.is_cold(entry));
                 let evidence = glance::evidence(workspace, &self.activity, pinned, cold);
-                let previous = self.previous_workspace_id.as_deref() == Some(workspace.id.as_str());
-                let row = glance::row(workspace, &evidence, previous, self.now, thresholds);
-                (
+                let previous = !elsewhere
+                    && self.previous_workspace_id.as_deref() == Some(workspace.id.as_str());
+                let mut row = glance::row(workspace, &evidence, previous, self.now, thresholds);
+                if elsewhere {
+                    if row.group != Group::NeedsYou {
+                        return None;
+                    }
+                    row.mark = Mark::None;
+                    row.other_session =
+                        Some(Session::label(workspace.session.as_deref()).to_string());
+                }
+                Some((
                     workspace_key(workspace.session.as_deref(), &workspace.id),
                     row,
-                )
+                ))
             })
             .collect();
         self.rank_rows();
@@ -648,7 +675,10 @@ impl App {
             .tabs
             .iter()
             .flat_map(|tab| &tab.panes)
-            .filter_map(|pane| self.subagents.get(&pane.id))
+            .filter_map(|pane| {
+                self.subagents
+                    .get(&workspace_key(workspace.session.as_deref(), &pane.id))
+            })
             .flatten()
             .fold((0, 0), |(done, total), subagent| {
                 (done + subagent.done, total + subagent.total)
@@ -708,6 +738,12 @@ impl App {
         self.rebuild_glance();
         self.apply_filter();
         Ok(())
+    }
+
+    /// Whether the entry is the glance row of a Workspace in another Herdr session.
+    pub(crate) fn is_elsewhere(&self, entry: &Entry) -> bool {
+        self.glance_row(entry)
+            .is_some_and(|row| row.other_session.is_some())
     }
 
     pub(crate) fn is_cold(&self, entry: &Entry) -> bool {
@@ -843,6 +879,9 @@ impl App {
     pub(crate) fn close_selected_workspace(&mut self) -> Result<(), String> {
         let (id, title) = {
             let e = self.selected_entry().ok_or("nothing selected")?;
+            if self.is_elsewhere(e) {
+                return Err("the workspace is in another Herdr session".into());
+            }
             let id = self
                 .workspace_to_close(e)
                 .ok_or("no open workspace for selected item")?;
@@ -865,7 +904,7 @@ impl App {
         };
         run_herdr(["workspace", "close", &id])?;
         if let Some(destination) = destination {
-            self.record_recent_workspace(current_session_name().as_deref(), &destination);
+            self.record_recent_workspace(sessions::current().as_deref(), &destination);
         }
         notify_done(&format!("Closed {title}"), &self.config.notifications);
         self.refresh();
@@ -991,12 +1030,6 @@ fn session_key(name: Option<&str>) -> String {
     name.unwrap_or("<default>").to_string()
 }
 
-fn current_session_name() -> Option<String> {
-    env::var("HERDR_SESSION")
-        .ok()
-        .filter(|name| !name.trim().is_empty())
-}
-
 fn recent_destination_for_entry(e: &Entry) -> Option<(Option<String>, String)> {
     match &e.action {
         EntryAction::FocusWorkspace { session, id, .. } => Some((session.clone(), id.clone())),
@@ -1018,7 +1051,7 @@ fn recent_destination_after_indirect_success(
 ) -> Option<(Option<String>, String)> {
     matches!(action, EntryAction::FocusOrCreateDir)
         .then(|| {
-            resulting_workspace_id.map(|workspace_id| (current_session_name(), workspace_id.into()))
+            resulting_workspace_id.map(|workspace_id| (sessions::current(), workspace_id.into()))
         })
         .flatten()
 }
@@ -1226,7 +1259,7 @@ pub(crate) fn jump_back(config: &Config) -> Result<String, String> {
     };
 
     run_herdr(["workspace", "focus", &previous])?;
-    record_persisted_recent_workspace(current_session_name().as_deref(), &previous);
+    record_persisted_recent_workspace(sessions::current().as_deref(), &previous);
     Ok(label)
 }
 
@@ -1267,7 +1300,7 @@ pub(crate) fn track_focus(config: &Config) -> Result<(), String> {
     if config.jump_back.enabled {
         record_focused_workspace(focused)?;
     }
-    let session = current_session_name();
+    let session = sessions::current();
     update_activity(|activity| activity.record_focus(session.as_deref(), focused, now_unix_secs()))
 }
 
@@ -1276,7 +1309,7 @@ pub(crate) fn track_agent() -> Result<(), String> {
         .map_err(|_| "HERDR_PLUGIN_EVENT_JSON is not set".to_string())?;
     let (pane_id, status) = parse_agent_status_event(&event)?;
     let now = now_unix_secs();
-    let session = current_session_name();
+    let session = sessions::current();
     update_activity(|activity| {
         activity.record_agent_status(session.as_deref(), &pane_id, &status, now)
     })
@@ -1288,24 +1321,46 @@ pub(crate) struct Workspaces {
     pub(crate) activity: ActivityState,
     pub(crate) previous: Option<String>,
     pub(crate) subagents: HashMap<String, Vec<Subagent>>,
+    /// The Herdr session the topology was read from; other sessions' Workspaces join it.
+    pub(crate) session: Option<String>,
+}
+
+impl Workspaces {
+    fn local_topology(&self) -> OpenTopology {
+        OpenTopology {
+            workspaces: self
+                .topology
+                .workspaces
+                .iter()
+                .filter(|workspace| workspace.session == self.session)
+                .cloned()
+                .collect(),
+        }
+    }
 }
 
 /// Reads the Herdr snapshot and activity. A `snapshot` already read from Herdr
-/// is parsed instead of asking again. Git identities come from `cached` when
-/// given, and from git itself otherwise.
+/// is parsed instead of asking again. Other running sessions add the
+/// Workspaces that need you. Git identities come from `cached` when given,
+/// and from git itself otherwise.
 pub(crate) fn load_workspaces(
     config: &Config,
     cached: Option<&OpenTopology>,
     snapshot: Option<&serde_json::Value>,
 ) -> Workspaces {
+    let session = sessions::current();
+    let activity = ActivityState::load();
     let topology = if config.sources.open_workspaces {
-        let session = current_session_name();
         let mut topology = snapshot
             .map(|snapshot| topology::parse_snapshot(snapshot, session.clone()))
             .filter(|topology| !topology.workspaces.is_empty())
             .unwrap_or_else(|| {
-                topology::collect_topology(|args| herdr_json_args(args.iter().copied()), session)
+                topology::collect_topology(
+                    |args| herdr_json_args(args.iter().copied()),
+                    session.clone(),
+                )
             });
+        join_needs_you(&mut topology, sessions::read_other_sessions(), &activity);
         match cached {
             Some(cached) => reuse_git(&mut topology, cached),
             None => topology::enrich_git(&mut topology, &topology::NativeGitProbe),
@@ -1318,14 +1373,25 @@ pub(crate) fn load_workspaces(
     let subagents = detail::scan_subagents(&topology, &paths::home().join(".claude/projects"), now);
     Workspaces {
         topology,
-        activity: ActivityState::load(),
+        activity,
         previous: config
             .jump_back
             .enabled
             .then(|| read_previous_workspace().ok())
             .flatten(),
         subagents,
+        session,
     }
+}
+
+/// Adds the Workspaces of other sessions that need you. The glance shows no
+/// other rows of theirs, so the rest skip git and transcript reads.
+fn join_needs_you(topology: &mut OpenTopology, others: OpenTopology, activity: &ActivityState) {
+    topology
+        .workspaces
+        .extend(others.workspaces.into_iter().filter(|workspace| {
+            glance::needs_you(&glance::evidence(workspace, activity, false, false))
+        }));
 }
 
 /// Copies git identities from `cached`. Workspaces the cache does not know
@@ -2184,6 +2250,7 @@ exit 0
                 activity: ActivityState::default(),
                 previous: None,
                 subagents: HashMap::new(),
+                session: None,
             },
             NOW,
         );
@@ -2234,6 +2301,7 @@ exit 0
                 activity: ActivityState::default(),
                 previous: None,
                 subagents: HashMap::new(),
+                session: None,
             },
             NOW,
         );
@@ -2275,6 +2343,7 @@ exit 0
                 activity: ActivityState::default(),
                 previous: None,
                 subagents: HashMap::new(),
+                session: None,
             },
             NOW,
         );
@@ -2289,6 +2358,7 @@ exit 0
             activity: ActivityState::default(),
             previous: None,
             subagents: HashMap::new(),
+            session: None,
         };
         app.apply_workspaces(
             snapshot(vec![
@@ -2324,6 +2394,7 @@ exit 0
             activity: ActivityState::default(),
             previous: None,
             subagents: HashMap::new(),
+            session: None,
         };
         app.apply_workspaces(
             snapshot(vec![
@@ -2351,6 +2422,7 @@ exit 0
                 activity: ActivityState::default(),
                 previous: None,
                 subagents: HashMap::new(),
+                session: None,
             },
             NOW,
         );
@@ -2400,6 +2472,7 @@ exit 0
                 activity: ActivityState::default(),
                 previous: None,
                 subagents: HashMap::new(),
+                session: None,
             },
             NOW,
         );
@@ -2430,6 +2503,7 @@ exit 0
                 activity: ActivityState::default(),
                 previous: None,
                 subagents: HashMap::new(),
+                session: None,
             },
             NOW,
         );
@@ -2487,6 +2561,7 @@ exit 0
                 activity: ActivityState::default(),
                 previous: None,
                 subagents: HashMap::new(),
+                session: None,
             },
             NOW,
         );
@@ -2633,5 +2708,142 @@ exit 0
         assert!(glance_titles(&app).is_empty());
         search(&mut app, "!claude");
         assert!(glance_titles(&app).is_empty());
+    }
+
+    fn agent_workspace(
+        session: Option<&str>,
+        id: &str,
+        label: &str,
+        state: AgentState,
+    ) -> WorkspaceNode {
+        let mut workspace = bare_workspace(id, label, false, None);
+        workspace.session = session.map(str::to_string);
+        workspace.tabs = vec![TabNode {
+            id: format!("{id}:t1"),
+            label: "1".into(),
+            focused: true,
+            panes: vec![PaneNode {
+                id: format!("{id}:p1"),
+                label: "1".into(),
+                cwd: PathBuf::from(format!("/repos/{label}")),
+                focused: true,
+                title: None,
+                agent: Some(AgentMeta {
+                    name: "claude".into(),
+                    state,
+                }),
+                agent_session: None,
+            }],
+        }];
+        workspace
+    }
+
+    #[test]
+    fn other_sessions_join_the_glance_only_where_they_need_you() {
+        let mut waiting = agent_workspace(Some("work"), "w1", "api", AgentState::Blocked);
+        waiting.focused = true;
+        let mut app = App::new(Config::default(), Theme::terminal());
+        app.pinned_entries
+            .insert(topology_workspace_pin_key(Some("work"), "w1"));
+        app.apply_workspaces(
+            Workspaces {
+                topology: OpenTopology {
+                    workspaces: vec![
+                        bare_workspace("w1", "helm", true, Some(NOW - 60)),
+                        waiting,
+                        agent_workspace(Some("work"), "w2", "notes", AgentState::Idle),
+                        agent_workspace(Some("work"), "w3", "docs", AgentState::Working),
+                    ],
+                },
+                activity: ActivityState::default(),
+                previous: Some("w1".into()),
+                subagents: HashMap::new(),
+                session: None,
+            },
+            NOW,
+        );
+
+        assert_eq!(glance_titles(&app), ["api", "helm"]);
+        let api = app.entries[app.filtered[0]].clone();
+        let row = app.glance_row(&api).unwrap();
+        assert_eq!(row.group, Group::NeedsYou);
+        assert_eq!(row.mark, Mark::None);
+        assert_eq!(row.other_session.as_deref(), Some("work"));
+        assert!(app.is_elsewhere(&api));
+        let helm = app.entries[app.filtered[1]].clone();
+        assert!(!app.is_elsewhere(&helm));
+        assert_eq!(app.glance_row(&helm).unwrap().mark, Mark::Here);
+    }
+
+    #[test]
+    fn the_default_session_is_elsewhere_from_a_named_one() {
+        let mut app = App::new(Config::default(), Theme::terminal());
+        app.apply_workspaces(
+            Workspaces {
+                topology: OpenTopology {
+                    workspaces: vec![
+                        agent_workspace(Some("work"), "w1", "helm", AgentState::Idle),
+                        agent_workspace(None, "w1", "home", AgentState::Done),
+                    ],
+                },
+                activity: ActivityState::default(),
+                previous: None,
+                subagents: HashMap::new(),
+                session: Some("work".into()),
+            },
+            NOW,
+        );
+        let home = app
+            .entries
+            .iter()
+            .find(|entry| entry.title == "home")
+            .unwrap();
+        assert_eq!(
+            app.glance_row(home).unwrap().other_session.as_deref(),
+            Some("default")
+        );
+    }
+
+    #[test]
+    fn only_other_session_workspaces_that_need_you_are_read_further() {
+        let mut topology = OpenTopology {
+            workspaces: vec![bare_workspace("w1", "helm", true, None)],
+        };
+        let others = OpenTopology {
+            workspaces: vec![
+                agent_workspace(Some("work"), "w1", "api", AgentState::Done),
+                agent_workspace(Some("work"), "w2", "notes", AgentState::Idle),
+            ],
+        };
+        join_needs_you(&mut topology, others, &ActivityState::default());
+        let labels: Vec<&str> = topology
+            .workspaces
+            .iter()
+            .map(|workspace| workspace.label.as_str())
+            .collect();
+        assert_eq!(labels, ["helm", "api"]);
+    }
+
+    #[test]
+    fn a_failed_local_read_keeps_the_last_good_list_even_with_other_sessions() {
+        let mut app = App::new(Config::default(), Theme::terminal());
+        let load = |workspaces| Workspaces {
+            topology: OpenTopology { workspaces },
+            activity: ActivityState::default(),
+            previous: None,
+            subagents: HashMap::new(),
+            session: None,
+        };
+        app.apply_workspaces(load(vec![bare_workspace("w1", "helm", true, None)]), NOW);
+        app.apply_workspaces(
+            load(vec![agent_workspace(
+                Some("work"),
+                "w1",
+                "api",
+                AgentState::Blocked,
+            )]),
+            NOW,
+        );
+        assert_eq!(glance_titles(&app), ["helm"]);
     }
 }

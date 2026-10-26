@@ -49,7 +49,7 @@ Helm keeps its state in the plugin config directory (`HERDR_PLUGIN_CONFIG_DIR`).
 
 Keys are the Herdr session name (`<default>` for the default session), `::`, and the Herdr ID, because Herdr IDs repeat across sessions. The hooks read the session from `HERDR_SESSION`, like the Picker. Times are Unix seconds. `since` changes only when the agent status changes.
 
-Opening the Picker drops the current session's Workspaces and Panes missing from the live Topology and leaves other sessions alone. It skips pruning when the Topology has no Workspaces, and keeps every Pane when it has no Panes. Each change reloads the file under an exclusive lock on `activity.json.lock`, then replaces the file through a temporary file and a rename.
+Opening the Picker drops the current session's Workspaces and Panes missing from its own live Topology and leaves other sessions alone. It skips pruning when the Topology has no Workspaces, and keeps every Pane when it has no Panes. Each change reloads the file under an exclusive lock on `activity.json.lock`, then replaces the file through a temporary file and a rename.
 
 Herdr runs these commands as event hooks from `herdr-plugin.toml`. Each receives the event envelope as JSON in `HERDR_PLUGIN_EVENT_JSON`:
 
@@ -57,6 +57,14 @@ Herdr runs these commands as event hooks from `herdr-plugin.toml`. Each receives
 | --- | --- | --- |
 | `workspace.focused` | `helm-herdr track-focus` | `data.workspace_id` |
 | `pane.agent_status_changed` | `helm-herdr track-agent` | `data.pane_id`, `data.agent_status` |
+
+## Herdr sessions
+
+Helm finds the Herdr root at `$XDG_CONFIG_HOME/herdr`, or `~/.config/herdr` when `XDG_CONFIG_HOME` is unset. The plugin config directory falls back to `<root>/plugins/config/helm-herdr` when Herdr does not set `HERDR_PLUGIN_CONFIG_DIR`.
+
+The sessions are the default session, whose directory is the root, and every directory in `<root>/sessions/`, symlinks followed. Each session's socket is `herdr.sock` in its directory. A session runs when its socket answers a `session.snapshot` request within 300 ms; the sockets are asked in parallel, so a dead one costs at most one timeout. The current session is `HERDR_SESSION`, unset for the default session, which Herdr also names `default`.
+
+Each load, at open and in the 3-second background refresh, reads the snapshot of every other running session and keeps only the Workspaces where an agent is blocked or done. Only those get git and transcript reads. Their rows join the glance in Needs you, classified with their own session's `activity.json` entries; pinned and cold state never applies to them, and they carry no Current or Previous mark. The row shows an `@<session>` tag in the mauve colour inside the name cell, and the header adds ` · M elsewhere` to the need-you count. Opening such a row keeps the Picker open with `Start Herdr with helm-herdr shell to switch sessions` in the footer until the next key. Close, Cold and pin ignore these rows, because Workspace IDs repeat across sessions.
 
 ## Code layout
 
@@ -73,8 +81,9 @@ src/glance.rs    glance grouping, row signals, ages and status icons
 src/detail.rs    detail pane git reads and Claude subagent transcripts
 src/topology.rs  live Workspace/Tab/Pane model and Git identity
 src/herdr.rs     Herdr CLI and socket calls
+src/sessions.rs  Herdr session discovery and other sessions' snapshots
 src/recent.rs   recent Workspace order and the Previous workspace per Herdr session
-src/paths.rs     plugin config and state file paths
+src/paths.rs     Herdr root, plugin config and state file paths
 src/matcher.rs   Query matching engines
 src/theme.rs     palette, inherited from Herdr when enabled
 src/update.rs    GitHub release check and update install

@@ -47,6 +47,8 @@
 
 | Term | Definition | Aliases to avoid |
 | --- | --- | --- |
+| **Herdr session** | One running Herdr server with its own socket, Workspaces and IDs: the default session or a named one. | Server, instance |
+| **Other session** | A running Herdr session other than the one Helm runs in; its Workspaces join the Glance only in Needs you. | Remote session |
 | **Workspace** | A Herdr container for related Tabs and their Panes. | Project, session |
 | **Tab** | A named view within a Workspace containing one or more Panes. | Workspace tab, window |
 | **Pane** | A terminal area within a Tab. | Panel, split |
@@ -88,6 +90,7 @@
 - An **Entry action** is applied to the **Selected entry**.
 - A **Topology** contains **Workspaces**; each **Workspace** contains one or more **Tabs**, and each **Tab** contains one or more **Panes**.
 - A **Glance** lists each open **Workspace** once, in its **Warmth group**.
+- A **Herdr session** contains Workspaces; a Workspace of an **Other session** appears in the **Glance** only while it needs you.
 - A **Marked entry** of a **Workspace** sits in the **Pinned** Warmth group, ahead of every other group.
 
 ## Example dialogue
@@ -108,4 +111,5 @@
 - "Result", "entry", and "row" can describe the same visible thing. Use **Entry** for the destination, **Entry row** for its rendering, and **Result list** for the collection.
 - "Query" and "filter" both narrow results. Use **Query** for typed text and **Source filter** for the selected source category.
 - "Pin" is the word the Picker shows for the action, while the command is named "mark". Use **Marked entry** for the state and **pin/unpin** for the action.
+- "Session" alone means a **Herdr session**, never a Workspace. A Claude session is the agent's own conversation and is named in full.
 - "Open" is both a Source label and a general verb. Use **Workspace source** for the category and **open** only for the action.

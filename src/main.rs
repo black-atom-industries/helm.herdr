@@ -15,6 +15,7 @@ mod matcher;
 mod model;
 mod paths;
 mod recent;
+mod sessions;
 mod sources;
 mod theme;
 mod topology;

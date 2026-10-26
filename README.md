@@ -28,6 +28,7 @@ When the Workspace you want is not open yet, type `/` and its name. Search also 
 - [The glance](#the-glance)
   - [Groups](#groups)
   - [Send a Workspace to Cold](#send-a-workspace-to-cold)
+  - [Other Herdr sessions](#other-herdr-sessions)
   - [Detail pane](#detail-pane)
   - [Search](#search)
 - [Install](#install)
@@ -68,6 +69,10 @@ The first five rows get a letter (`a` `s` `d` `f` `g`). Press it once to select 
 `c` `c` sends the selected Workspace to Cold and keeps it there, however busy it gets. The first `c` asks, the second confirms, any other key cancels. A single `c` on a cold Workspace lets it warm up again. Use it for a Workspace you are done with for today that would otherwise take a top row.
 
 A cold Workspace still moves up to Needs you when one of its agents waits on you. Pinning a cold Workspace takes it out of Cold.
+
+### Other Herdr sessions
+
+Needs you also lists the Workspaces of your other running Herdr sessions where an agent waits on you. Their other Workspaces stay out of the glance. Such a row carries an `@session` tag after its name, and the header counts it in `N need you · M elsewhere`. The detail pane works on it as on any row. Opening such a row keeps Helm open and says in the footer how to switch sessions.
 
 ### Detail pane
 

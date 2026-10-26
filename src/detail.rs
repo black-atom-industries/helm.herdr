@@ -8,7 +8,7 @@ use std::{
     time::UNIX_EPOCH,
 };
 
-use crate::topology::OpenTopology;
+use crate::{model::workspace_key, topology::OpenTopology};
 
 /// A transcript untouched for this long belongs to an abandoned subagent.
 pub(crate) const RUNNING_WINDOW_SECS: i64 = 600;
@@ -204,7 +204,7 @@ pub(crate) fn running_subagents(dir: &Path, now: i64) -> Vec<Subagent> {
         .collect()
 }
 
-/// Running subagents of each Claude pane, keyed by pane id.
+/// Running subagents of each Claude pane, keyed by session-qualified pane id.
 pub(crate) fn scan_subagents(
     topology: &OpenTopology,
     projects: &Path,
@@ -213,17 +213,22 @@ pub(crate) fn scan_subagents(
     topology
         .workspaces
         .iter()
-        .flat_map(|workspace| &workspace.tabs)
-        .flat_map(|tab| &tab.panes)
-        .filter(|pane| {
+        .flat_map(|workspace| {
+            workspace
+                .tabs
+                .iter()
+                .flat_map(|tab| &tab.panes)
+                .map(|pane| (workspace.session.as_deref(), pane))
+        })
+        .filter(|(_, pane)| {
             pane.agent
                 .as_ref()
                 .is_some_and(|agent| agent.name.eq_ignore_ascii_case("claude"))
         })
-        .filter_map(|pane| {
+        .filter_map(|(herdr_session, pane)| {
             let session = pane.agent_session.as_deref()?;
             let running = running_subagents(&subagent_dir(projects, &pane.cwd, session), now);
-            (!running.is_empty()).then(|| (pane.id.clone(), running))
+            (!running.is_empty()).then(|| (workspace_key(herdr_session, &pane.id), running))
         })
         .collect()
 }

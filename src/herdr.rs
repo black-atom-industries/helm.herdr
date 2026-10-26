@@ -6,7 +6,11 @@ use std::{
 };
 
 #[cfg(unix)]
-use std::{os::unix::net::UnixStream, path::PathBuf};
+use std::{
+    os::unix::net::UnixStream,
+    path::{Path, PathBuf},
+    time::Duration,
+};
 
 #[cfg(test)]
 use std::sync::{Mutex, MutexGuard, OnceLock};
@@ -45,17 +49,34 @@ pub(crate) fn socket_request_with_id(
     let path = env::var_os("HERDR_SOCKET_PATH")
         .map(PathBuf::from)
         .ok_or_else(|| "HERDR_SOCKET_PATH is not set".to_string())?;
+    socket_request_at(&path, id, method, params, None)
+}
+
+/// Sends one request to the Herdr socket at `path`. With a `timeout`, a socket
+/// that does not answer in time fails instead of blocking.
+#[cfg(unix)]
+pub(crate) fn socket_request_at(
+    path: &Path,
+    id: &str,
+    method: &str,
+    params: Value,
+    timeout: Option<Duration>,
+) -> Result<Value, String> {
     let request = serde_json::json!({
         "id": id,
         "method": method,
         "params": params,
     });
-    let mut stream = UnixStream::connect(&path).map_err(|error| {
+    let mut stream = UnixStream::connect(path).map_err(|error| {
         format!(
             "failed to connect to Herdr socket {}: {error}",
             path.display()
         )
     })?;
+    stream
+        .set_read_timeout(timeout)
+        .and_then(|_| stream.set_write_timeout(timeout))
+        .map_err(|error| format!("failed to set Herdr socket timeout: {error}"))?;
     let line = serde_json::to_string(&request)
         .map_err(|error| format!("failed to encode Herdr request: {error}"))?;
     stream
@@ -90,6 +111,17 @@ pub(crate) fn socket_request_with_id(
 
 #[cfg(not(unix))]
 pub(crate) fn socket_request(_method: &str, _params: Value) -> Result<Value, String> {
+    Err("Herdr socket API requires Unix sockets".into())
+}
+
+#[cfg(not(unix))]
+pub(crate) fn socket_request_at(
+    _path: &std::path::Path,
+    _id: &str,
+    _method: &str,
+    _params: Value,
+    _timeout: Option<std::time::Duration>,
+) -> Result<Value, String> {
     Err("Herdr socket API requires Unix sockets".into())
 }
 
