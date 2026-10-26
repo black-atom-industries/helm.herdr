@@ -35,7 +35,9 @@ use crate::{
     sessions::{Session, SessionState, SwitchError},
     sources::status_icon_at,
     theme::Theme,
-    topology::{self, repository_color, AgentState, OpenTopology, PaneNode, WorkspaceNode},
+    topology::{
+        self, repository_color, AgentState, GitStatus, OpenTopology, PaneNode, WorkspaceNode,
+    },
 };
 
 fn open_action_error(error: String, persist: bool) -> io::Result<()> {
@@ -1291,6 +1293,7 @@ fn detailed_layout(app: &App, row_width: usize, source_width: usize) -> Detailed
 const GLANCE_FIXED_WIDTH: usize = 1 + 3 + 1 + 1 + 4 * 2 + 8;
 const GLANCE_PROGRESS_WIDTH: usize = 8;
 const GLANCE_SIGNAL_MAX: usize = 24;
+const GLANCE_GIT_MAX: usize = 12;
 
 struct GlanceCells {
     icon: &'static str,
@@ -1302,6 +1305,7 @@ struct GlanceCells {
     tag_color: Color,
     name_color: Color,
     branch: String,
+    git: Option<GitStatus>,
     signal: String,
 }
 
@@ -1321,6 +1325,10 @@ fn glance_cells(app: &App, entry: &Entry) -> GlanceCells {
             tag_color: app.theme.mauve,
             name_color: repository_color(&row.repository, &[], &app.theme),
             branch: row.branch.clone(),
+            git: app
+                .workspace_node(entry)
+                .and_then(|workspace| workspace.git.as_ref())
+                .and_then(|git| git.status),
             signal: glance::signal_text(&row.signal, app.now),
         },
         None => GlanceCells {
@@ -1331,6 +1339,7 @@ fn glance_cells(app: &App, entry: &Entry) -> GlanceCells {
             tag_color: app.theme.mauve,
             name_color: app.theme.text,
             branch: display_path(entry),
+            git: None,
             signal: String::new(),
         },
     }
@@ -1364,6 +1373,7 @@ fn session_cells(app: &App, entry: &Entry, state: &SessionState) -> GlanceCells 
         } else {
             "start".into()
         },
+        git: None,
         signal: summary
             .last_active
             .map(|at| glance::age(app.now, at))
@@ -1435,6 +1445,58 @@ fn name_cell(cells: &GlanceCells, width: usize, name: Style, tag: Style) -> Vec<
         Span::styled(tag_text.clone(), tag),
         Span::raw(" ".repeat(padding)),
     ]
+}
+
+/// The GIT cell's parts: `+n` staged, `!n` modified, `?n` untracked, `↑n`
+/// ahead and `↓n` behind, or `clean`. Empty while the status is unknown.
+fn git_parts(app: &App, status: Option<GitStatus>) -> Vec<(String, Color)> {
+    let Some(status) = status else {
+        return Vec::new();
+    };
+    let (ahead, behind) = status.ahead_behind.unwrap_or((0, 0));
+    let parts: Vec<(String, Color)> = [
+        ('+', status.staged, app.theme.green),
+        ('!', status.modified, app.theme.yellow),
+        ('?', status.untracked, app.theme.subtext0),
+        ('↑', ahead, app.theme.accent),
+        ('↓', behind, app.theme.red),
+    ]
+    .into_iter()
+    .filter(|(_, count, _)| *count > 0)
+    .map(|(symbol, count, color)| (format!("{symbol}{count}"), color))
+    .collect();
+    if parts.is_empty() {
+        vec![("✓".into(), app.theme.green)]
+    } else {
+        parts
+    }
+}
+
+fn git_width(parts: &[(String, Color)]) -> usize {
+    parts
+        .iter()
+        .map(|(text, _)| Span::raw(text).width() + 1)
+        .sum::<usize>()
+        .saturating_sub(1)
+}
+
+/// The parts joined by a space in `width` cells, cut from the right.
+fn git_cell(parts: &[(String, Color)], width: usize) -> Vec<Span<'static>> {
+    let mut spans = Vec::new();
+    let mut used = 0;
+    for (index, (text, color)) in parts.iter().enumerate() {
+        let gap = usize::from(index > 0);
+        let room = width.saturating_sub(used + gap);
+        if room == 0 {
+            break;
+        }
+        let clipped = truncate_terminal(text, room);
+        used += gap + Span::raw(&clipped).width();
+        spans.push(Span::raw(" ".repeat(gap)));
+        spans.push(Span::styled(clipped, Style::default().fg(*color)));
+    }
+    spans.push(Span::raw(" ".repeat(width.saturating_sub(used))));
+    spans
 }
 
 fn fit_cell(value: &str, width: usize) -> String {
@@ -1530,6 +1592,7 @@ fn list_card(f: &mut Frame, app: &App, area: Rect) -> Rect {
 }
 
 fn draw_glance_list(f: &mut Frame, app: &App, area: Rect) -> ListHits {
+    let sessions_view = app.sessions_view();
     let visible: Vec<(usize, (String, Color), GlanceCells)> = app
         .filtered
         .iter()
@@ -1541,7 +1604,7 @@ fn draw_glance_list(f: &mut Frame, app: &App, area: Rect) -> ListHits {
         })
         .collect();
 
-    let (state_header, name_header, branch_header) = if app.sessions_view() {
+    let (state_header, name_header, branch_header) = if sessions_view {
         ("", "SESSION", "WORKSPACES")
     } else {
         ("ST", "WORKSPACE", "BRANCH")
@@ -1564,7 +1627,14 @@ fn draw_glance_list(f: &mut Frame, app: &App, area: Rect) -> ListHits {
         .max()
         .unwrap_or(0)
         .clamp("AGE".len(), GLANCE_SIGNAL_MAX);
-    let flex = (area.width as usize).saturating_sub(GLANCE_FIXED_WIDTH + signal_width);
+    let git_width = visible
+        .iter()
+        .map(|(_, _, cells)| git_width(&git_parts(app, cells.git)))
+        .max()
+        .unwrap_or(0)
+        .clamp("GIT".len(), GLANCE_GIT_MAX);
+    let git_room = if sessions_view { 0 } else { git_width + 2 };
+    let flex = (area.width as usize).saturating_sub(GLANCE_FIXED_WIDTH + signal_width + git_room);
     let name_width = name_width.min(flex * 3 / 5);
     let branch_width = branch_width.min(flex.saturating_sub(name_width));
 
@@ -1584,9 +1654,12 @@ fn draw_glance_list(f: &mut Frame, app: &App, area: Rect) -> ListHits {
             "  ".into(),
             fit_cell(branch_header, branch_width),
             "  ".into(),
-            fit_cell("AGE", signal_width),
         ];
-        if !app.sessions_view() {
+        if !sessions_view {
+            columns.extend([fit_cell("GIT", git_width), "  ".into()]);
+        }
+        columns.push(fit_cell("AGE", signal_width));
+        if !sessions_view {
             columns.extend(["  ".into(), "PROGRESS".into()]);
         }
         f.render_widget(
@@ -1668,11 +1741,15 @@ fn draw_glance_list(f: &mut Frame, app: &App, area: Rect) -> ListHits {
                 Style::default().fg(app.theme.subtext0),
             ),
             Span::raw("  "),
-            Span::styled(
-                fit_cell(&cells.signal, signal_width),
-                Style::default().fg(app.theme.subtext0),
-            ),
         ]);
+        if !sessions_view {
+            spans.extend(git_cell(&git_parts(app, cells.git), git_width));
+            spans.push(Span::raw("  "));
+        }
+        spans.push(Span::styled(
+            fit_cell(&cells.signal, signal_width),
+            Style::default().fg(app.theme.subtext0),
+        ));
         if let Some(bar) = progress_cell(app, *position) {
             spans.push(Span::raw("  "));
             spans.push(bar);
@@ -2933,6 +3010,7 @@ mod tests {
                 label: label.into(),
                 head: GitHead::Branch(format!("{label}-branch")),
                 last_commit_at,
+                status: None,
             }),
         }
     }
@@ -3432,6 +3510,90 @@ mod tests {
             column_of(header, "PROGRESS"),
             column_of(header, "AGE") + "AGE".len() + 2
         );
+    }
+
+    #[test]
+    fn the_git_cell_shows_counts_or_clean_and_cuts_from_the_right() {
+        let app = App::new(Config::default(), Theme::terminal());
+        let text = |parts: &[(String, Color)]| {
+            parts
+                .iter()
+                .map(|(text, _)| text.as_str())
+                .collect::<Vec<_>>()
+                .join(" ")
+        };
+        let busy = GitStatus {
+            staged: 2,
+            modified: 1,
+            untracked: 3,
+            ahead_behind: Some((4, 5)),
+        };
+        let parts = git_parts(&app, Some(busy));
+        assert_eq!(text(&parts), "+2 !1 ?3 ↑4 ↓5");
+        let colours: Vec<Color> = parts.iter().map(|(_, colour)| *colour).collect();
+        assert_eq!(
+            colours,
+            [
+                app.theme.green,
+                app.theme.yellow,
+                app.theme.subtext0,
+                app.theme.accent,
+                app.theme.red
+            ]
+        );
+        assert_eq!(git_width(&parts), 14);
+
+        let ahead = GitStatus {
+            ahead_behind: Some((1, 0)),
+            ..GitStatus::default()
+        };
+        assert_eq!(text(&git_parts(&app, Some(ahead))), "↑1");
+        let clean = git_parts(&app, Some(GitStatus::default()));
+        assert_eq!(clean, [("✓".to_string(), app.theme.green)]);
+        assert!(git_parts(&app, None).is_empty());
+
+        let cell = |width| {
+            git_cell(&parts, width)
+                .iter()
+                .map(|span| span.content.to_string())
+                .collect::<String>()
+        };
+        assert_eq!(cell(16), "+2 !1 ?3 ↑4 ↓5  ");
+        assert_eq!(cell(12), "+2 !1 ?3 ↑4 ");
+        assert_eq!(cell(10), "+2 !1 ?3 …");
+    }
+
+    #[test]
+    fn the_git_column_sits_between_branch_and_age_at_160_columns() {
+        let mut busy = commit_workspace("w1", "helm", NOW - 60);
+        busy.git.as_mut().unwrap().status = Some(GitStatus {
+            staged: 2,
+            modified: 1,
+            untracked: 0,
+            ahead_behind: Some((3, 0)),
+        });
+        let mut clean = commit_workspace("w2", "dots", NOW - 120);
+        clean.git.as_mut().unwrap().status = Some(GitStatus::default());
+        let unknown = commit_workspace("w3", "koyo", NOW - 180);
+        let app = glance_app(
+            NOW,
+            None,
+            vec![busy, clean, unknown],
+            ActivityState::default(),
+        );
+
+        let (lines, _) = render_app(&app, 160, 40);
+        let header = &lines[line_index(&lines, "WORKSPACE")];
+        let helm = &lines[line_index(&lines, "helm-branch  +2")];
+        let dots = &lines[line_index(&lines, "dots-branch  ✓")];
+        let koyo = &lines[line_index(&lines, "koyo-branch")];
+        assert!(column_of(header, "BRANCH") < column_of(header, "GIT"));
+        assert!(column_of(header, "GIT") < column_of(header, "AGE"));
+        assert_eq!(column_of(header, "GIT"), column_of(helm, "+2 !1 ↑3"));
+        assert_eq!(column_of(header, "GIT"), column_of(dots, "✓"));
+        assert_eq!(column_of(header, "AGE"), column_of(helm, "1m"));
+        assert_eq!(column_of(header, "AGE"), column_of(koyo, "3m"));
+        assert_eq!(column_of(header, "BRANCH"), column_of(koyo, "koyo-branch"));
     }
 
     #[test]
@@ -4436,6 +4598,7 @@ mod tests {
             tag_color: Color::Reset,
             name_color: Color::Reset,
             branch: String::new(),
+            git: None,
             signal: String::new(),
         };
         let text = |width| {
@@ -4636,6 +4799,7 @@ mod tests {
         assert_eq!(column_of(b, "2 ws"), column_of(default, "start"));
         let header = &lines[line_index(&lines, "RUNNING") - 2];
         assert!(!header.contains("ST ") && !header.contains("PROGRESS"));
+        assert!(!header.contains("GIT"));
         assert_eq!(column_of(header, "KEY"), column_of(work, " a "));
         assert_eq!(
             column_of(header, "SESSION"),

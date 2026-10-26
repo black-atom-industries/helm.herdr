@@ -20,11 +20,20 @@ pub(crate) struct ActivityState {
     workspaces: BTreeMap<String, WorkspaceActivity>,
     #[serde(default)]
     panes: BTreeMap<String, PaneActivity>,
+    /// Keyed by session, `<default>` for the default one.
+    #[serde(default)]
+    sessions: BTreeMap<String, SessionActivity>,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 pub(crate) struct WorkspaceActivity {
     pub(crate) focused_at: i64,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+pub(crate) struct SessionActivity {
+    /// When the User was last in the session.
+    pub(crate) seen_at: i64,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
@@ -39,6 +48,7 @@ impl Default for ActivityState {
             version: STATE_VERSION,
             workspaces: BTreeMap::new(),
             panes: BTreeMap::new(),
+            sessions: BTreeMap::new(),
         }
     }
 }
@@ -108,6 +118,25 @@ impl ActivityState {
             workspace_key(session, workspace_id),
             WorkspaceActivity { focused_at: now },
         );
+    }
+
+    /// When the User was last in `session`: its recorded seen time, else the
+    /// newest focus of its Workspaces.
+    pub(crate) fn seen_at(&self, session: Option<&str>) -> Option<i64> {
+        if let Some(recorded) = self.sessions.get(&session_key(session)) {
+            return Some(recorded.seen_at);
+        }
+        let owner = workspace_key(named(session), "");
+        self.workspaces
+            .iter()
+            .filter(|(key, _)| split_key(key).is_some_and(|(prefix, _)| prefix == owner))
+            .map(|(_, recorded)| recorded.focused_at)
+            .max()
+    }
+
+    pub(crate) fn record_seen(&mut self, session: Option<&str>, now: i64) {
+        self.sessions
+            .insert(session_key(session), SessionActivity { seen_at: now });
     }
 
     pub(crate) fn record_agent_status(
@@ -180,6 +209,17 @@ impl ActivityState {
             });
         }
     }
+}
+
+/// The `sessions` key of `session`; `None` and `default` name the default session.
+fn session_key(session: Option<&str>) -> String {
+    workspace_key(named(session), "")
+        .trim_end_matches("::")
+        .to_string()
+}
+
+fn named(session: Option<&str>) -> Option<&str> {
+    session.filter(|name| *name != "default")
 }
 
 /// Splits a key into its `session::` prefix and the Herdr id. Herdr ids never
@@ -389,6 +429,32 @@ mod tests {
         let state = ActivityState::load_from(&path).unwrap();
         assert_eq!(state.workspaces.keys().collect::<Vec<_>>(), ["work::w1"]);
         assert!(state.panes.is_empty());
+        cleanup(&path);
+    }
+
+    #[test]
+    fn seen_time_falls_back_to_the_newest_focus_of_the_session() {
+        let path = temp_path("seen");
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(
+            &path,
+            br#"{"version":1,"workspaces":{"work::w1":{"focused_at":5},"work::w2":{"focused_at":9},"<default>::w1":{"focused_at":20}}}"#,
+        )
+        .unwrap();
+        let mut state = ActivityState::load_from(&path).unwrap();
+        assert_eq!(state.seen_at(Some("work")), Some(9));
+        assert_eq!(state.seen_at(Some("default")), Some(20));
+        assert_eq!(state.seen_at(Some("play")), None);
+
+        state.record_seen(Some("work"), 3);
+        state.record_seen(Some("default"), 30);
+        assert_eq!(state.seen_at(Some("work")), Some(3));
+        assert_eq!(state.seen_at(None), Some(30));
+        state.save_to(&path).unwrap();
+        let persisted: serde_json::Value =
+            serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+        assert_eq!(persisted["sessions"]["work"]["seen_at"], 3);
+        assert_eq!(persisted["sessions"]["<default>"]["seen_at"], 30);
         cleanup(&path);
     }
 

@@ -105,12 +105,19 @@ pub(crate) struct GlanceRow {
     pub(crate) other_session: Option<String>,
 }
 
+/// `elsewhere` marks a Workspace of a session the User is not in. Herdr keeps
+/// that session's focus, so an agent finishing there reads `idle`; one that
+/// went idle after the User was last there counts as done.
 pub(crate) fn evidence(
     workspace: &WorkspaceNode,
     activity: &ActivityState,
     pinned: bool,
     sent_cold_at: Option<i64>,
+    elsewhere: bool,
 ) -> Evidence {
+    let seen_at = elsewhere
+        .then(|| activity.seen_at(workspace.session.as_deref()))
+        .flatten();
     let agents = workspace
         .tabs
         .iter()
@@ -121,8 +128,14 @@ pub(crate) fn evidence(
                 .pane(workspace.session.as_deref(), &pane.id)
                 .filter(|recorded| AgentState::parse(&recorded.status) == agent.state)
                 .map(|recorded| recorded.since);
+            let unseen = agent.state == AgentState::Idle
+                && since.zip(seen_at).is_some_and(|(since, seen)| since > seen);
             Some(PaneEvidence {
-                state: agent.state,
+                state: if unseen {
+                    AgentState::Done
+                } else {
+                    agent.state
+                },
                 since,
             })
         })

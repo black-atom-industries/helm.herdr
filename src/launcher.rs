@@ -8,8 +8,9 @@ use std::{
 };
 
 use crate::{
+    activity::{now_unix_secs, ActivityState},
     herdr::{herdr_bin, socket_request_at},
-    paths::herdr_root,
+    paths::{activity_state_path, herdr_root},
     sessions::{self, LauncherRecord, SwitchRequest},
 };
 
@@ -92,6 +93,7 @@ fn attach(dir: &Path, launcher_pid: u32, target: &SwitchRequest) -> ExitStatus {
         session: target.session.clone(),
     };
     let _ = sessions::write_record(dir, &record);
+    let _ = record_seen(&activity_state_path(), &target.session, now_unix_secs());
     if let Some(workspace) = &target.workspace_id {
         focus_when_ready(
             sessions::socket_of(&herdr_root(), &target.session),
@@ -108,8 +110,14 @@ fn attach(dir: &Path, launcher_pid: u32, target: &SwitchRequest) -> ExitStatus {
         eprintln!("failed to wait for herdr: {error}");
         process::exit(1);
     });
+    let _ = record_seen(&activity_state_path(), &target.session, now_unix_secs());
     sessions::remove_record(dir, &record);
     status
+}
+
+/// Records that the User is in the session Herdr calls `session`.
+fn record_seen(path: &Path, session: &str, now: i64) -> io::Result<()> {
+    ActivityState::update_at(path, |activity| activity.record_seen(Some(session), now)).map(|_| ())
 }
 
 fn restore_terminal(leave_alternate_screen: bool) {
@@ -178,6 +186,26 @@ mod tests {
         assert_eq!(resolve_target(None, Some("  ")).unwrap(), "default");
         assert_eq!(resolve_target(None, None).unwrap(), "default");
         assert_eq!(resolve_target(Some(""), Some("b")).unwrap(), "b");
+    }
+
+    #[test]
+    fn attaching_and_leaving_record_the_session_as_seen() {
+        let dir = std::env::temp_dir().join(format!("helm-launcher-seen-{}", process::id()));
+        let path = dir.join("activity.json");
+        record_seen(&path, "work", 10).unwrap();
+        record_seen(&path, "default", 20).unwrap();
+        let activity = ActivityState::load_from(&path).unwrap();
+        assert_eq!(activity.seen_at(Some("work")), Some(10));
+        assert_eq!(activity.seen_at(None), Some(20));
+
+        record_seen(&path, "work", 30).unwrap();
+        let activity = ActivityState::load_from(&path).unwrap();
+        assert_eq!(
+            activity.seen_at(Some("work")),
+            Some(30),
+            "the exit time wins"
+        );
+        let _ = fs::remove_dir_all(&dir);
     }
 
     #[test]

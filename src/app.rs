@@ -265,7 +265,13 @@ impl App {
                 let pinned = entry.is_some_and(|entry| self.is_pinned(entry));
                 let sent_cold_at =
                     entry.and_then(|entry| self.cold_entries.get(&pin_key(entry)).copied());
-                let evidence = glance::evidence(workspace, &self.activity, pinned, sent_cold_at);
+                let evidence = glance::evidence(
+                    workspace,
+                    &self.activity,
+                    pinned,
+                    sent_cold_at,
+                    elsewhere,
+                );
                 let previous = !elsewhere
                     && self.previous_workspace_id.as_deref() == Some(workspace.id.as_str());
                 let mut row = glance::row(workspace, &evidence, previous, self.now, thresholds);
@@ -453,7 +459,13 @@ impl App {
                     ))
                     .copied()
                     .filter(|_| state.current);
-                let evidence = glance::evidence(&workspace, &self.activity, false, sent_cold_at);
+                let evidence = glance::evidence(
+                    &workspace,
+                    &self.activity,
+                    false,
+                    sent_cold_at,
+                    !state.current,
+                );
                 let previous = state.current
                     && self.previous_workspace_id.as_deref() == Some(workspace.id.as_str());
                 let mut row = glance::row(&workspace, &evidence, previous, self.now, thresholds);
@@ -1682,7 +1694,17 @@ pub(crate) fn track_focus(config: &Config) -> Result<(), String> {
         record_focused_workspace(focused)?;
     }
     let session = sessions::current();
-    update_activity(|activity| activity.record_focus(session.as_deref(), focused, now_unix_secs()))
+    let now = now_unix_secs();
+    update_activity(|activity| {
+        activity.record_focus(session.as_deref(), focused, now);
+        activity.record_seen(session.as_deref(), now);
+    })
+}
+
+/// Records that the User is in the current session.
+pub(crate) fn record_seen() -> Result<(), String> {
+    let session = sessions::current();
+    update_activity(|activity| activity.record_seen(session.as_deref(), now_unix_secs()))
 }
 
 pub(crate) fn track_agent() -> Result<(), String> {
@@ -1784,7 +1806,7 @@ fn join_needs_you(topology: &mut OpenTopology, others: OpenTopology, activity: &
     topology
         .workspaces
         .extend(others.workspaces.into_iter().filter(|workspace| {
-            glance::needs_you(&glance::evidence(workspace, activity, false, None))
+            glance::needs_you(&glance::evidence(workspace, activity, false, None, true))
         }));
 }
 
@@ -2200,6 +2222,7 @@ exit 0
             "HERDR_BIN_PATH",
             "HERDR_PLUGIN_CONFIG_DIR",
             "HERDR_PLUGIN_CONTEXT_JSON",
+            "HERDR_PLUGIN_EVENT_JSON",
             "HERDR_SESSION",
             "HERDR_TEST_LOG",
             "HERDR_TEST_MODE",
@@ -2651,6 +2674,7 @@ exit 0
                 label: label.into(),
                 head: GitHead::Branch("main".into()),
                 last_commit_at: Some(at),
+                status: None,
             }),
         }
     }
@@ -3319,6 +3343,89 @@ exit 0
             .map(|workspace| workspace.label.as_str())
             .collect();
         assert_eq!(labels, ["helm", "api"]);
+    }
+
+    fn idle_since(session: &str, since: i64, seen_at: Option<i64>) -> ActivityState {
+        let mut activity = ActivityState::default();
+        activity.record_agent_status(Some(session), "w1:p1", "idle", since);
+        if let Some(seen_at) = seen_at {
+            activity.record_seen(Some(session), seen_at);
+        }
+        activity
+    }
+
+    #[test]
+    fn an_agent_elsewhere_that_went_idle_after_the_user_left_counts_as_done() {
+        let workspace = agent_workspace(Some("work"), "w1", "api", AgentState::Idle);
+        let state = |activity: &ActivityState, elsewhere| {
+            glance::needs_you_state(&glance::evidence(
+                &workspace, activity, false, None, elsewhere,
+            ))
+        };
+        let unseen = idle_since("work", NOW, Some(NOW - 1));
+        assert_eq!(state(&unseen, true), Some(AgentState::Done));
+        assert_eq!(state(&unseen, false), None);
+        assert_eq!(state(&idle_since("work", NOW, Some(NOW)), true), None);
+        assert_eq!(state(&idle_since("work", NOW, None), true), None);
+
+        let mut focused = idle_since("work", NOW, None);
+        focused.record_focus(Some("work"), "w2", NOW - 1);
+        focused.record_focus(Some("play"), "w1", NOW + 1);
+        assert_eq!(state(&focused, true), Some(AgentState::Done));
+        focused.record_focus(Some("work"), "w3", NOW);
+        assert_eq!(state(&focused, true), None);
+
+        let mut topology = OpenTopology::default();
+        join_needs_you(
+            &mut topology,
+            OpenTopology {
+                workspaces: vec![workspace.clone()],
+            },
+            &unseen,
+        );
+        let mut app = App::new(Config::default(), Theme::terminal());
+        app.apply_workspaces(
+            Workspaces {
+                topology: OpenTopology {
+                    workspaces: vec![
+                        bare_workspace("w1", "helm", true, None),
+                        topology.workspaces[0].clone(),
+                    ],
+                },
+                activity: unseen,
+                previous: None,
+                subagents: HashMap::new(),
+                session: None,
+                sessions: Vec::new(),
+            },
+            NOW,
+        );
+        let api = app
+            .entries
+            .iter()
+            .find(|entry| entry.title == "api")
+            .unwrap();
+        let row = app.glance_row(api).unwrap();
+        assert_eq!(row.group, Group::NeedsYou);
+        assert_eq!(row.state, AgentState::Done);
+    }
+
+    #[test]
+    fn opening_helm_and_focus_events_record_the_current_session_as_seen() {
+        let _env = command_test_env();
+        let before = now_unix_secs();
+        record_seen().unwrap();
+        assert!(ActivityState::load().seen_at(Some("work")) >= Some(before));
+
+        ActivityState::update(|activity| activity.record_seen(Some("work"), 1)).unwrap();
+        env::set_var(
+            "HERDR_PLUGIN_EVENT_JSON",
+            r#"{"data":{"workspace_id":"w1"}}"#,
+        );
+        track_focus(&command_test_config()).unwrap();
+        let activity = ActivityState::load();
+        assert!(activity.seen_at(Some("work")) >= Some(before));
+        assert_eq!(activity.seen_at(None), None);
     }
 
     #[test]

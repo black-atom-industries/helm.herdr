@@ -212,8 +212,7 @@ pub(crate) struct Waiting {
 }
 
 /// The other running sessions that have Workspaces in Needs you, in discovery order.
-pub(crate) fn waiting(states: &[SessionState]) -> Vec<Waiting> {
-    let activity = ActivityState::default();
+pub(crate) fn waiting(states: &[SessionState], activity: &ActivityState) -> Vec<Waiting> {
     states
         .iter()
         .filter(|state| !state.current)
@@ -224,7 +223,9 @@ pub(crate) fn waiting(states: &[SessionState]) -> Vec<Waiting> {
                 .workspaces
                 .iter()
                 .filter_map(|workspace| {
-                    glance::needs_you_state(&glance::evidence(workspace, &activity, false, None))
+                    glance::needs_you_state(&glance::evidence(
+                        workspace, activity, false, None, true,
+                    ))
                 })
                 .collect();
             let urgent = glance::most_urgent(states.iter().copied())?;
@@ -255,7 +256,7 @@ pub(crate) fn status_line(waiting: &[Waiting], icons: IconStyle) -> String {
 
 /// [`waiting`] for this process's Herdr root and session.
 pub(crate) fn read_waiting() -> Vec<Waiting> {
-    waiting(&read_states())
+    waiting(&read_states(), &ActivityState::load())
 }
 
 /// [`states`] for this process's Herdr root and session.
@@ -710,7 +711,7 @@ mod tests {
             servers.push(serve(&dir, snapshot_result("api", status)));
         }
 
-        let waiting = waiting(&states(&root, Some("a"), None));
+        let waiting = waiting(&states(&root, Some("a"), None), &ActivityState::default());
         assert_eq!(
             waiting,
             vec![Waiting {
@@ -719,6 +720,30 @@ mod tests {
                 count: 1,
             }]
         );
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn waiting_counts_an_agent_that_went_idle_after_the_user_left_as_done() {
+        let _lock = crate::herdr::test_env_lock();
+        let root = temp_root("i");
+        let dir = root.join("sessions/b");
+        fs::create_dir_all(&dir).unwrap();
+        let _server = serve(&dir, snapshot_result("api", "idle"));
+        let mut activity = ActivityState::default();
+        activity.record_agent_status(Some("b"), "w1:p1", "idle", 20);
+        activity.record_seen(Some("b"), 10);
+
+        let waiting = waiting(&states(&root, Some("a"), None), &activity);
+        assert_eq!(
+            waiting,
+            vec![Waiting {
+                session: "b".into(),
+                state: AgentState::Done,
+                count: 1,
+            }]
+        );
+        assert_eq!(status_line(&waiting, IconStyle::Unicode), "b ✔1");
         let _ = fs::remove_dir_all(&root);
     }
 
@@ -752,7 +777,7 @@ mod tests {
         let _server = serve(&dir, snapshot);
 
         assert_eq!(
-            waiting(&states(&root, Some("a"), None)),
+            waiting(&states(&root, Some("a"), None), &ActivityState::default()),
             vec![Waiting {
                 session: "b".into(),
                 state: AgentState::Blocked,
