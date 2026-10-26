@@ -30,7 +30,7 @@ use crate::{
     detail::{self, Change, Commit, GitDetail, Subagent},
     glance::{self, Group, Mark},
     keymap::{keybindings, Command},
-    model::{Entry, Source},
+    model::{workspace_key, Entry, Source},
     paths::home,
     sources::status_icon_at,
     theme::Theme,
@@ -281,7 +281,7 @@ fn handle_mouse(app: &mut App, mouse: MouseEvent, hits: &ListHits) -> Action {
                 return Action::Continue;
             };
             if app.selected == *row {
-                return Action::Open;
+                return stay_for_other_session(app, Action::Open);
             }
             app.selected = *row;
         }
@@ -290,7 +290,34 @@ fn handle_mouse(app: &mut App, mouse: MouseEvent, hits: &ListHits) -> Action {
     Action::Continue
 }
 
+/// The footer notice for opening a Workspace in another Herdr session.
+const OTHER_SESSION_NOTICE: &str = "Start Herdr with helm-herdr shell to switch sessions";
+
 fn handle_key(app: &mut App, key: KeyEvent) -> Action {
+    app.notice = None;
+    let action = key_action(app, key);
+    stay_for_other_session(app, action)
+}
+
+/// Helm cannot focus a Workspace of another Herdr session, so opening one
+/// keeps the Picker open with a notice instead.
+fn stay_for_other_session(app: &mut App, action: Action) -> Action {
+    let opens = matches!(
+        action,
+        Action::Open | Action::OpenTemplate | Action::OpenTab(_)
+    );
+    if opens
+        && app
+            .selected_entry()
+            .is_some_and(|entry| app.is_elsewhere(entry))
+    {
+        app.notice = Some(OTHER_SESSION_NOTICE);
+        return Action::Continue;
+    }
+    action
+}
+
+fn key_action(app: &mut App, key: KeyEvent) -> Action {
     let previous_label = app.last_label.take();
     let close_armed = std::mem::take(&mut app.close_armed);
     let cold_armed = std::mem::take(&mut app.cold_armed);
@@ -308,6 +335,16 @@ fn handle_key(app: &mut App, key: KeyEvent) -> Action {
     }
 
     if let Some(command) = command {
+        // Workspace ids repeat across sessions, so these would act on a local namesake.
+        if matches!(
+            command,
+            Command::ArmClose | Command::CloseWorkspace | Command::ToggleCold | Command::ToggleMark
+        ) && app
+            .selected_entry()
+            .is_some_and(|entry| app.is_elsewhere(entry))
+        {
+            return Action::Continue;
+        }
         if command == Command::ArmClose {
             if close_armed {
                 return Action::CloseWorkspace;
@@ -708,6 +745,11 @@ fn group_count_spans(app: &App) -> Vec<Span<'static>> {
             Group::Cold,
         ),
     ];
+    let elsewhere = app
+        .glance
+        .values()
+        .filter(|row| row.needs_you && row.other_session.is_some())
+        .count();
     let mut spans = Vec::new();
     for (count, word, group) in counts {
         if count == 0 {
@@ -720,6 +762,12 @@ fn group_count_spans(app: &App) -> Vec<Span<'static>> {
             format!("{count} {word}"),
             Style::default().fg(group_color(&app.theme, group)),
         ));
+        if group == Group::NeedsYou && elsewhere > 0 {
+            spans.push(Span::styled(
+                format!(" · {elsewhere} elsewhere"),
+                Style::default().fg(app.theme.subtext0),
+            ));
+        }
     }
     spans
 }
@@ -797,6 +845,14 @@ fn draw_key_hints(f: &mut Frame, app: &App, area: Rect) {
     } else {
         None
     };
+    if let Some(notice) = app.notice.filter(|_| armed.is_none()) {
+        f.render_widget(
+            Paragraph::new(Span::styled(notice, Style::default().fg(app.theme.peach)))
+                .style(Style::default().bg(app.theme.popup_background())),
+            area,
+        );
+        return;
+    }
     if let Some((key, verb, color)) = armed {
         let name = app.selected_entry().map(display_title).unwrap_or_default();
         let line = Line::from(vec![
@@ -1131,6 +1187,8 @@ struct GlanceCells {
     icon: &'static str,
     icon_color: Color,
     name: String,
+    /// The `@session` tag of a Workspace in another Herdr session.
+    tag: Option<String>,
     name_color: Color,
     branch: String,
     mark: Mark,
@@ -1143,6 +1201,10 @@ fn glance_cells(app: &App, entry: &Entry) -> GlanceCells {
             icon: glance::status_icon(row.state, app.config.glance.icons, app.spinner_tick),
             icon_color: agent_state_color(&app.theme, row.state),
             name: row.name.clone(),
+            tag: row
+                .other_session
+                .as_ref()
+                .map(|session| format!("@{session}")),
             name_color: repository_color(&row.repository, &[], &app.theme),
             branch: row.branch.clone(),
             mark: row.mark,
@@ -1152,6 +1214,7 @@ fn glance_cells(app: &App, entry: &Entry) -> GlanceCells {
             icon: "",
             icon_color: app.theme.text,
             name: display_title(entry).to_string(),
+            tag: None,
             name_color: app.theme.text,
             branch: display_path(entry),
             mark: Mark::None,
@@ -1179,6 +1242,36 @@ fn group_color(theme: &Theme, group: Group) -> Color {
         Group::Cold => theme.overlay0,
         Group::Directories | Group::Other => theme.subtext0,
     }
+}
+
+/// The width of a name cell: the name, then a space and its tag.
+fn name_cell_width(cells: &GlanceCells) -> usize {
+    Span::raw(&cells.name).width()
+        + cells
+            .tag
+            .as_ref()
+            .map_or(0, |tag| 1 + Span::raw(tag).width())
+}
+
+/// The name, then its tag, in `width` cells. A short cell clips the name and
+/// keeps the tag whole while the name keeps at least two cells.
+fn name_cell(cells: &GlanceCells, width: usize, name: Style, tag: Style) -> Vec<Span<'static>> {
+    let Some(tag_text) = &cells.tag else {
+        return vec![Span::styled(fit_cell(&cells.name, width), name)];
+    };
+    let tag_width = Span::raw(tag_text).width();
+    let name_room = width.saturating_sub(tag_width + 1);
+    if name_room < 2 {
+        return vec![Span::styled(fit_cell(&cells.name, width), name)];
+    }
+    let clipped = truncate_terminal(&cells.name, name_room);
+    let padding = width.saturating_sub(Span::raw(&clipped).width() + 1 + tag_width);
+    vec![
+        Span::styled(clipped, name),
+        Span::raw(" "),
+        Span::styled(tag_text.clone(), tag),
+        Span::raw(" ".repeat(padding)),
+    ]
 }
 
 fn fit_cell(value: &str, width: usize) -> String {
@@ -1243,7 +1336,7 @@ fn draw_glance_list(f: &mut Frame, app: &App, area: Rect) -> ListHits {
 
     let name_width = visible
         .iter()
-        .map(|(_, _, cells)| Span::raw(&cells.name).width())
+        .map(|(_, _, cells)| name_cell_width(cells))
         .max()
         .unwrap_or(0);
     let branch_width = visible
@@ -1323,12 +1416,16 @@ fn draw_glance_list(f: &mut Frame, app: &App, area: Rect) -> ListHits {
                 Style::default().fg(cells.icon_color),
             ),
             Span::raw("  "),
-            Span::styled(
-                fit_cell(&cells.name, name_width),
-                Style::default()
-                    .fg(cells.name_color)
-                    .add_modifier(Modifier::BOLD),
-            ),
+        ];
+        spans.extend(name_cell(
+            cells,
+            name_width,
+            Style::default()
+                .fg(cells.name_color)
+                .add_modifier(Modifier::BOLD),
+            Style::default().fg(app.theme.mauve),
+        ));
+        spans.extend([
             Span::raw("  "),
             Span::styled(
                 fit_cell(&cells.branch, branch_width),
@@ -1339,7 +1436,7 @@ fn draw_glance_list(f: &mut Frame, app: &App, area: Rect) -> ListHits {
                 fit_cell(&cells.signal, signal_width),
                 Style::default().fg(app.theme.subtext0),
             ),
-        ];
+        ]);
         if let Some(bar) = progress_cell(app, *position) {
             spans.push(Span::raw("  "));
             spans.push(bar);
@@ -1620,7 +1717,10 @@ fn agent_lines(
             vec![Span::styled(elapsed, dim)],
             width,
         ));
-        let subagents = app.subagents.get(&pane.id).map_or(&[][..], Vec::as_slice);
+        let subagents = app
+            .subagents
+            .get(&workspace_key(workspace.session.as_deref(), &pane.id))
+            .map_or(&[][..], Vec::as_slice);
         let shown = if subagents.len() <= spare {
             subagents.len()
         } else {
@@ -2451,6 +2551,7 @@ mod tests {
                 activity,
                 previous: previous.map(str::to_string),
                 subagents: Default::default(),
+                session: None,
             },
             now,
         );
@@ -3563,8 +3664,10 @@ mod tests {
             ActivityState::default(),
         );
         for id in ["p-helm", "p-skills"] {
-            app.subagents
-                .insert(id.into(), vec![subagent("Port the tests", 3, 6, NOW - 192)]);
+            app.subagents.insert(
+                format!("<default>::{id}"),
+                vec![subagent("Port the tests", 3, 6, NOW - 192)],
+            );
         }
         let (lines, _) = render_app(&app, 100, 20);
         assert!(lines[line_index(&lines, "helm")].contains("▰▰▰▰▱▱▱▱"));
@@ -3575,7 +3678,7 @@ mod tests {
     fn list_progress_column_shows_summed_subagent_progress() {
         let mut app = detail_app(vec![claude_pane()], 0, ActivityState::default());
         app.subagents.insert(
-            "p1".into(),
+            "<default>::p1".into(),
             vec![subagent("Port the tests", 3, 6, NOW - 192)],
         );
         let (lines, _) = render_app(&app, 100, 40);
@@ -3590,7 +3693,7 @@ mod tests {
         activity.record_agent_status(None, "p1", "working", NOW - 14 * 60);
         let mut app = detail_app(vec![agent], 0, activity);
         app.subagents.insert(
-            "p1".into(),
+            "<default>::p1".into(),
             vec![
                 subagent("Port the list continuation tests", 4, 6, NOW - 192),
                 subagent("Research concealed list markers", 1, 4, NOW - 48),
@@ -3628,6 +3731,7 @@ mod tests {
                 activity,
                 previous: None,
                 subagents: Default::default(),
+                session: None,
             },
             NOW,
         );
@@ -3732,7 +3836,8 @@ mod tests {
         let mut second = pane("p2", "/repos/helm.herdr", Some(("codex", AgentState::Idle)));
         second.title = Some("Second agent".into());
         let mut app = detail_app(vec![claude_pane(), second], 0, ActivityState::default());
-        app.subagents.insert("p1".into(), many_subagents(8));
+        app.subagents
+            .insert("<default>::p1".into(), many_subagents(8));
         app.cache_git(WORKSPACE_KEY.into(), dirty_git(), NOW);
         app
     }
@@ -3781,5 +3886,156 @@ mod tests {
         let detail_column = |line: &str| line.chars().skip(64).collect::<String>();
         assert!(detail_column(&lines[chips + 1]).trim().is_empty());
         assert_eq!(name, chips + 2);
+    }
+
+    fn other_session_app() -> App {
+        let mut waiting = agent_workspace("w1", "api", AgentState::Blocked);
+        waiting.session = Some("work".into());
+        waiting.focused = true;
+        let mut idle = agent_workspace("w2", "notes", AgentState::Idle);
+        idle.session = Some("work".into());
+        let mut app = glance_app(
+            NOW,
+            None,
+            vec![
+                agent_workspace("w1", "skills", AgentState::Blocked),
+                commit_workspace("w2", "dots", NOW - 60),
+                waiting,
+                idle,
+            ],
+            ActivityState::default(),
+        );
+        app.selected = app
+            .filtered
+            .iter()
+            .position(|index| app.entries[*index].title == "api")
+            .unwrap();
+        app
+    }
+
+    #[test]
+    fn other_session_rows_show_their_tag_and_the_header_counts_them() {
+        let app = other_session_app();
+        let (lines, _) = render_app(&app, 160, 40);
+
+        assert!(lines[0].contains("2 need you · 1 elsewhere"));
+        let api = &lines[line_index(&lines, "api @work")];
+        let skills = &lines[line_index(&lines, "skills")];
+        assert!(!api.contains('●'));
+        assert_eq!(
+            column_of(api, "api-branch"),
+            column_of(skills, "skills-branch")
+        );
+        assert!(!lines.iter().any(|line| line.contains("notes")));
+    }
+
+    #[test]
+    fn the_session_tag_takes_the_mauve_colour() {
+        let app = other_session_app();
+        let mut terminal = Terminal::new(TestBackend::new(160, 40)).unwrap();
+        terminal
+            .draw(|f| {
+                draw(f, &app);
+            })
+            .unwrap();
+        let buffer = terminal.backend().buffer();
+        let (x, y) = (0..buffer.area.height)
+            .find_map(|y| {
+                let line: String = (0..buffer.area.width)
+                    .map(|x| buffer[(x, y)].symbol().to_string())
+                    .collect();
+                line.find("@work")
+                    .map(|byte| (line[..byte].chars().count() as u16, y))
+            })
+            .unwrap();
+        assert_eq!(buffer[(x, y)].fg, app.theme.mauve);
+    }
+
+    #[test]
+    fn a_tight_name_column_clips_the_name_and_keeps_the_tag() {
+        let cells = GlanceCells {
+            icon: "",
+            icon_color: Color::Reset,
+            name: "helm.herdr".into(),
+            tag: Some("@work".into()),
+            name_color: Color::Reset,
+            branch: String::new(),
+            mark: Mark::None,
+            signal: String::new(),
+        };
+        let text = |width| {
+            name_cell(&cells, width, Style::default(), Style::default())
+                .iter()
+                .map(|span| span.content.to_string())
+                .collect::<String>()
+        };
+        assert_eq!(text(18), "helm.herdr @work  ");
+        assert_eq!(text(10), "hel… @work");
+        assert_eq!(text(7), "helm.h…");
+    }
+
+    #[test]
+    fn opening_an_other_session_row_keeps_helm_open_with_a_notice() {
+        let mut app = other_session_app();
+        let label = app
+            .labelled_positions()
+            .iter()
+            .position(|&position| position == app.selected)
+            .map(|slot| app.config.glance.labels()[slot])
+            .unwrap();
+
+        assert_eq!(handle_key(&mut app, key(KeyCode::Enter)), Action::Continue);
+        assert_eq!(app.notice, Some(OTHER_SESSION_NOTICE));
+        let (lines, _) = render_app(&app, 160, 40);
+        assert!(lines
+            .last()
+            .unwrap()
+            .contains("Start Herdr with helm-herdr shell to switch sessions"));
+
+        assert_eq!(
+            handle_key(&mut app, key(KeyCode::Char('j'))),
+            Action::Continue
+        );
+        assert_eq!(app.notice, None);
+        app.selected = app.labelled_positions()[app
+            .config
+            .glance
+            .labels()
+            .iter()
+            .position(|ch| *ch == label)
+            .unwrap()];
+
+        handle_key(&mut app, key(KeyCode::Char(label)));
+        assert_eq!(
+            handle_key(&mut app, key(KeyCode::Char(label))),
+            Action::Continue
+        );
+        assert_eq!(app.notice, Some(OTHER_SESSION_NOTICE));
+
+        assert_eq!(
+            handle_key(&mut app, key(KeyCode::Char('1'))),
+            Action::Continue
+        );
+        assert_eq!(app.notice, Some(OTHER_SESSION_NOTICE));
+    }
+
+    #[test]
+    fn close_cold_and_pin_leave_other_session_rows_alone() {
+        let mut app = other_session_app();
+        assert_eq!(
+            handle_key(&mut app, key(KeyCode::Char('x'))),
+            Action::Continue
+        );
+        assert!(!app.close_armed);
+        handle_key(&mut app, key(KeyCode::Char('c')));
+        assert!(!app.cold_armed);
+        assert_eq!(
+            handle_key(
+                &mut app,
+                KeyEvent::new(KeyCode::Char('x'), KeyModifiers::CONTROL)
+            ),
+            Action::Continue
+        );
+        assert_eq!(selected_title(&app), "api");
     }
 }

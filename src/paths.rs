@@ -3,16 +3,24 @@ use std::{
     path::{Path, PathBuf},
 };
 
+/// Herdr's config directory, which holds the default session and `sessions/`.
+pub(crate) fn herdr_root() -> PathBuf {
+    env::var_os("XDG_CONFIG_HOME")
+        .filter(|value| !value.is_empty())
+        .map(|value| PathBuf::from(value).join("herdr"))
+        .unwrap_or_else(|| home().join(".config/herdr"))
+}
+
 pub(crate) fn plugin_config_dir() -> PathBuf {
     env::var("HERDR_PLUGIN_CONFIG_DIR")
         .map(PathBuf::from)
-        .unwrap_or_else(|_| home().join(".config/herdr/plugins/config/helm-herdr"))
+        .unwrap_or_else(|_| herdr_root().join("plugins/config/helm-herdr"))
 }
 
 pub(crate) fn migrate_legacy_plugin_config() {
     let current = plugin_config_dir();
-    let legacy_picker_plus = home().join(".config/herdr/plugins/config/herdr-picker-plus");
-    let legacy_navigator = home().join(".config/herdr/plugins/config/herdr-navigator");
+    let legacy_picker_plus = herdr_root().join("plugins/config/herdr-picker-plus");
+    let legacy_navigator = herdr_root().join("plugins/config/herdr-navigator");
     if current != legacy_picker_plus {
         let _ = copy_missing_files(&legacy_picker_plus, &current);
     }
@@ -87,6 +95,45 @@ mod tests {
         assert_eq!(
             recent_workspaces_state_path().parent().unwrap(),
             plugin_config_dir()
+        );
+    }
+
+    #[test]
+    fn herdr_root_follows_xdg_config_home_and_falls_back_to_home() {
+        struct RestoreEnv(Vec<(&'static str, Option<std::ffi::OsString>)>);
+        impl Drop for RestoreEnv {
+            fn drop(&mut self) {
+                for (name, value) in &self.0 {
+                    match value {
+                        Some(value) => env::set_var(name, value),
+                        None => env::remove_var(name),
+                    }
+                }
+            }
+        }
+        let _lock = crate::herdr::test_env_lock();
+        let _restore = RestoreEnv(
+            ["XDG_CONFIG_HOME", "HOME", "HERDR_PLUGIN_CONFIG_DIR"]
+                .into_iter()
+                .map(|name| (name, env::var_os(name)))
+                .collect(),
+        );
+        let temp = env::temp_dir().join(format!("helm-root-{}", std::process::id()));
+        env::remove_var("HERDR_PLUGIN_CONFIG_DIR");
+        env::set_var("HOME", temp.join("home"));
+
+        env::set_var("XDG_CONFIG_HOME", temp.join("xdg"));
+        assert_eq!(herdr_root(), temp.join("xdg/herdr"));
+        assert_eq!(
+            plugin_config_dir(),
+            temp.join("xdg/herdr/plugins/config/helm-herdr")
+        );
+
+        env::remove_var("XDG_CONFIG_HOME");
+        assert_eq!(herdr_root(), temp.join("home/.config/herdr"));
+        assert_eq!(
+            plugin_config_dir(),
+            temp.join("home/.config/herdr/plugins/config/helm-herdr")
         );
     }
 

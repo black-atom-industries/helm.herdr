@@ -98,6 +98,8 @@ pub(crate) struct GlanceRow {
     pub(crate) signal: Signal,
     /// Whether an agent waits on the User, even when the row sits in another group such as Pinned.
     pub(crate) needs_you: bool,
+    /// The Herdr session of a Workspace outside the current session.
+    pub(crate) other_session: Option<String>,
 }
 
 pub(crate) fn evidence(
@@ -168,8 +170,14 @@ pub(crate) fn row(
             .map_or_else(|| workspace.label.clone(), |git| git.repo_key.clone()),
         mark,
         signal: verdict.signal,
-        needs_you: needs_you_signal(evidence).is_some(),
+        needs_you: needs_you(evidence),
+        other_session: None,
     }
+}
+
+/// Whether an agent waits on the User.
+pub(crate) fn needs_you(evidence: &Evidence) -> bool {
+    needs_you_signal(evidence).is_some()
 }
 
 pub(crate) fn classify(evidence: &Evidence, now: i64, thresholds: Thresholds) -> Verdict {
