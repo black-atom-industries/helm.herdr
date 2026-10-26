@@ -59,7 +59,7 @@ Every open Workspace sits in one group:
 
 Activity is the newest of three things: when you last focused the Workspace, its last commit, and its agents' last state change. Each row shows how long ago that was, such as `4m`.
 
-A row also shows its agent's state icon, the git branch, `here` on the Workspace you are in and `last` on the one before. While an agent works, a bar at the end of the row sums the progress of its subagents.
+A row also shows its agent's state icon and the git branch. Right after the row's letter, `●` sits on the Workspace you are in and a dim `◌` on the one before. While an agent works, a bar at the end of the row sums the progress of its subagents.
 
 The first five rows get a letter (`a` `s` `d` `f` `g`). Press it once to select the row, twice to open it. Rows hold their place while Helm is open, so the letters don't jump around under you.
 

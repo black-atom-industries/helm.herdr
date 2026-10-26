@@ -1120,11 +1120,11 @@ fn detailed_layout(app: &App, row_width: usize, source_width: usize) -> Detailed
     }
 }
 
-/// Columns left of the signal: margin, label, icon, name, branch, progress
-/// and mark, with a two-column gap after each of the six inner cells.
-const GLANCE_FIXED_WIDTH: usize = 1 + 2 + 1 + 8 + 4 + 6 * 2;
+/// Columns besides name, branch and signal: margin, label, mark and icon,
+/// a one-column gap after label and mark, a two-column gap after icon, name,
+/// branch and signal, and the progress bar.
+const GLANCE_FIXED_WIDTH: usize = 1 + 3 + 1 + 1 + 1 + 1 + 4 * 2 + 8;
 const GLANCE_PROGRESS_WIDTH: usize = 8;
-const GLANCE_MARK_WIDTH: usize = 4;
 const GLANCE_SIGNAL_MAX: usize = 24;
 
 struct GlanceCells {
@@ -1277,19 +1277,12 @@ fn draw_glance_list(f: &mut Frame, app: &App, area: Rect) -> ListHits {
                 items.push(ListItem::new(Line::raw("")));
                 hit_rows.push(None);
             }
-            let count = visible.iter().filter(|(_, g, _)| g == group).count();
-            items.push(ListItem::new(Line::from(vec![
-                Span::styled(
-                    format!(" {}", group.label().to_uppercase()),
-                    Style::default()
-                        .fg(group_color(&app.theme, *group))
-                        .add_modifier(Modifier::BOLD),
-                ),
-                Span::styled(
-                    format!(" · {count}"),
-                    Style::default().fg(app.theme.subtext0),
-                ),
-            ])));
+            items.push(ListItem::new(Line::from(Span::styled(
+                format!(" {}", group.label().to_uppercase()),
+                Style::default()
+                    .fg(group_color(&app.theme, *group))
+                    .add_modifier(Modifier::BOLD),
+            ))));
             hit_rows.push(None);
             current = Some(*group);
         }
@@ -1301,9 +1294,9 @@ fn draw_glance_list(f: &mut Frame, app: &App, area: Rect) -> ListHits {
             Mark::Last | Mark::None => app.theme.subtext0,
         };
         let mark = match cells.mark {
-            Mark::Here => "here",
-            Mark::Last => "last",
-            Mark::None => "",
+            Mark::Here => "●",
+            Mark::Last => "◌",
+            Mark::None => " ",
         };
         let label = match labelled
             .iter()
@@ -1323,6 +1316,8 @@ fn draw_glance_list(f: &mut Frame, app: &App, area: Rect) -> ListHits {
             Span::raw(" "),
             label,
             Span::raw(" "),
+            Span::styled(mark, Style::default().fg(mark_color)),
+            Span::raw(" "),
             Span::styled(
                 fit_cell(cells.icon, 1),
                 Style::default().fg(cells.icon_color),
@@ -1338,11 +1333,6 @@ fn draw_glance_list(f: &mut Frame, app: &App, area: Rect) -> ListHits {
             Span::styled(
                 fit_cell(&cells.branch, branch_width),
                 Style::default().fg(app.theme.subtext0),
-            ),
-            Span::raw("  "),
-            Span::styled(
-                fit_cell(mark, GLANCE_MARK_WIDTH),
-                Style::default().fg(mark_color),
             ),
             Span::raw("  "),
             Span::styled(
@@ -2578,9 +2568,12 @@ mod tests {
         );
 
         let (lines, _) = render_app(&app, 100, 20);
-        let headings = ["NEEDS YOU · 1", "HOT · 1", "WARM · 1", "COLD · 1"]
-            .map(|label| line_index(&lines, label));
+        let labels = ["NEEDS YOU", "HOT", "WARM", "COLD"];
+        let headings = labels.map(|label| line_index(&lines, label));
         assert!(headings.windows(2).all(|pair| pair[0] < pair[1]));
+        for (label, heading) in labels.iter().zip(headings) {
+            assert_eq!(lines[heading].trim(), *label);
+        }
         for heading in &headings[1..] {
             assert!(lines[heading - 1].trim().is_empty());
         }
@@ -2649,7 +2642,7 @@ mod tests {
     }
 
     #[test]
-    fn here_and_last_marks_the_focused_and_previous_workspace() {
+    fn a_dot_after_the_label_shows_the_current_and_previous_workspace() {
         let app = glance_app(
             NOW,
             Some("w2"),
@@ -2662,10 +2655,53 @@ mod tests {
         );
 
         let (lines, _) = render_app(&app, 100, 20);
-        assert!(lines[line_index(&lines, "helm")].contains("here"));
-        assert!(lines[line_index(&lines, "skills")].contains("last"));
-        assert!(!lines[line_index(&lines, "koyo")].contains("here"));
-        assert!(!lines[line_index(&lines, "koyo")].contains("last"));
+        let helm = &lines[line_index(&lines, "helm-branch")];
+        let skills = &lines[line_index(&lines, "skills-branch")];
+        let koyo = &lines[line_index(&lines, "koyo-branch")];
+        let column = column_of(helm, "●");
+        assert_eq!(column_of(skills, "◌"), column);
+        assert_eq!(koyo.chars().nth(column), Some(' '));
+        assert_eq!(column, column_of(helm, " a ") + 4);
+        assert!(column < column_of(helm, "helm"));
+        for line in [helm, skills, koyo] {
+            assert!(!line.contains("here"));
+            assert!(!line.contains("last"));
+        }
+        assert!(!koyo.contains('●') && !koyo.contains('◌'));
+    }
+
+    #[test]
+    fn the_current_dot_takes_the_accent_and_the_previous_dot_the_dim_colour() {
+        let app = glance_app(
+            NOW,
+            Some("w2"),
+            vec![
+                glance_workspace("w1", "helm", true, Some(NOW - 60), vec![]),
+                glance_workspace("w2", "skills", false, Some(NOW - 120), vec![]),
+            ],
+            ActivityState::default(),
+        );
+        let mut terminal = Terminal::new(TestBackend::new(100, 20)).unwrap();
+        terminal
+            .draw(|f| {
+                draw(f, &app);
+            })
+            .unwrap();
+        let buffer = terminal.backend().buffer();
+        let colour_of = |row: &str, symbol: &str| {
+            let y = buffer_text(&terminal)
+                .lines()
+                .position(|line| line.contains(row))
+                .unwrap_or_else(|| panic!("no line contains {row:?}")) as u16;
+            (0..buffer.area.width)
+                .map(|x| &buffer[(x, y)])
+                .find(|cell| cell.symbol() == symbol)
+                .unwrap_or_else(|| panic!("the {row:?} row shows no {symbol:?}"))
+                .fg
+        };
+        assert_ne!(app.theme.accent, app.theme.subtext0);
+        assert_eq!(colour_of("helm-branch", "●"), app.theme.accent);
+        assert_eq!(colour_of("skills-branch", "◌"), app.theme.subtext0);
     }
 
     #[test]
@@ -2684,7 +2720,8 @@ mod tests {
         app.query = "projects".into();
         app.apply_filter();
         let (lines, _) = render_app(&app, 110, 20);
-        let heading = line_index(&lines, "DIRECTORIES · 1");
+        let heading = line_index(&lines, "DIRECTORIES");
+        assert_eq!(lines[heading].trim(), "DIRECTORIES");
         assert!(lines[heading + 1].contains("projects-dir"));
         assert!(!lines.iter().any(|line| line.contains("helm")));
     }
@@ -2716,7 +2753,7 @@ mod tests {
         app.apply_filter();
 
         let (lines, _) = render_app(&app, 110, 20);
-        assert!(lines[line_index(&lines, "NEEDS YOU · 1")].contains("NEEDS YOU"));
+        assert_eq!(lines[line_index(&lines, "NEEDS YOU")].trim(), "NEEDS YOU");
         assert!(!lines.iter().any(|line| line.contains("helm")));
     }
 

@@ -558,7 +558,7 @@ impl App {
         }
     }
 
-    /// The row marked `last`, which is the Previous workspace, when it is listed.
+    /// The row of the Previous workspace, when it is listed.
     pub(crate) fn previous_position(&self) -> Option<usize> {
         (0..self.filtered.len()).find(|&position| {
             self.glance_row_at(position)
