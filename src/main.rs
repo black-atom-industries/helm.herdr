@@ -233,6 +233,7 @@ fn run_ui(persist: bool) -> ! {
     let config = Config::load();
     let check_updates = config.picker.check_updates;
     let theme = Theme::load(config.theme.inherit_herdr);
+    let _ = app::record_seen();
     let mut app = App::new(config, theme);
     app.launchers_dir = Some(sessions::launchers_dir());
     app.refresh();

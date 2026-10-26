@@ -78,6 +78,17 @@ pub(crate) struct GitIdentity {
     pub(crate) label: String,
     pub(crate) head: GitHead,
     pub(crate) last_commit_at: Option<i64>,
+    pub(crate) status: Option<GitStatus>,
+}
+
+/// File counts of a working tree and its distance to the upstream branch.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub(crate) struct GitStatus {
+    pub(crate) staged: u32,
+    pub(crate) modified: u32,
+    pub(crate) untracked: u32,
+    /// Ahead and behind counts, `None` without an upstream.
+    pub(crate) ahead_behind: Option<(u32, u32)>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -458,6 +469,7 @@ fn worktree_identity(worktrees: &[Worktree], cwd: &Path) -> Option<GitIdentity> 
         label,
         head,
         last_commit_at: None,
+        status: None,
     })
 }
 
@@ -474,6 +486,48 @@ fn last_commit_at(cwd: &Path) -> Option<i64> {
 
 fn parse_commit_time(output: &str) -> Option<i64> {
     output.trim().parse().ok()
+}
+
+fn git_status(cwd: &Path) -> Option<GitStatus> {
+    let output = Command::new("git")
+        .args([
+            "-C",
+            &cwd.to_string_lossy(),
+            "status",
+            "--porcelain=v2",
+            "--branch",
+        ])
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    Some(parse_status(&String::from_utf8_lossy(&output.stdout)))
+}
+
+fn parse_status(output: &str) -> GitStatus {
+    let mut status = GitStatus::default();
+    for line in output.lines() {
+        if let Some(counts) = line.strip_prefix("# branch.ab ") {
+            let mut counts = counts
+                .split(' ')
+                .map(|count| count.trim_start_matches(['+', '-']).parse().unwrap_or(0));
+            status.ahead_behind = Some((counts.next().unwrap_or(0), counts.next().unwrap_or(0)));
+        } else if line.starts_with("? ") {
+            status.untracked += 1;
+        } else if line.starts_with("u ") {
+            status.modified += 1;
+        } else if line.starts_with("1 ") || line.starts_with("2 ") {
+            let mut xy = line[2..].chars();
+            if xy.next().is_some_and(|x| x != '.') {
+                status.staged += 1;
+            }
+            if xy.next().is_some_and(|y| y != '.') {
+                status.modified += 1;
+            }
+        }
+    }
+    status
 }
 
 pub(crate) fn enrich_git<P: GitProbe>(topology: &mut OpenTopology, probe: &P) {
@@ -542,7 +596,10 @@ pub(crate) fn enrich_git<P: GitProbe>(topology: &mut OpenTopology, probe: &P) {
             let (Some(git), Some(cwd)) = (workspace.git.as_mut(), cwd) else {
                 continue;
             };
-            scope.spawn(move || git.last_commit_at = last_commit_at(&cwd));
+            scope.spawn(move || {
+                git.last_commit_at = last_commit_at(&cwd);
+                git.status = git_status(&cwd);
+            });
         }
     });
 }
@@ -981,7 +1038,58 @@ mod tests {
         let porcelain = NativeGitProbe.worktree_list(&root).unwrap();
         assert!(porcelain.starts_with("worktree "));
         assert!(porcelain.contains("HEAD "));
+        assert_eq!(git_status(&root), Some(GitStatus::default()));
+
+        std::fs::write(root.join("README"), "changed").unwrap();
+        std::fs::write(root.join("STAGED"), "staged").unwrap();
+        std::fs::write(root.join("NEW"), "new").unwrap();
+        run(&["add", "STAGED"]);
+        assert_eq!(
+            git_status(&root),
+            Some(GitStatus {
+                staged: 1,
+                modified: 1,
+                untracked: 1,
+                ahead_behind: None,
+            })
+        );
         let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn status_counts_staged_modified_untracked_ahead_and_behind() {
+        let output = "\
+# branch.oid 0123456789abcdef
+# branch.head main
+# branch.upstream origin/main
+# branch.ab +2 -3
+1 M. N... 100644 100644 100644 a b staged.rs
+1 .M N... 100644 100644 100644 a b modified.rs
+1 MM N... 100644 100644 100644 a b both.rs
+2 R. N... 100644 100644 100644 a b R100 new.rs\told.rs
+u UU N... 100644 100644 100644 100644 a b c conflict.rs
+? untracked.rs
+! ignored.rs
+";
+        assert_eq!(
+            parse_status(output),
+            GitStatus {
+                staged: 3,
+                modified: 3,
+                untracked: 1,
+                ahead_behind: Some((2, 3)),
+            }
+        );
+    }
+
+    #[test]
+    fn status_without_upstream_or_changes_is_clean() {
+        let output = "# branch.oid 0123456789abcdef\n# branch.head main\n";
+        assert_eq!(parse_status(output), GitStatus::default());
+        assert_eq!(
+            parse_status("# branch.ab +0 -0\n").ahead_behind,
+            Some((0, 0))
+        );
     }
 
     #[test]
