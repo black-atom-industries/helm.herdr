@@ -76,7 +76,6 @@ pub(crate) enum EntryAction {
     SwitchSession {
         session: Option<String>,
         workspace: Option<String>,
-        #[allow(dead_code)]
         tab: Option<String>,
     },
     InvokePluginAction {

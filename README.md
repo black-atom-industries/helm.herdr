@@ -74,7 +74,7 @@ A cold Workspace still moves up to Needs you when one of its agents waits on you
 
 ### Other Herdr sessions
 
-Needs you also lists the Workspaces of your other running Herdr sessions where an agent waits on you. Their other Workspaces stay out of the glance. Such a row carries an `@session` tag after its name, and the header counts it in `N need you · M elsewhere`. The detail pane works on it as on any row. Opening such a row keeps Helm open and says in the footer how to switch sessions.
+Needs you also lists the Workspaces of your other running Herdr sessions where an agent waits on you. Their other Workspaces stay out of the glance. Such a row carries an `@session` tag after its name, and the header counts it in `N need you · M elsewhere`. The detail pane works on it as on any row, and the footer reads `enter switch to <session>`. Opening such a row switches this terminal to that session, at that Workspace (and Tab, with `1`–`9`), when Herdr runs under [`helm-herdr shell`](#start-herdr-through-helm). Otherwise Helm stays open and says in the footer how to switch sessions.
 
 `helm-herdr status` prints one line for Herdr's tab bar: each other session with Workspaces that need you, as `<session> <icon><count>`, with the icon of the most urgent state. It prints nothing when no session waits. With the binary linked onto your `PATH` as in [Install](#install), add it to `~/.config/herdr/config.toml`:
 
@@ -90,7 +90,9 @@ tab_bar_right = [
 
 The detail pane shows the selected session's directory and state, then its Workspaces in Needs you, Hot, Warm and Cold, numbered `1`–`9`, then its agents. A stopped session shows `stopped · enter starts it`. `J` and `K` scroll a long detail.
 
-Opening another session (`enter`, the row's letter twice, or `1`–`9` for one of its Workspaces) keeps Helm open and says in the footer how to switch sessions. On your own session, `enter` returns to the glance and `1`–`9` opens that Workspace. `l` opens the previous Workspace.
+Opening another session switches to it under `helm-herdr shell`: `enter` or the row's letter twice lands on its last focused Workspace, and `1`–`9` on that numbered Workspace. A stopped session starts. Without `helm-herdr shell`, Helm stays open and says in the footer how to switch sessions. On your own session, `enter` returns to the glance and `1`–`9` opens that Workspace.
+
+Under `helm-herdr shell`, `l` switches to another session's Workspace when it was focused more recently than any local one, else opens the previous Workspace. Without `helm-herdr shell`, `l` always opens the previous Workspace. The `jump-back` action stays within the session.
 
 ### Detail pane
 
@@ -154,7 +156,7 @@ You need Herdr 0.7.4 or newer on Linux or macOS, and `jq` for the link command. 
 | `!`                 | Next row that needs you                                  |
 | `enter`             | Open the Workspace at its last Tab                       |
 | `1`–`9`             | Open that Tab                                            |
-| `l`                 | Open the previous Workspace                              |
+| `l`                 | Open the last Workspace: another session's when it was focused more recently (under `helm-herdr shell`), else the previous one |
 | `c` `c`, `c`        | Send to Cold (`c` asks for a second `c`), or warm up     |
 | `^B`                | Pin to the top, or unpin                                 |
 | `x` `x`, `^X`       | Close the Workspace (`x` asks for a second `x`)          |

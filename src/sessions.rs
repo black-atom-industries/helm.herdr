@@ -372,12 +372,6 @@ pub(crate) fn clear_switch_request(dir: &Path, launcher_pid: u32) {
     let _ = fs::remove_file(switch_path(dir, launcher_pid));
 }
 
-/// The live launcher attached to `session` (`default` for the default session).
-#[allow(dead_code)]
-pub(crate) fn launcher_for(session: &str) -> Option<LauncherRecord> {
-    launcher_at(&launchers_dir(), session)
-}
-
 /// The record for `session` in `dir`, unless its launcher is gone or its
 /// client is no longer the launcher's `herdr` child.
 pub(crate) fn launcher_at(dir: &Path, session: &str) -> Option<LauncherRecord> {
@@ -388,14 +382,6 @@ pub(crate) fn launcher_at(dir: &Path, session: &str) -> Option<LauncherRecord> {
 
 /// Asks the launcher behind `record` to attach `target`: writes the request,
 /// then ends the launcher's client with SIGTERM.
-#[allow(dead_code)]
-pub(crate) fn request_switch(
-    record: &LauncherRecord,
-    target: &SwitchRequest,
-) -> Result<(), String> {
-    request_switch_at(&launchers_dir(), record, target)
-}
-
 pub(crate) fn request_switch_at(
     dir: &Path,
     record: &LauncherRecord,
@@ -497,8 +483,51 @@ mod signals {
 pub(crate) use signals::ignore_interrupt;
 use signals::{process_alive, terminate};
 
+/// Child processes for tests that need a live launcher or Herdr client.
+#[cfg(all(test, unix))]
+pub(crate) mod test_processes {
+    use std::{path::Path, process::Command};
+
+    /// A child process that is killed and reaped when the test ends, also on a failed assert.
+    pub(crate) struct Kid(pub(crate) std::process::Child);
+
+    impl Drop for Kid {
+        fn drop(&mut self) {
+            let _ = self.0.kill();
+            let _ = self.0.wait();
+        }
+    }
+
+    impl std::ops::Deref for Kid {
+        type Target = std::process::Child;
+        fn deref(&self) -> &Self::Target {
+            &self.0
+        }
+    }
+
+    impl std::ops::DerefMut for Kid {
+        fn deref_mut(&mut self) -> &mut Self::Target {
+            &mut self.0
+        }
+    }
+
+    /// A `sleep` that `ps` names `herdr`, started as this process's child.
+    pub(crate) fn fake_client(dir: &Path) -> Kid {
+        let link = dir.join("herdr");
+        if !link.exists() {
+            std::os::unix::fs::symlink("/bin/sleep", &link).unwrap();
+        }
+        Kid(Command::new(link).arg("30").spawn().unwrap())
+    }
+
+    pub(crate) fn sleeper() -> Kid {
+        Kid(Command::new("sleep").arg("30").spawn().unwrap())
+    }
+}
+
 #[cfg(all(test, unix))]
 mod tests {
+    use super::test_processes::{fake_client, sleeper};
     use super::*;
     use std::{
         io::{BufRead, BufReader, Write},
@@ -772,42 +801,6 @@ mod tests {
         assert!(started.elapsed() < Duration::from_secs(1));
 
         let _ = fs::remove_dir_all(&root);
-    }
-
-    /// A child process that is killed and reaped when the test ends, also on a failed assert.
-    struct Kid(std::process::Child);
-
-    impl Drop for Kid {
-        fn drop(&mut self) {
-            let _ = self.0.kill();
-            let _ = self.0.wait();
-        }
-    }
-
-    impl std::ops::Deref for Kid {
-        type Target = std::process::Child;
-        fn deref(&self) -> &Self::Target {
-            &self.0
-        }
-    }
-
-    impl std::ops::DerefMut for Kid {
-        fn deref_mut(&mut self) -> &mut Self::Target {
-            &mut self.0
-        }
-    }
-
-    /// A `sleep` that `ps` names `herdr`, started as this process's child.
-    fn fake_client(dir: &Path) -> Kid {
-        let link = dir.join("herdr");
-        if !link.exists() {
-            std::os::unix::fs::symlink("/bin/sleep", &link).unwrap();
-        }
-        Kid(Command::new(link).arg("30").spawn().unwrap())
-    }
-
-    fn sleeper() -> Kid {
-        Kid(Command::new("sleep").arg("30").spawn().unwrap())
     }
 
     fn record(session: &str, client: &std::process::Child) -> LauncherRecord {

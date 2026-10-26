@@ -18,7 +18,7 @@ use crate::{
     model::{workspace_key, Entry, EntryAction, Source, WorkspaceKind, WorkspaceRef},
     paths::{self, canonical_str, herdr_plus_quick_actions_dir, plugin_config_dir},
     recent::RecentState,
-    sessions::{self, Session, SessionState},
+    sessions::{self, Session, SessionState, SwitchRequest},
     sources::{collect_open_topology, collect_roots, collect_zoxide},
     theme::Theme,
     topology::{self, AgentState, OpenTopology, WorkspaceNode},
@@ -63,6 +63,8 @@ pub(crate) struct App {
     pub(crate) session: Option<String>,
     /// Every discovered Herdr session, the current one first.
     pub(crate) sessions: Vec<SessionState>,
+    /// Where `helm-herdr shell` launchers keep their records and switch requests.
+    pub(crate) launchers_dir: PathBuf,
     /// The Sessions view order as group and session name. A refresh keeps it,
     /// so rows and their labels stay put while the Picker is open.
     session_ranks: Vec<(usize, Option<String>)>,
@@ -126,6 +128,11 @@ impl App {
             topology: OpenTopology::default(),
             session: None,
             sessions: Vec::new(),
+            #[cfg(not(test))]
+            launchers_dir: sessions::launchers_dir(),
+            // Never the real directory: a live record there names a real Herdr client.
+            #[cfg(test)]
+            launchers_dir: PathBuf::from("/nonexistent/helm-herdr-test-launchers"),
             session_ranks: Vec::new(),
             session_git: HashMap::new(),
             topology_entries: Vec::new(),
@@ -475,15 +482,7 @@ impl App {
             .filter(|(row, _)| row.needs_you)
             .map(|(row, _)| row.state)
             .collect();
-        let focused = rows
-            .iter()
-            .filter_map(|(_, workspace)| {
-                let at = self
-                    .activity
-                    .focused_at(workspace.session.as_deref(), &workspace.id)?;
-                Some((at, workspace))
-            })
-            .max_by_key(|(at, _)| *at);
+        let focused = self.last_focused(rows.iter().map(|(_, workspace)| workspace));
         let agent_change = rows
             .iter()
             .flat_map(|(_, workspace)| {
@@ -513,18 +512,64 @@ impl App {
         }
     }
 
+    /// The Workspace focused most recently according to `activity.json`, with its focus time.
+    fn last_focused<'a>(
+        &self,
+        workspaces: impl Iterator<Item = &'a WorkspaceNode>,
+    ) -> Option<(i64, &'a WorkspaceNode)> {
+        workspaces
+            .filter_map(|workspace| {
+                let at = self
+                    .activity
+                    .focused_at(workspace.session.as_deref(), &workspace.id)?;
+                Some((at, workspace))
+            })
+            .max_by_key(|(at, _)| *at)
+    }
+
+    /// The target of `l` when it lies in another session, as session and
+    /// Workspace ID: the Workspace focused most recently across every running
+    /// session, when that is not a Workspace of this session. The current
+    /// Workspace never counts.
+    pub(crate) fn previous_elsewhere(&self) -> Option<(Option<String>, String)> {
+        let local = self.last_focused(
+            self.topology
+                .workspaces
+                .iter()
+                .filter(|workspace| workspace.session == self.session && !workspace.focused),
+        );
+        let (at, workspace, session) = self
+            .sessions
+            .iter()
+            .filter(|state| !state.current)
+            .filter_map(|state| {
+                let topology = state.topology.as_ref()?;
+                let (at, workspace) = self.last_focused(topology.workspaces.iter())?;
+                Some((at, workspace, &state.session.name))
+            })
+            .max_by_key(|(at, _, _)| *at)?;
+        if local.is_some_and(|(local_at, _)| local_at >= at) {
+            return None;
+        }
+        Some((session.clone(), workspace.id.clone()))
+    }
+
     /// What opening the selected Sessions view row does. `number` picks the
     /// session's Workspace in detail order. A Workspace of the current session
-    /// opens here; any other session switches, at that Workspace when it
-    /// exists. `None` for the current session's own row or a missing Workspace.
+    /// opens here; any other session switches, at that Workspace, or without a
+    /// number at its last focused Workspace when one is known. `None` for the
+    /// current session's own row or a missing numbered Workspace.
     pub(crate) fn session_action(&self, number: Option<usize>) -> Option<EntryAction> {
         let state = self.session_state(self.selected_entry()?)?;
-        let workspace = number.and_then(|number| {
-            self.session_workspaces(state)
-                .into_iter()
-                .nth(number.checked_sub(1)?)
-                .map(|(_, workspace)| workspace)
-        });
+        let rows = self.session_workspaces(state);
+        let workspace = match number {
+            Some(number) => Some(&rows.get(number.checked_sub(1)?)?.1),
+            None if state.current => None,
+            None => self
+                .last_focused(rows.iter().map(|(_, workspace)| workspace))
+                .map(|(_, workspace)| workspace),
+        }
+        .cloned();
         if state.current {
             let workspace = workspace?;
             return Some(EntryAction::FocusWorkspace {
@@ -539,11 +584,38 @@ impl App {
         })
     }
 
-    /// Switches to another Herdr session at `target`, a `SwitchSession`
-    /// action. Helm cannot switch sessions yet, so the Picker stays open with
-    /// a footer notice.
-    pub(crate) fn switch_session(&mut self, _target: EntryAction) {
-        self.notice = Some(OTHER_SESSION_NOTICE);
+    /// Switches to `session` (`None` is the default session), at `workspace`
+    /// and `tab` when given, through the launcher that runs this session's
+    /// client. Without a live launcher the Picker stays open with a footer
+    /// notice. Returns whether the switch went out.
+    pub(crate) fn switch_session(
+        &mut self,
+        session: Option<&str>,
+        workspace: Option<String>,
+        tab: Option<String>,
+    ) -> bool {
+        let request = SwitchRequest {
+            session: Session::label(session).to_string(),
+            workspace_id: workspace,
+            tab_id: tab,
+        };
+        let switched = self.launcher().is_some_and(|record| {
+            sessions::request_switch_at(&self.launchers_dir, &record, &request).is_ok()
+        });
+        if !switched {
+            self.notice = Some(OTHER_SESSION_NOTICE);
+        }
+        switched
+    }
+
+    /// The live launcher of the session Helm runs in.
+    pub(crate) fn launcher(&self) -> Option<sessions::LauncherRecord> {
+        sessions::launcher_at(&self.launchers_dir, Session::label(self.session.as_deref()))
+    }
+
+    /// The session tag of a glance row from another Herdr session.
+    pub(crate) fn elsewhere_session(&self, entry: &Entry) -> Option<&str> {
+        self.glance_row(entry)?.other_session.as_deref()
     }
 
     /// The selected running other session, with its Workspaces, when the
@@ -1113,8 +1185,12 @@ impl App {
             EntryAction::FocusPane { .. }
             | EntryAction::FocusWorkspace { .. }
             | EntryAction::FocusTab { .. } => (self.focus_action(&e.action), true, true),
-            EntryAction::SwitchSession { .. } => {
-                self.switch_session(e.action.clone());
+            EntryAction::SwitchSession {
+                session,
+                workspace,
+                tab,
+            } => {
+                let _ = self.switch_session(session.as_deref(), workspace.clone(), tab.clone());
                 (Ok(()), false, false)
             }
             EntryAction::InvokePluginAction { action } => (
