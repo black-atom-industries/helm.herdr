@@ -3401,6 +3401,22 @@ mod tests {
             .unwrap();
         handle_key(&mut app, key(KeyCode::Char('c')));
         assert!(!app.is_cold(&alpha));
+        assert!(app.cold_entries.is_empty());
+
+        app.cold_entries
+            .insert(crate::app::pin_key(&alpha), NOW - 120);
+        app.rebuild_glance();
+        assert!(!app.is_cold(&alpha));
+        app.selected = app
+            .filtered
+            .iter()
+            .position(|index| app.entries[*index].title == alpha.title)
+            .unwrap();
+        handle_key(&mut app, key(KeyCode::Char('c')));
+        assert!(app.cold_armed);
+        handle_key(&mut app, key(KeyCode::Char('c')));
+        assert!(app.is_cold(&alpha));
+        assert!(app.cold_entries[&crate::app::pin_key(&alpha)] > NOW);
 
         let _ = std::fs::remove_dir_all(&dir);
         match previous {

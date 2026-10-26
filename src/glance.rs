@@ -61,7 +61,8 @@ pub(crate) struct PaneEvidence {
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub(crate) struct Evidence {
     pub(crate) pinned: bool,
-    pub(crate) cold: bool,
+    /// When the User sent the Workspace to Cold, in Unix seconds.
+    pub(crate) sent_cold_at: Option<i64>,
     pub(crate) agents: Vec<PaneEvidence>,
     pub(crate) focused_at: Option<i64>,
     pub(crate) last_commit_at: Option<i64>,
@@ -98,6 +99,8 @@ pub(crate) struct GlanceRow {
     pub(crate) signal: Signal,
     /// Whether an agent waits on the User, even when the row sits in another group such as Pinned.
     pub(crate) needs_you: bool,
+    /// Whether the Workspace sits in Cold by hand.
+    pub(crate) cold: bool,
     /// The Herdr session of a Workspace outside the current session.
     pub(crate) other_session: Option<String>,
 }
@@ -106,7 +109,7 @@ pub(crate) fn evidence(
     workspace: &WorkspaceNode,
     activity: &ActivityState,
     pinned: bool,
-    cold: bool,
+    sent_cold_at: Option<i64>,
 ) -> Evidence {
     let agents = workspace
         .tabs
@@ -126,7 +129,7 @@ pub(crate) fn evidence(
         .collect();
     Evidence {
         pinned,
-        cold,
+        sent_cold_at,
         agents,
         focused_at: activity.focused_at(workspace.session.as_deref(), &workspace.id),
         last_commit_at: workspace.git.as_ref().and_then(|git| git.last_commit_at),
@@ -171,8 +174,16 @@ pub(crate) fn row(
         mark,
         signal: verdict.signal,
         needs_you: needs_you(evidence),
+        cold: cold(evidence),
         other_session: None,
     }
+}
+
+/// Whether the Workspace was sent to Cold and nothing happened there since.
+pub(crate) fn cold(evidence: &Evidence) -> bool {
+    evidence
+        .sent_cold_at
+        .is_some_and(|sent| newest_activity(evidence).is_none_or(|(at, _)| at <= sent))
 }
 
 /// Whether an agent waits on the User.
@@ -207,7 +218,7 @@ pub(crate) fn classify(evidence: &Evidence, now: i64, thresholds: Thresholds) ->
             last_active,
         };
     }
-    if evidence.cold {
+    if cold(evidence) {
         return Verdict {
             group: Group::Cold,
             signal: last_active.map_or(Signal::None, Signal::Age),
@@ -387,7 +398,7 @@ mod tests {
     #[test]
     fn cold_workspace_stays_cold_while_working_but_rises_when_an_agent_needs_you() {
         let working = Evidence {
-            cold: true,
+            sent_cold_at: Some(NOW - 30),
             ..evidence_with(vec![agent(AgentState::Working, Some(NOW - 60))])
         };
         let verdict = classify(&working, NOW, THRESHOLDS);
@@ -395,10 +406,54 @@ mod tests {
         assert_eq!(signal_text(&verdict.signal, NOW), "1m");
 
         let blocked = Evidence {
-            cold: true,
+            sent_cold_at: Some(NOW),
             ..evidence_with(vec![agent(AgentState::Blocked, Some(NOW))])
         };
         assert_eq!(classify(&blocked, NOW, THRESHOLDS).group, Group::NeedsYou);
+    }
+
+    #[test]
+    fn cold_workspace_stays_cold_with_activity_up_to_the_moment_it_was_sent() {
+        for evidence in [
+            Evidence {
+                sent_cold_at: Some(NOW - 60),
+                focused_at: Some(NOW - 60),
+                last_commit_at: Some(NOW - 120),
+                ..evidence_with(vec![agent(AgentState::Idle, Some(NOW - 90))])
+            },
+            Evidence {
+                sent_cold_at: Some(NOW - 60),
+                ..Evidence::default()
+            },
+        ] {
+            assert!(cold(&evidence));
+            assert_eq!(classify(&evidence, NOW, THRESHOLDS).group, Group::Cold);
+        }
+    }
+
+    #[test]
+    fn cold_workspace_warms_with_a_focus_commit_or_agent_change_after_it_was_sent() {
+        let sent = Evidence {
+            sent_cold_at: Some(NOW - 60),
+            ..Evidence::default()
+        };
+        for evidence in [
+            Evidence {
+                focused_at: Some(NOW - 59),
+                ..sent.clone()
+            },
+            Evidence {
+                last_commit_at: Some(NOW - 59),
+                ..sent.clone()
+            },
+            Evidence {
+                agents: vec![agent(AgentState::Idle, Some(NOW - 59))],
+                ..sent.clone()
+            },
+        ] {
+            assert!(!cold(&evidence));
+            assert_eq!(classify(&evidence, NOW, THRESHOLDS).group, Group::Hot);
+        }
     }
 
     #[test]
