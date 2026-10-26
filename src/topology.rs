@@ -965,6 +965,9 @@ mod tests {
             let status = std::process::Command::new("git")
                 .args(args)
                 .current_dir(&root)
+                .env_remove("GIT_DIR")
+                .env_remove("GIT_WORK_TREE")
+                .env_remove("GIT_INDEX_FILE")
                 .status()
                 .unwrap();
             assert!(status.success(), "git command failed: {args:?}");
