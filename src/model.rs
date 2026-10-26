@@ -12,6 +12,7 @@ pub(crate) fn workspace_key(session: Option<&str>, id: &str) -> String {
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub(crate) enum Source {
     Workspace,
+    Session,
     Zoxide,
     Root,
     QuickAction,
@@ -22,6 +23,7 @@ impl Source {
     pub(crate) fn label(&self) -> &'static str {
         match self {
             Source::Workspace => "open",
+            Source::Session => "session",
             Source::Zoxide => "zoxide",
             Source::Root => "root",
             Source::QuickAction => "quick",
@@ -32,6 +34,7 @@ impl Source {
     pub(crate) fn from_config(value: &str) -> Option<Self> {
         match value.trim().to_ascii_lowercase().as_str() {
             "workspace" | "workspaces" | "open" | "open_workspaces" => Some(Source::Workspace),
+            "session" | "sessions" => Some(Source::Session),
             "zoxide" | "z" => Some(Source::Zoxide),
             "root" | "roots" | "scan" => Some(Source::Root),
             "quick" | "quick_action" | "quick_actions" | "herdr_plus_quick_actions" => {
@@ -42,9 +45,10 @@ impl Source {
         }
     }
 
-    pub(crate) fn all() -> [Source; 5] {
+    pub(crate) fn all() -> [Source; 6] {
         [
             Source::Workspace,
+            Source::Session,
             Source::Zoxide,
             Source::Root,
             Source::QuickAction,
@@ -67,6 +71,13 @@ pub(crate) enum EntryAction {
     FocusPane {
         session: Option<String>,
         id: String,
+    },
+    /// Opens another Herdr session, at one of its Workspaces and Tabs when given.
+    SwitchSession {
+        session: Option<String>,
+        workspace: Option<String>,
+        #[allow(dead_code)]
+        tab: Option<String>,
     },
     InvokePluginAction {
         action: String,

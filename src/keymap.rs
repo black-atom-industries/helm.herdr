@@ -209,6 +209,7 @@ fn binding(
 
 pub(crate) fn keybindings(app: &App) -> Vec<Keybind> {
     let labels = app.config.glance.labels();
+    let sessions = app.sessions_view();
     let mut bindings = Vec::new();
 
     if let (Some(first), Some(last)) = (labels.first(), labels.last()) {
@@ -227,19 +228,31 @@ pub(crate) fn keybindings(app: &App) -> Vec<Keybind> {
     let digits = ('1'..='9')
         .map(|ch| normal_key(Command::OpenTab, KeyCode::Char(ch), ch.to_string()))
         .collect();
-    bindings.push(binding(digits, "open tab of selected row", "Open", Some("tab")).keys_as("1–9"));
+    bindings.push(
+        if sessions {
+            binding(
+                digits,
+                "switch to numbered workspace",
+                "Open",
+                Some("switch to workspace"),
+            )
+        } else {
+            binding(digits, "open tab of selected row", "Open", Some("tab"))
+        }
+        .keys_as("1–9"),
+    );
 
-    bindings.push(binding(
-        vec![key(
-            Command::Open,
-            KeyCode::Enter,
-            KeyModifiers::NONE,
-            "enter",
-        )],
-        "open at last active tab",
-        "Open",
-        Some("open"),
-    ));
+    let enter = vec![key(
+        Command::Open,
+        KeyCode::Enter,
+        KeyModifiers::NONE,
+        "enter",
+    )];
+    bindings.push(if sessions {
+        binding(enter, "switch to selected session", "Open", Some("switch"))
+    } else {
+        binding(enter, "open at last active tab", "Open", Some("open"))
+    });
 
     bindings.push(binding(
         vec![normal_key(Command::OpenPrevious, KeyCode::Char('l'), "l")],
@@ -261,33 +274,35 @@ pub(crate) fn keybindings(app: &App) -> Vec<Keybind> {
             ],
             "close workspace (x twice, ^X at once)",
             "Act",
-            Some("close"),
+            (!sessions).then_some("close"),
         )
         .keys_as("x"),
     );
 
-    bindings.push(
-        binding(
-            vec![
-                normal_key(Command::NextGroup, KeyCode::Char(']'), "]"),
-                normal_key(Command::PrevGroup, KeyCode::Char('['), "["),
-            ],
-            "next / previous group",
-            "Move",
-            Some("group"),
-        )
-        .keys_as("] ["),
-    );
+    if !sessions {
+        bindings.push(
+            binding(
+                vec![
+                    normal_key(Command::NextGroup, KeyCode::Char(']'), "]"),
+                    normal_key(Command::PrevGroup, KeyCode::Char('['), "["),
+                ],
+                "next / previous group",
+                "Move",
+                Some("group"),
+            )
+            .keys_as("] ["),
+        );
 
-    bindings.push(binding(
-        vec![
-            normal_key(Command::NextNeedsYou, KeyCode::Char('!'), "!"),
-            normal_shifted(Command::NextNeedsYou, KeyCode::Char('!'), "!"),
-        ],
-        "next that needs you",
-        "Move",
-        Some("needs you"),
-    ));
+        bindings.push(binding(
+            vec![
+                normal_key(Command::NextNeedsYou, KeyCode::Char('!'), "!"),
+                normal_shifted(Command::NextNeedsYou, KeyCode::Char('!'), "!"),
+            ],
+            "next that needs you",
+            "Move",
+            Some("needs you"),
+        ));
+    }
 
     bindings.push(binding(
         vec![key(
@@ -486,6 +501,7 @@ pub(crate) fn keybindings(app: &App) -> Vec<Keybind> {
 fn source_help_label(source: &Source) -> &'static str {
     match source {
         Source::Workspace => "workspaces",
+        Source::Session => "sessions",
         Source::Zoxide => "zoxide",
         Source::Root => "roots",
         Source::QuickAction => "quick actions",

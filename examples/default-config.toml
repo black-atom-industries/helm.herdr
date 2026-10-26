@@ -35,7 +35,7 @@ check_updates = true
 # directory_template_key = "alt-enter" # also accepts Ctrl forms such as "ctrl-g"
 
 # Optional: override source filter shortcuts. Values accept "ctrl-x", "ctrl+x", "^x", or "x".
-# Defaults: quick=ctrl-q, workspace=ctrl-w, zoxide=ctrl-z, root=ctrl-r.
+# Defaults: quick=ctrl-q, workspace=ctrl-w, session=ctrl-s, zoxide=ctrl-z, root=ctrl-r.
 # [picker.filter_keys]
 # quick = "ctrl-g"
 
