@@ -11,6 +11,7 @@ mod glance;
 mod herdr;
 mod integrations;
 mod keymap;
+mod launcher;
 mod matcher;
 mod model;
 mod paths;
@@ -38,6 +39,7 @@ enum CliCommand {
     Ui,
     List,
     Status,
+    Shell,
     Invalid,
 }
 
@@ -51,6 +53,7 @@ fn cli_command(command: Option<&str>) -> CliCommand {
         Some("track-agent") => CliCommand::TrackAgent,
         Some("list") => CliCommand::List,
         Some("status") => CliCommand::Status,
+        Some("shell") => CliCommand::Shell,
         Some(_) => CliCommand::Invalid,
     }
 }
@@ -65,9 +68,10 @@ fn main() {
         CliCommand::Ui => run_ui(env::args().nth(2).as_deref() == Some("--side")),
         CliCommand::List => debug_list(),
         CliCommand::Status => print_status(),
+        CliCommand::Shell => launcher::run(env::args().nth(2).as_deref()),
         CliCommand::Invalid => {
             eprintln!(
-                "usage: helm-herdr [open|open-side|jump-back|track-focus|track-agent|ui|list|status]"
+                "usage: helm-herdr [open|open-side|jump-back|track-focus|track-agent|ui|list|status|shell [session]]"
             );
             process::exit(2);
         }
@@ -282,6 +286,11 @@ mod tests {
     #[test]
     fn status_is_a_command() {
         assert_eq!(cli_command(Some("status")), CliCommand::Status);
+    }
+
+    #[test]
+    fn shell_is_a_command() {
+        assert_eq!(cli_command(Some("shell")), CliCommand::Shell);
     }
 
     #[test]
