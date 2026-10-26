@@ -90,7 +90,7 @@ pub(crate) fn tui_loop(
             detail_max = max;
         })?;
         app.detail_max_offset = detail_max;
-        let animate = has_working_entry(app);
+        let animate = has_working_entry(app) || app.glance_view() || app.sessions_view();
         let frame = if animate
             || update_check.is_some()
             || detail_job.is_some()
@@ -1462,7 +1462,8 @@ const SUBAGENT_BAR_CELLS: usize = 10;
 fn draw_glance(f: &mut Frame, app: &App, area: Rect) -> (ListHits, usize) {
     if area.width < DETAIL_MIN_WIDTH {
         let card = list_card(f, app, area);
-        return (draw_glance_list(f, app, card), 0);
+        let list = draw_legend(f, app, card);
+        return (draw_glance_list(f, app, list), 0);
     }
     let [list, border, detail] = Layout::horizontal([
         Constraint::Percentage(50),
@@ -1481,7 +1482,48 @@ fn draw_glance(f: &mut Frame, app: &App, area: Rect) -> (ListHits, usize) {
         draw_detail(f, app, detail)
     };
     let card = list_card(f, app, list);
-    (draw_glance_list(f, app, card), max_offset)
+    let list = draw_legend(f, app, card);
+    (draw_glance_list(f, app, list), max_offset)
+}
+
+/// Draws the icon legend on the last row of the list card, dropping entries
+/// from the right that do not fit, and returns the rows above it.
+fn draw_legend(f: &mut Frame, app: &App, card: Rect) -> Rect {
+    let [list, legend] = Layout::vertical([Constraint::Min(0), Constraint::Length(1)]).areas(card);
+    let icons = app.config.glance.icons;
+    let state = |state: AgentState, word| {
+        (
+            glance::status_icon(state, icons, app.spinner_tick),
+            agent_state_color(&app.theme, state),
+            word,
+        )
+    };
+    let entries = [
+        ("●", app.theme.accent, "here"),
+        ("◌", app.theme.subtext0, "last"),
+        state(AgentState::Working, "working"),
+        state(AgentState::Blocked, "waits"),
+        state(AgentState::Done, "done"),
+        state(AgentState::Idle, "idle"),
+    ];
+    let dim = Style::default().fg(app.theme.subtext0);
+    let mut spans = vec![Span::raw(" ")];
+    let mut used = 1;
+    for (glyph, color, word) in entries {
+        let gap = if spans.len() > 1 { 2 } else { 0 };
+        let width = gap + Span::raw(glyph).width() + 1 + word.len();
+        if used + width > legend.width as usize {
+            break;
+        }
+        if gap > 0 {
+            spans.push(Span::raw("  "));
+        }
+        spans.push(Span::styled(glyph, Style::default().fg(color)));
+        spans.push(Span::styled(format!(" {word}"), dim));
+        used += width;
+    }
+    f.render_widget(Paragraph::new(Line::from(spans)), legend);
+    list
 }
 
 /// Paints the list on the base background inside the chrome and returns the
@@ -2965,6 +3007,52 @@ mod tests {
         assert!(lines[lines.len() - 2].ends_with("q quit  "));
     }
 
+    #[test]
+    fn the_legend_sits_on_the_last_row_of_the_list_in_either_icon_style() {
+        for (icons, legend) in [
+            (
+                IconStyle::Nerd,
+                "● here  ◌ last  ⠋ working  \u{F009E} waits  \u{F05E0} done  \u{F0766} idle",
+            ),
+            (
+                IconStyle::Unicode,
+                "● here  ◌ last  ◐ working  ● waits  ✔ done  ○ idle",
+            ),
+        ] {
+            let mut app = glance_app(
+                NOW,
+                None,
+                vec![commit_workspace("w1", "dots", NOW - 60)],
+                ActivityState::default(),
+            );
+            app.config.glance.icons = icons;
+            let (lines, hits) = render_app(&app, 160, 40);
+            let row = line_index(&lines, legend);
+            assert_eq!(row, line_index(&lines, "q quit") - 3);
+            let hot = line_index(&lines, "HOT");
+            assert_eq!(
+                column_of(&lines[row], legend),
+                column_of(&lines[hot], "HOT")
+            );
+            assert_eq!(hits.area.bottom() as usize, row + 1);
+        }
+    }
+
+    #[test]
+    fn a_narrow_legend_drops_entries_from_the_right() {
+        let app = App::new(Config::default(), Theme::terminal());
+        let mut terminal = Terminal::new(TestBackend::new(30, 1)).unwrap();
+        terminal
+            .draw(|f| {
+                draw_legend(f, &app, f.area());
+            })
+            .unwrap();
+        assert_eq!(
+            buffer_text(&terminal).trim_end(),
+            " ● here  ◌ last  ⠋ working"
+        );
+    }
+
     fn line_index(lines: &[String], needle: &str) -> usize {
         lines
             .iter()
@@ -3016,7 +3104,7 @@ mod tests {
             activity,
         );
 
-        let (lines, _) = render_app(&app, 100, 21);
+        let (lines, _) = render_app(&app, 100, 22);
         let labels = ["NEEDS YOU", "HOT", "WARM", "COLD"];
         let headings = labels.map(|label| line_index(&lines, label));
         assert!(headings.windows(2).all(|pair| pair[0] < pair[1]));
@@ -4511,6 +4599,10 @@ mod tests {
         assert!(column_of(strip, "^W") < column_of(strip, "^S"));
         assert!(column_of(strip, "^S") < column_of(strip, "^Z"));
         assert!(line_index(&lines, "RUNNING") < line_index(&lines, "STOPPED"));
+        assert_eq!(
+            line_index(&lines, "● here  ◌ last"),
+            line_index(&lines, "q quit") - 3
+        );
         let work = &lines[line_index(&lines, "work 1 need you")];
         let b = &lines[line_index(&lines, "b 1 need you")];
         let c = &lines[line_index(&lines, " c ")];
