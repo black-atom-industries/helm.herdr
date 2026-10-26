@@ -18,11 +18,15 @@ use crate::{
     model::{workspace_key, Entry, EntryAction, Source, WorkspaceKind, WorkspaceRef},
     paths::{self, canonical_str, herdr_plus_quick_actions_dir, plugin_config_dir},
     recent::RecentState,
-    sessions::{self, Session},
+    sessions::{self, Session, SessionState},
     sources::{collect_open_topology, collect_roots, collect_zoxide},
     theme::Theme,
-    topology::{self, OpenTopology},
+    topology::{self, AgentState, OpenTopology, WorkspaceNode},
 };
+
+/// The footer notice for opening a Workspace in another Herdr session.
+pub(crate) const OTHER_SESSION_NOTICE: &str =
+    "Start Herdr with helm-herdr shell to switch sessions";
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum InputMode {
@@ -57,6 +61,14 @@ pub(crate) struct App {
     pub(crate) topology: OpenTopology,
     /// The Herdr session Helm runs in; Workspaces of any other session are elsewhere.
     pub(crate) session: Option<String>,
+    /// Every discovered Herdr session, the current one first.
+    pub(crate) sessions: Vec<SessionState>,
+    /// The Sessions view order as group and session name. A refresh keeps it,
+    /// so rows and their labels stay put while the Picker is open.
+    session_ranks: Vec<(usize, Option<String>)>,
+    /// Git reads of other sessions' Workspaces for the Sessions view, keyed by
+    /// session label, with the time of the read.
+    pub(crate) session_git: HashMap<String, (OpenTopology, i64)>,
     pub(crate) topology_entries: Vec<Entry>,
     pub(crate) activity: ActivityState,
     pub(crate) glance: HashMap<String, GlanceRow>,
@@ -113,6 +125,9 @@ impl App {
             update_available: None,
             topology: OpenTopology::default(),
             session: None,
+            sessions: Vec::new(),
+            session_ranks: Vec::new(),
+            session_git: HashMap::new(),
             topology_entries: Vec::new(),
             activity: ActivityState::default(),
             glance: HashMap::new(),
@@ -169,6 +184,7 @@ impl App {
             .unwrap_or_default();
         self.cold_entries =
             read_entry_keys(&plugin_config_dir().join(COLD_ENTRIES_STATE_FILE)).unwrap_or_default();
+        self.session_ranks.clear();
         self.set_workspace_state(workspaces, now_unix_secs());
         self.row_ranks.clear();
         if migrate_legacy_topology_pins(&self.entries, &mut self.pinned_entries) {
@@ -218,10 +234,13 @@ impl App {
         self.previous_workspace_id = workspaces.previous;
         self.subagents = workspaces.subagents;
         self.now = now;
+        self.sessions = workspaces.sessions;
         self.topology_entries = topology::query_entries(&self.topology);
         self.entries
-            .retain(|entry| entry.source != Source::Workspace);
+            .retain(|entry| !matches!(entry.source, Source::Workspace | Source::Session));
         self.entries.extend(self.topology_entries.iter().cloned());
+        let sessions = self.session_entries();
+        self.entries.extend(sessions);
     }
 
     pub(crate) fn rebuild_glance(&mut self) {
@@ -310,6 +329,238 @@ impl App {
             .is_none_or(|source| *source == Source::Workspace)
     }
 
+    pub(crate) fn sessions_view(&self) -> bool {
+        self.source_filter == Some(Source::Session)
+    }
+
+    /// One Entry per session: the current one, the other running ones by
+    /// newest activity, then the stopped ones, each in discovery order
+    /// otherwise. Sessions ranked before keep their place while they stay
+    /// running or stopped; the others follow at the end of their group.
+    fn session_entries(&mut self) -> Vec<Entry> {
+        let group = |state: &SessionState| match (state.current, state.topology.is_some()) {
+            (true, _) => 0,
+            (false, true) => 1,
+            (false, false) => 2,
+        };
+        let mut fresh: Vec<(usize, Reverse<Option<i64>>, &SessionState)> = self
+            .sessions
+            .iter()
+            .map(|state| {
+                let last_active = match group(state) {
+                    1 => self.session_summary(state).last_active,
+                    _ => None,
+                };
+                (group(state), Reverse(last_active), state)
+            })
+            .collect();
+        fresh.sort_by_key(|(group, last_active, _)| (*group, *last_active));
+        let mut ranked: Vec<(usize, (bool, usize), &SessionState)> = fresh
+            .into_iter()
+            .enumerate()
+            .map(|(fresh_rank, (group, _, state))| {
+                let kept = self.session_ranks.iter().position(|(old_group, name)| {
+                    *old_group == group && name == &state.session.name
+                });
+                (
+                    group,
+                    kept.map_or((true, fresh_rank), |rank| (false, rank)),
+                    state,
+                )
+            })
+            .collect();
+        ranked.sort_by_key(|(group, rank, _)| (*group, *rank));
+        let entries = ranked
+            .iter()
+            .map(|(_, _, state)| Entry {
+                source: Source::Session,
+                title: Session::label(state.session.name.as_deref()).to_string(),
+                subtitle: String::new(),
+                path: state.session.dir.clone(),
+                workspace_id: None,
+                workspace_label: None,
+                agent_target: None,
+                action: EntryAction::SwitchSession {
+                    session: state.session.name.clone(),
+                    workspace: None,
+                    tab: None,
+                },
+                source_label: None,
+                search_terms: Vec::new(),
+            })
+            .collect();
+        self.session_ranks = ranked
+            .into_iter()
+            .map(|(group, _, state)| (group, state.session.name.clone()))
+            .collect();
+        entries
+    }
+
+    /// The session of a Sessions view row.
+    pub(crate) fn session_state(&self, entry: &Entry) -> Option<&SessionState> {
+        let EntryAction::SwitchSession {
+            session,
+            workspace: None,
+            ..
+        } = &entry.action
+        else {
+            return None;
+        };
+        self.sessions
+            .iter()
+            .find(|state| &state.session.name == session)
+    }
+
+    /// A session's Workspaces in the Sessions view order: by Warmth group, then
+    /// newest activity first. Pinned never applies, and Cold by hand only in
+    /// the current session. Other sessions get git from the Sessions view's
+    /// reads or from their Needs you rows, when either has it.
+    pub(crate) fn session_workspaces(
+        &self,
+        state: &SessionState,
+    ) -> Vec<(GlanceRow, WorkspaceNode)> {
+        let thresholds = Thresholds {
+            hot_secs: self.config.glance.hot_minutes * 60,
+            warm_secs: self.config.glance.warm_hours * 3_600,
+        };
+        let workspaces: Vec<WorkspaceNode> = if state.current {
+            self.topology
+                .workspaces
+                .iter()
+                .filter(|workspace| workspace.session == self.session)
+                .cloned()
+                .collect()
+        } else {
+            let read = self
+                .session_git
+                .get(Session::label(state.session.name.as_deref()));
+            let mut workspaces = state.topology.clone().unwrap_or_default().workspaces;
+            for workspace in &mut workspaces {
+                workspace.git = read
+                    .into_iter()
+                    .flat_map(|(topology, _)| &topology.workspaces)
+                    .chain(&self.topology.workspaces)
+                    .find(|known| known.id == workspace.id && known.session == workspace.session)
+                    .and_then(|known| known.git.clone());
+            }
+            workspaces
+        };
+        let mut rows: Vec<(GlanceRow, WorkspaceNode)> = workspaces
+            .into_iter()
+            .map(|workspace| {
+                let cold = state.current
+                    && self.cold_entries.contains(&topology_workspace_pin_key(
+                        workspace.session.as_deref(),
+                        &workspace.id,
+                    ));
+                let evidence = glance::evidence(&workspace, &self.activity, false, cold);
+                let previous = state.current
+                    && self.previous_workspace_id.as_deref() == Some(workspace.id.as_str());
+                let mut row = glance::row(&workspace, &evidence, previous, self.now, thresholds);
+                if !state.current {
+                    row.mark = Mark::None;
+                }
+                (row, workspace)
+            })
+            .collect();
+        rows.sort_by_key(|(row, _)| (row.group, Reverse(row.last_active)));
+        rows
+    }
+
+    /// What a Sessions view row shows about its session.
+    pub(crate) fn session_summary(&self, state: &SessionState) -> SessionSummary {
+        let rows = self.session_workspaces(state);
+        let waiting: Vec<AgentState> = rows
+            .iter()
+            .filter(|(row, _)| row.needs_you)
+            .map(|(row, _)| row.state)
+            .collect();
+        let focused = rows
+            .iter()
+            .filter_map(|(_, workspace)| {
+                let at = self
+                    .activity
+                    .focused_at(workspace.session.as_deref(), &workspace.id)?;
+                Some((at, workspace))
+            })
+            .max_by_key(|(at, _)| *at);
+        let agent_change = rows
+            .iter()
+            .flat_map(|(_, workspace)| {
+                workspace
+                    .tabs
+                    .iter()
+                    .flat_map(|tab| &tab.panes)
+                    .filter_map(|pane| {
+                        self.activity
+                            .pane(workspace.session.as_deref(), &pane.id)
+                            .map(|recorded| recorded.since)
+                    })
+            })
+            .max();
+        SessionSummary {
+            state: glance::most_urgent(rows.iter().map(|(row, _)| row.state)).filter(|state| {
+                matches!(
+                    state,
+                    AgentState::Blocked | AgentState::Done | AgentState::Working
+                )
+            }),
+            needs_you: glance::most_urgent(waiting.iter().copied())
+                .map(|state| (state, waiting.len())),
+            workspaces: rows.len(),
+            last_active: focused.map(|(at, _)| at).max(agent_change),
+            last_focused: focused.map(|(_, workspace)| workspace.label.clone()),
+        }
+    }
+
+    /// What opening the selected Sessions view row does. `number` picks the
+    /// session's Workspace in detail order. A Workspace of the current session
+    /// opens here; any other session switches, at that Workspace when it
+    /// exists. `None` for the current session's own row or a missing Workspace.
+    pub(crate) fn session_action(&self, number: Option<usize>) -> Option<EntryAction> {
+        let state = self.session_state(self.selected_entry()?)?;
+        let workspace = number.and_then(|number| {
+            self.session_workspaces(state)
+                .into_iter()
+                .nth(number.checked_sub(1)?)
+                .map(|(_, workspace)| workspace)
+        });
+        if state.current {
+            let workspace = workspace?;
+            return Some(EntryAction::FocusWorkspace {
+                session: workspace.session,
+                id: workspace.id,
+            });
+        }
+        Some(EntryAction::SwitchSession {
+            session: state.session.name.clone(),
+            workspace: workspace.map(|workspace| workspace.id),
+            tab: None,
+        })
+    }
+
+    /// Switches to another Herdr session at `target`, a `SwitchSession`
+    /// action. Helm cannot switch sessions yet, so the Picker stays open with
+    /// a footer notice.
+    pub(crate) fn switch_session(&mut self, _target: EntryAction) {
+        self.notice = Some(OTHER_SESSION_NOTICE);
+    }
+
+    /// The selected running other session, with its Workspaces, when the
+    /// Sessions view's git read for it is missing or older than its TTL.
+    pub(crate) fn session_git_target(&self, now: i64) -> Option<(String, OpenTopology)> {
+        if !self.sessions_view() {
+            return None;
+        }
+        let state = self.session_state(self.selected_entry()?)?;
+        let topology = state.topology.clone().filter(|_| !state.current)?;
+        let label = Session::label(state.session.name.as_deref()).to_string();
+        self.session_git
+            .get(&label)
+            .is_none_or(|(_, read_at)| now - read_at >= SESSION_GIT_TTL_SECS)
+            .then_some((label, topology))
+    }
+
     pub(crate) fn glance_row(&self, entry: &Entry) -> Option<&GlanceRow> {
         match (&entry.source, &entry.action) {
             (Source::Workspace, EntryAction::FocusWorkspace { session, id }) => {
@@ -354,6 +605,7 @@ impl App {
         let query = Query::parse(&self.query);
         let searching = !self.query.trim().is_empty();
         let glance = self.glance_view();
+        let sessions = self.sessions_view();
 
         for entry in &mut self.entries {
             if entry.source_name() == "bookmark" {
@@ -384,9 +636,11 @@ impl App {
             let bonus = self.config.picker.source_bonus(&entry.source);
             if query.plain.is_empty() {
                 scored.push((0, bonus, idx));
-            } else if let Some(score) =
-                match_score(&self.config.picker.engine, &entry.haystack(), &query.plain)
-            {
+            } else if let Some(score) = match_score(
+                &self.config.picker.engine,
+                &self.search_text(entry),
+                &query.plain,
+            ) {
                 scored.push((score, bonus, idx));
             }
         }
@@ -400,6 +654,8 @@ impl App {
             .collect();
         if glance {
             scored.sort_by_key(|(score, idx)| self.glance_order(&self.entries[*idx], *score));
+        } else if sessions {
+            scored.sort_by_key(|(_, idx)| *idx);
         } else {
             scored.sort_by(|(score_a, idx_a), (score_b, idx_b)| {
                 let user_pinned_a = self.is_pinned(&self.entries[*idx_a]);
@@ -469,7 +725,11 @@ impl App {
                 let score = if query.plain.is_empty() {
                     0
                 } else {
-                    match_score(&self.config.picker.engine, &entry.haystack(), &query.plain)?
+                    match_score(
+                        &self.config.picker.engine,
+                        &self.search_text(entry),
+                        &query.plain,
+                    )?
                 };
                 let score = score + self.config.picker.source_bonus(&entry.source);
                 Some((score, position))
@@ -480,6 +740,15 @@ impl App {
                     .then_with(|| position_b.cmp(position_a))
             })
             .map(|(_, position)| position)
+    }
+
+    /// The text a Query matches: a Sessions view row matches by session name.
+    fn search_text(&self, entry: &Entry) -> String {
+        if entry.source == Source::Session {
+            entry.title.to_lowercase()
+        } else {
+            entry.haystack()
+        }
     }
 
     /// Drop the trailing word of the query, plus any whitespace before it.
@@ -521,14 +790,15 @@ impl App {
     }
 
     /// Positions of the labelled rows, in label order: the first visible
-    /// glance rows, Pinned first.
+    /// glance rows, Pinned first, or the first Sessions view rows.
     pub(crate) fn labelled_positions(&self) -> Vec<usize> {
-        if !self.glance_view() {
+        let sessions = self.sessions_view();
+        if !self.glance_view() && !sessions {
             return Vec::new();
         }
         let count = self.config.glance.labels().len();
         (0..self.filtered.len())
-            .filter(|&position| self.glance_row_at(position).is_some())
+            .filter(|&position| sessions || self.glance_row_at(position).is_some())
             .take(count)
             .collect()
     }
@@ -813,8 +1083,24 @@ impl App {
         self.open_entry(e, use_directory_template)
     }
 
-    /// Opens tab `number` (1-based) of the selected Workspace.
+    /// Opens tab `number` (1-based) of the selected Workspace, or in the
+    /// Sessions view the current session's Workspace `number`.
     pub(crate) fn open_tab(&mut self, number: usize) -> Result<(), String> {
+        if self.sessions_view() {
+            let target = match self.session_action(Some(number)) {
+                Some(EntryAction::FocusWorkspace { session, id }) => {
+                    workspace_key(session.as_deref(), &id)
+                }
+                _ => return Err("no such workspace in this session".into()),
+            };
+            let entry = self
+                .topology_entries
+                .iter()
+                .find(|entry| entry_identity(entry) == target)
+                .cloned()
+                .ok_or("no such workspace in this session")?;
+            return self.open_entry(entry, false);
+        }
         let action = self.selected_tab_action(number).ok_or("no such tab")?;
         let mut entry = self.selected_entry().cloned().ok_or("nothing selected")?;
         entry.action = action;
@@ -827,6 +1113,10 @@ impl App {
             EntryAction::FocusPane { .. }
             | EntryAction::FocusWorkspace { .. }
             | EntryAction::FocusTab { .. } => (self.focus_action(&e.action), true, true),
+            EntryAction::SwitchSession { .. } => {
+                self.switch_session(e.action.clone());
+                (Ok(()), false, false)
+            }
             EntryAction::InvokePluginAction { action } => (
                 run_herdr(["plugin", "action", "invoke", action]),
                 true,
@@ -920,7 +1210,7 @@ impl App {
         match e.source {
             Source::Workspace => e.workspace_id.clone(),
             Source::Zoxide | Source::Root => self.matching_dir_workspace(e).map(|ws| ws.id.clone()),
-            Source::QuickAction | Source::Integration => None,
+            Source::Session | Source::QuickAction | Source::Integration => None,
         }
     }
 
@@ -1323,6 +1613,8 @@ pub(crate) struct Workspaces {
     pub(crate) subagents: HashMap<String, Vec<Subagent>>,
     /// The Herdr session the topology was read from; other sessions' Workspaces join it.
     pub(crate) session: Option<String>,
+    /// Every discovered Herdr session, for the Sessions view.
+    pub(crate) sessions: Vec<SessionState>,
 }
 
 impl Workspaces {
@@ -1350,6 +1642,7 @@ pub(crate) fn load_workspaces(
 ) -> Workspaces {
     let session = sessions::current();
     let activity = ActivityState::load();
+    let mut states = Vec::new();
     let topology = if config.sources.open_workspaces {
         let mut topology = snapshot
             .map(|snapshot| topology::parse_snapshot(snapshot, session.clone()))
@@ -1360,7 +1653,8 @@ pub(crate) fn load_workspaces(
                     session.clone(),
                 )
             });
-        join_needs_you(&mut topology, sessions::read_other_sessions(), &activity);
+        states = sessions::read_states();
+        join_needs_you(&mut topology, sessions::other_topology(&states), &activity);
         match cached {
             Some(cached) => reuse_git(&mut topology, cached),
             None => topology::enrich_git(&mut topology, &topology::NativeGitProbe),
@@ -1381,6 +1675,7 @@ pub(crate) fn load_workspaces(
             .flatten(),
         subagents,
         session,
+        sessions: states,
     }
 }
 
@@ -1424,6 +1719,19 @@ fn reuse_git(topology: &mut OpenTopology, cached: &OpenTopology) {
 }
 
 const DETAIL_TTL_SECS: i64 = 10;
+const SESSION_GIT_TTL_SECS: i64 = 30;
+
+/// A Sessions view row's facts about its session.
+pub(crate) struct SessionSummary {
+    /// The most urgent of blocked, done and working across its Workspaces.
+    pub(crate) state: Option<AgentState>,
+    /// The most urgent Needs you state and how many Workspaces need you.
+    pub(crate) needs_you: Option<(AgentState, usize)>,
+    pub(crate) workspaces: usize,
+    /// The newest Workspace focus or agent status change.
+    pub(crate) last_active: Option<i64>,
+    pub(crate) last_focused: Option<String>,
+}
 
 pub(crate) struct SelectedWorkspace<'a> {
     pub(crate) entry: &'a Entry,
@@ -1592,6 +1900,9 @@ pub(crate) fn pin_key(entry: &Entry) -> String {
         }
         EntryAction::FocusPane { session, id } => {
             format!("pane:{}:{id}", session_key(session.as_deref()))
+        }
+        EntryAction::SwitchSession { session, .. } => {
+            format!("session:{}", session_key(session.as_deref()))
         }
         EntryAction::InvokePluginAction { action } => {
             format!("plugin:{}:{action}", entry.source_name())
@@ -2251,6 +2562,7 @@ exit 0
                 previous: None,
                 subagents: HashMap::new(),
                 session: None,
+                sessions: Vec::new(),
             },
             NOW,
         );
@@ -2302,6 +2614,7 @@ exit 0
                 previous: None,
                 subagents: HashMap::new(),
                 session: None,
+                sessions: Vec::new(),
             },
             NOW,
         );
@@ -2344,6 +2657,7 @@ exit 0
                 previous: None,
                 subagents: HashMap::new(),
                 session: None,
+                sessions: Vec::new(),
             },
             NOW,
         );
@@ -2359,6 +2673,7 @@ exit 0
             previous: None,
             subagents: HashMap::new(),
             session: None,
+            sessions: Vec::new(),
         };
         app.apply_workspaces(
             snapshot(vec![
@@ -2395,6 +2710,7 @@ exit 0
             previous: None,
             subagents: HashMap::new(),
             session: None,
+            sessions: Vec::new(),
         };
         app.apply_workspaces(
             snapshot(vec![
@@ -2423,6 +2739,7 @@ exit 0
                 previous: None,
                 subagents: HashMap::new(),
                 session: None,
+                sessions: Vec::new(),
             },
             NOW,
         );
@@ -2473,6 +2790,7 @@ exit 0
                 previous: None,
                 subagents: HashMap::new(),
                 session: None,
+                sessions: Vec::new(),
             },
             NOW,
         );
@@ -2504,6 +2822,7 @@ exit 0
                 previous: None,
                 subagents: HashMap::new(),
                 session: None,
+                sessions: Vec::new(),
             },
             NOW,
         );
@@ -2562,6 +2881,7 @@ exit 0
                 previous: None,
                 subagents: HashMap::new(),
                 session: None,
+                sessions: Vec::new(),
             },
             NOW,
         );
@@ -2759,6 +3079,7 @@ exit 0
                 previous: Some("w1".into()),
                 subagents: HashMap::new(),
                 session: None,
+                sessions: Vec::new(),
             },
             NOW,
         );
@@ -2790,6 +3111,7 @@ exit 0
                 previous: None,
                 subagents: HashMap::new(),
                 session: Some("work".into()),
+                sessions: Vec::new(),
             },
             NOW,
         );
@@ -2833,6 +3155,7 @@ exit 0
             previous: None,
             subagents: HashMap::new(),
             session: None,
+            sessions: Vec::new(),
         };
         app.apply_workspaces(load(vec![bare_workspace("w1", "helm", true, None)]), NOW);
         app.apply_workspaces(

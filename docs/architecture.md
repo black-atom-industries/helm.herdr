@@ -67,6 +67,10 @@ The sessions are the default session, whose directory is the root, and every dir
 
 Each load, at open and in the 3-second background refresh, reads the snapshot of every other running session and keeps only the Workspaces where an agent is blocked or done. Only those get git and transcript reads. Their rows join the glance in Needs you, classified with their own session's `activity.json` entries; pinned and cold state never applies to them, and they carry no Current or Previous mark. The row shows an `@<session>` tag in the mauve colour inside the name cell, and the header adds ` · M elsewhere` to the need-you count. Opening such a row keeps the Picker open with `Start Herdr with helm-herdr shell to switch sessions` in the footer until the next key. Close, Cold and pin ignore these rows, because Workspace IDs repeat across sessions.
 
+The same discovery feeds the Sessions view. Running lists the current session first, marked `●`, then the other running sessions by their newest Workspace focus or agent status change in `activity.json`, in discovery order otherwise; Stopped lists the sessions whose socket did not answer. A row shows the most urgent of blocked, done and working across the session's Workspaces, `N need you` in the colour of the most urgent Needs you state, the Workspace count (`start` for a stopped session) and the age of the newest activity. The detail pane classifies the session's Workspaces with the glance's rules and that session's activity, without Pinned, and with Cold by hand only in the current session; it groups them into Needs you, Hot, Warm and Cold, newest activity first, numbers the first nine across groups, and lists the session's agents. Its current and previous marks show only for the current session. Other sessions' Workspaces get git through a background read of the selected session, kept for 30 seconds; until it lands, a Workspace outside Needs you shows no branch and is classified without its last commit.
+
+Opening another session's row, with `enter`, its label twice or `1`–`9` for one of its Workspaces, resolves to a session switch and keeps the Picker open with the same footer notice. On the current session's row, `enter` returns to the glance and `1`–`9` focuses that Workspace. Close, Cold and pin ignore session rows.
+
 `helm-herdr status` reads the same snapshots without activity, git or transcript reads, counts each session's Workspaces in Needs you with the glance's classification, and prints `<session> <icon><count>` per session in discovery order, joined by two spaces. The icon is that of the most urgent state (blocked before done) in the configured icon style. The output is plain text without a trailing newline, empty when nothing waits, and the exit code is always 0.
 
 ## Code layout
@@ -98,6 +102,7 @@ src/integrations/ built-in Herdr Plus adapter and command integrations
 The projections are exclusive:
 
 - With no Source filter or the Workspace Source filter, the Picker shows the glance. A typed Query narrows its rows in place and keeps the group layout. With the nucleo engine, a row stays only while its match score reaches 85% of the best visible score, before Source bonuses; Queries made only of tokens keep every matching row. Plain text matches what a row shows, never the agent names and statuses that only Query tokens read. The cursor lands on the best match, Source bonus included, and follows it as the Query changes. Once the user moves the cursor, it stays on that row while the row is visible.
+- The Session Source filter (`^S`) shows the Sessions view, laid out like the glance: one row per Herdr session in a Running and a Stopped group, beside a detail pane. A typed Query narrows the rows by session name and keeps their order.
 - Any other Source filter shows a flat Result list. Each row is one terminal line in the order `destination | Source | symbol+word status`, with Source and status pinned to the right edge.
 
 While a Query is active, quick action and plugin integration Entries match in an Other group after Directories. Without a Query they appear only under their Source filter.
@@ -127,6 +132,7 @@ Changes and commits come from `git status`, `git diff --numstat` and `git log` o
 | Source | Enter action |
 | --- | --- |
 | `workspace` | Focus the exact Workspace ID |
+| `session` | Switch to that Herdr session; for the current session, return to the glance |
 | `zoxide` / `root` | Reuse or create a directory Workspace; `Alt-Enter` applies the directory template |
 | `quick` | Invoke the Herdr Plus Quick Actions picker |
 | `plugin` | Run the integration's configured open command |
@@ -134,7 +140,7 @@ Changes and commits come from `git status`, `git diff --numstat` and `git log` o
 
 In Normal mode, `j`/`k` and `Up`/`Down` move through the visible rows across groups. The first visible Workspace rows carry the letters from `[glance] labels` (`asdfg` by default, never `j`, `k`, `l`, `q` or `x`), and pressing one selects that row. Pressing the same label again right away opens it, so `aa` opens the first row and `a3` its third Tab. Search mode hides the labels, and they return after `Esc`.
 
-`Enter` opens the selected Workspace at its last active Tab, and `1`–`9` open that Tab of the selected Workspace. `]` jumps to the first row of the next group. `[` jumps to the first row of the current group, or to the previous group's first row when it is already on that row. `!` jumps to the next row that needs you, including pinned rows. `l` opens the Previous workspace, and `q` closes Helm. `x` arms closing the selected Workspace and the footer asks for a second `x`; any other key cancels, and `^X` closes at once. `c` arms sending the selected Workspace to Cold and a second `c` confirms; on a cold Workspace a single `c` warms it up again. `Shift-J` and `Shift-K` scroll the detail pane, and the offset resets when the selection moves to another row.
+`Enter` opens the selected Workspace at its last active Tab, and `1`–`9` open that Tab of the selected Workspace. `]` jumps to the first row of the next group. `[` jumps to the first row of the current group, or to the previous group's first row when it is already on that row. `!` jumps to the next row that needs you, including pinned rows. `l` opens the Previous workspace, also from the Sessions view, and `q` closes Helm. `^S` shows the Sessions view, where the labels mark its first rows and `1`–`9` pick the selected session's numbered Workspaces. `x` arms closing the selected Workspace and the footer asks for a second `x`; any other key cancels, and `^X` closes at once. `c` arms sending the selected Workspace to Cold and a second `c` confirms; on a cold Workspace a single `c` warms it up again. `Shift-J` and `Shift-K` scroll the detail pane, and the offset resets when the selection moves to another row.
 
 ## Side behavior
 
@@ -149,7 +155,7 @@ Helm integrates with Herdr Plus without copying its UI:
 
 ## Configuration boundary
 
-Current Picker keys are `reuse_existing`, `create_missing`, `engine`, `source_order`, `source_priority_boost`, `check_updates`, `directory_template`, `directory_template_key`, and `[picker.filter_keys]`. Other current sections are `[theme]`, `[notifications]`, `[jump_back]`, `[glance]`, `[sources]`, `[[roots]]`, and `[[integrations]]`. `[glance]` holds `hot_minutes`, `warm_hours`, `icons` and `labels`.
+Current Picker keys are `reuse_existing`, `create_missing`, `engine`, `source_order`, `source_priority_boost`, `check_updates`, `directory_template`, `directory_template_key`, and `[picker.filter_keys]`. Other current sections are `[theme]`, `[notifications]`, `[jump_back]`, `[glance]`, `[sources]`, `[[roots]]`, and `[[integrations]]`. `[glance]` holds `hot_minutes`, `warm_hours`, `icons` and `labels`. A `source_order` without `session` places the Sessions view's filter key right after the workspace key.
 
 ## Color boundary
 

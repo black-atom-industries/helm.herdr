@@ -135,18 +135,71 @@ fn other_running(
     running(others)
 }
 
-/// The Workspaces of every running session other than the current one.
-pub(crate) fn other_topology(
+/// A discovered session and, while it runs, its Workspaces.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct SessionState {
+    pub(crate) session: Session,
+    pub(crate) current: bool,
+    /// `None` while the session is stopped. The current session's Workspaces
+    /// are the local Topology, so its own stays empty.
+    pub(crate) topology: Option<OpenTopology>,
+}
+
+/// Every discovered session in discovery order, the current one included
+/// even when its directory is missing.
+pub(crate) fn states(
     root: &Path,
     current: Option<&str>,
     current_socket: Option<&Path>,
-) -> OpenTopology {
+) -> Vec<SessionState> {
+    let (mine, others): (Vec<Session>, Vec<Session>) = discover(root)
+        .into_iter()
+        .partition(|session| is_current(session, current, current_socket));
+    let answered = running(others.clone());
+    let mut states: Vec<SessionState> = others
+        .into_iter()
+        .map(|session| {
+            let topology = answered
+                .iter()
+                .find(|(running, _)| *running == session)
+                .map(|(_, snapshot)| topology::parse_snapshot(snapshot, session.name.clone()));
+            SessionState {
+                session,
+                current: false,
+                topology,
+            }
+        })
+        .collect();
+    let mine = mine.into_iter().next().unwrap_or_else(|| {
+        let name = current
+            .filter(|name| *name != "default")
+            .map(str::to_string);
+        let dir = match (current_socket.and_then(Path::parent), &name) {
+            (Some(dir), _) => dir.to_path_buf(),
+            (None, Some(name)) => root.join("sessions").join(name),
+            (None, None) => root.to_path_buf(),
+        };
+        Session { name, dir }
+    });
+    states.insert(
+        0,
+        SessionState {
+            session: mine,
+            current: true,
+            topology: Some(OpenTopology::default()),
+        },
+    );
+    states
+}
+
+/// The Workspaces of every running session other than the current one.
+pub(crate) fn other_topology(states: &[SessionState]) -> OpenTopology {
     OpenTopology {
-        workspaces: other_running(root, current, current_socket)
-            .into_iter()
-            .flat_map(|(session, snapshot)| {
-                topology::parse_snapshot(&snapshot, session.name).workspaces
-            })
+        workspaces: states
+            .iter()
+            .filter(|state| !state.current)
+            .filter_map(|state| state.topology.as_ref())
+            .flat_map(|topology| topology.workspaces.iter().cloned())
             .collect(),
     }
 }
@@ -208,10 +261,10 @@ pub(crate) fn read_waiting() -> Vec<Waiting> {
     waiting(&herdr_root(), current().as_deref(), socket.as_deref())
 }
 
-/// [`other_topology`] for this process's Herdr root and session.
-pub(crate) fn read_other_sessions() -> OpenTopology {
+/// [`states`] for this process's Herdr root and session.
+pub(crate) fn read_states() -> Vec<SessionState> {
     let socket = env::var_os("HERDR_SOCKET_PATH").map(PathBuf::from);
-    other_topology(&herdr_root(), current().as_deref(), socket.as_deref())
+    states(&herdr_root(), current().as_deref(), socket.as_deref())
 }
 
 #[cfg(all(test, unix))]
@@ -323,7 +376,7 @@ mod tests {
             snapshot_result("api", "blocked"),
         );
 
-        let topology = other_topology(&root, Some("current"), None);
+        let topology = other_topology(&states(&root, Some("current"), None));
         work.join().unwrap();
         let workspace = &topology.workspaces[0];
         assert_eq!(topology.workspaces.len(), 1);
@@ -346,6 +399,48 @@ mod tests {
             Some("work"),
             Some(&root.join("herdr.sock"))
         ));
+
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn states_list_every_session_with_the_current_one_first() {
+        let _lock = crate::herdr::test_env_lock();
+        let root = temp_root("s");
+        fs::create_dir_all(root.join("sessions/a")).unwrap();
+        fs::create_dir_all(root.join("sessions/b")).unwrap();
+        let a = serve(&root.join("sessions/a"), snapshot_result("api", "idle"));
+
+        let found = states(&root, Some("b"), None);
+        a.join().unwrap();
+        let names: Vec<(Option<&str>, bool, bool)> = found
+            .iter()
+            .map(|state| {
+                (
+                    state.session.name.as_deref(),
+                    state.current,
+                    state.topology.is_some(),
+                )
+            })
+            .collect();
+        assert_eq!(
+            names,
+            [
+                (Some("b"), true, true),
+                (None, false, false),
+                (Some("a"), false, true),
+            ]
+        );
+        assert_eq!(
+            found[2].topology.as_ref().unwrap().workspaces[0].label,
+            "api"
+        );
+        assert_eq!(other_topology(&found).workspaces.len(), 1);
+
+        let gone = states(&root, Some("gone"), None);
+        assert!(gone[0].current);
+        assert_eq!(gone[0].session.name.as_deref(), Some("gone"));
+        assert_eq!(gone[0].session.dir, root.join("sessions/gone"));
 
         let _ = fs::remove_dir_all(&root);
     }
@@ -442,7 +537,7 @@ mod tests {
         let _listener = UnixListener::bind(root.join("sessions/hung/herdr.sock")).unwrap();
 
         let started = Instant::now();
-        let topology = other_topology(&root, None, None);
+        let topology = other_topology(&states(&root, None, None));
         assert!(topology.workspaces.is_empty());
         assert!(started.elapsed() < Duration::from_secs(1));
 

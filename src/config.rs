@@ -114,7 +114,7 @@ pub(crate) struct SourcesConfig {
 impl SourcesConfig {
     pub(crate) fn enabled(&self, source: &Source) -> bool {
         match source {
-            Source::Workspace => self.open_workspaces,
+            Source::Workspace | Source::Session => self.open_workspaces,
             Source::Zoxide => self.zoxide,
             Source::Root => self.roots,
             Source::QuickAction => self.herdr_plus_quick_actions,
@@ -186,6 +186,7 @@ fn default_filter_key(source: &Source) -> Option<char> {
     match source {
         Source::QuickAction => Some('q'),
         Source::Workspace => Some('w'),
+        Source::Session => Some('s'),
         Source::Zoxide => Some('z'),
         Source::Root => Some('r'),
         Source::Integration => None,
@@ -261,12 +262,21 @@ impl PickerConfig {
             .collect()
     }
 
+    /// A `source_order` without `session` ranks the Sessions view with
+    /// workspaces, so its filter key follows the workspace key.
     pub(crate) fn source_rank(&self, source: &Source) -> usize {
-        self.source_order
-            .iter()
-            .filter_map(|name| Source::from_config(name))
-            .position(|item| &item == source)
-            .unwrap_or_else(|| Source::all().len())
+        let listed = |source: &Source| {
+            self.source_order
+                .iter()
+                .filter_map(|name| Source::from_config(name))
+                .position(|item| &item == source)
+        };
+        let rank = if *source == Source::Session {
+            listed(source).or_else(|| listed(&Source::Workspace))
+        } else {
+            listed(source)
+        };
+        rank.unwrap_or_else(|| Source::all().len())
     }
 
     /// The threshold in a glance search assumes nucleo's score scale.
@@ -387,6 +397,28 @@ mod tests {
         assert_eq!(picker.source_rank(&Source::Zoxide), 1);
         assert_eq!(picker.source_rank(&Source::Root), 2);
         assert!(picker.source_bonus(&Source::Root) > picker.source_bonus(&Source::Integration));
+    }
+
+    #[test]
+    fn sessions_follow_workspaces_unless_source_order_names_them() {
+        let config = Config::default();
+        assert_eq!(
+            config.enabled_sources_in_order()[..3],
+            [Source::Workspace, Source::Session, Source::Zoxide]
+        );
+        assert_eq!(config.picker.filter_key(&Source::Session), Some('s'));
+
+        let config: Config = toml::from_str(
+            r#"
+            [picker]
+            source_order = ["workspace", "zoxide", "sessions"]
+            "#,
+        )
+        .unwrap();
+        assert_eq!(
+            config.enabled_sources_in_order()[..3],
+            [Source::Workspace, Source::Zoxide, Source::Session]
+        );
     }
 
     #[test]
@@ -610,7 +642,8 @@ mod tests {
         assert!(config.jump_back.enabled);
         let sources = config.enabled_sources_in_order();
         assert_eq!(sources[0], Source::Workspace);
-        assert_eq!(sources[1], Source::Zoxide);
+        assert_eq!(sources[1], Source::Session);
+        assert_eq!(sources[2], Source::Zoxide);
         assert_eq!(config.picker.filter_source_for_key('g'), None);
         assert_eq!(config.picker.filter_source_for_key('h'), None);
     }

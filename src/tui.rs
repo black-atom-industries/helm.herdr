@@ -1,6 +1,6 @@
 use std::{
     io,
-    path::PathBuf,
+    path::{Path, PathBuf},
     sync::mpsc::{self, Receiver, TryRecvError},
     thread,
     time::{Duration, Instant},
@@ -30,11 +30,12 @@ use crate::{
     detail::{self, Change, Commit, GitDetail, Subagent},
     glance::{self, Group, Mark},
     keymap::{keybindings, Command},
-    model::{workspace_key, Entry, Source},
+    model::{workspace_key, Entry, EntryAction, Source},
     paths::home,
+    sessions::{Session, SessionState},
     sources::status_icon_at,
     theme::Theme,
-    topology::{repository_color, AgentState, OpenTopology, PaneNode, WorkspaceNode},
+    topology::{self, repository_color, AgentState, OpenTopology, PaneNode, WorkspaceNode},
 };
 
 fn open_action_error(error: String, persist: bool) -> io::Result<()> {
@@ -54,6 +55,7 @@ pub(crate) fn tui_loop(
 ) -> io::Result<()> {
     enable_raw_mode()?;
     let mut detail_job: Option<(String, Receiver<GitDetail>)> = None;
+    let mut session_git_job: Option<(String, Receiver<OpenTopology>)> = None;
     let mut out = io::stdout();
     execute!(out, EnterAlternateScreen, EnableMouseCapture)?;
     let mut terminal = Terminal::new(CrosstermBackend::new(out))?;
@@ -75,6 +77,7 @@ pub(crate) fn tui_loop(
         }
         app.sync_detail_scroll();
         drive_detail(app, &mut detail_job, now_unix_secs());
+        drive_session_git(app, &mut session_git_job, now_unix_secs());
         let mut detail_max = 0;
         terminal.draw(|f| {
             if !persist && too_small(f.area()) {
@@ -88,7 +91,11 @@ pub(crate) fn tui_loop(
         })?;
         app.detail_max_offset = detail_max;
         let animate = has_working_entry(app);
-        let frame = if animate || update_check.is_some() || detail_job.is_some() {
+        let frame = if animate
+            || update_check.is_some()
+            || detail_job.is_some()
+            || session_git_job.is_some()
+        {
             Duration::from_millis(125)
         } else {
             Duration::from_secs(1)
@@ -183,6 +190,31 @@ fn drive_detail(app: &mut App, job: &mut Option<(String, Receiver<GitDetail>)>, 
             if app.git_refresh_due(&key, now) {
                 *job = Some((key, spawn_git_read(cwd)));
             }
+        }
+    }
+}
+
+/// Keeps at most one git read of another session's Workspaces in flight for
+/// the Sessions view, and stores its result once it arrives.
+fn drive_session_git(app: &mut App, job: &mut Option<(String, Receiver<OpenTopology>)>, now: i64) {
+    match job.take() {
+        Some((label, receiver)) => match receiver.try_recv() {
+            Ok(topology) => {
+                app.session_git.insert(label, (topology, now));
+            }
+            Err(TryRecvError::Empty) => *job = Some((label, receiver)),
+            Err(TryRecvError::Disconnected) => {}
+        },
+        None => {
+            let Some((label, mut topology)) = app.session_git_target(now) else {
+                return;
+            };
+            let (sender, receiver) = mpsc::channel();
+            thread::spawn(move || {
+                topology::enrich_git(&mut topology, &topology::NativeGitProbe);
+                let _ = sender.send(topology);
+            });
+            *job = Some((label, receiver));
         }
     }
 }
@@ -290,9 +322,6 @@ fn handle_mouse(app: &mut App, mouse: MouseEvent, hits: &ListHits) -> Action {
     Action::Continue
 }
 
-/// The footer notice for opening a Workspace in another Herdr session.
-const OTHER_SESSION_NOTICE: &str = "Start Herdr with helm-herdr shell to switch sessions";
-
 fn handle_key(app: &mut App, key: KeyEvent) -> Action {
     app.notice = None;
     let action = key_action(app, key);
@@ -300,21 +329,47 @@ fn handle_key(app: &mut App, key: KeyEvent) -> Action {
 }
 
 /// Helm cannot focus a Workspace of another Herdr session, so opening one
-/// keeps the Picker open with a notice instead.
+/// keeps the Picker open with a notice instead. In the Sessions view, opening
+/// the current session's row returns to the glance, and its numbered
+/// Workspaces open here.
 fn stay_for_other_session(app: &mut App, action: Action) -> Action {
-    let opens = matches!(
-        action,
-        Action::Open | Action::OpenTemplate | Action::OpenTab(_)
-    );
-    if opens
-        && app
-            .selected_entry()
-            .is_some_and(|entry| app.is_elsewhere(entry))
-    {
-        app.notice = Some(OTHER_SESSION_NOTICE);
-        return Action::Continue;
+    let number = match action {
+        Action::Open | Action::OpenTemplate => None,
+        Action::OpenTab(number) => Some(number),
+        _ => return action,
+    };
+    if app.sessions_view() {
+        return match app.session_action(number) {
+            Some(EntryAction::FocusWorkspace { .. }) => action,
+            Some(target) => {
+                app.switch_session(target);
+                Action::Continue
+            }
+            None if number.is_none() => {
+                app.set_filter(None);
+                app.apply_filter();
+                Action::Continue
+            }
+            None => Action::Continue,
+        };
     }
-    action
+    let Some(EntryAction::FocusWorkspace { session, id }) = app
+        .selected_entry()
+        .filter(|entry| app.is_elsewhere(entry))
+        .map(|entry| entry.action.clone())
+    else {
+        return action;
+    };
+    let tab = match number.and_then(|number| app.selected_tab_action(number)) {
+        Some(EntryAction::FocusTab { id, .. }) => Some(id),
+        _ => None,
+    };
+    app.switch_session(EntryAction::SwitchSession {
+        session,
+        workspace: Some(id),
+        tab,
+    });
+    Action::Continue
 }
 
 fn key_action(app: &mut App, key: KeyEvent) -> Action {
@@ -335,13 +390,14 @@ fn key_action(app: &mut App, key: KeyEvent) -> Action {
     }
 
     if let Some(command) = command {
-        // Workspace ids repeat across sessions, so these would act on a local namesake.
+        // Workspace ids repeat across sessions, so these would act on a local
+        // namesake, and a session row is no Workspace.
         if matches!(
             command,
             Command::ArmClose | Command::CloseWorkspace | Command::ToggleCold | Command::ToggleMark
         ) && app
             .selected_entry()
-            .is_some_and(|entry| app.is_elsewhere(entry))
+            .is_some_and(|entry| app.is_elsewhere(entry) || entry.source == Source::Session)
         {
             return Action::Continue;
         }
@@ -424,7 +480,7 @@ fn execute_command(app: &mut App, command: Command, key: KeyEvent) -> Action {
         Command::OpenTab => match key.code {
             KeyCode::Char(ch) if ('1'..='9').contains(&ch) => {
                 let number = usize::from(ch as u8 - b'0');
-                if app.selected_tab_action(number).is_some() {
+                if app.sessions_view() || app.selected_tab_action(number).is_some() {
                     Action::OpenTab(number)
                 } else {
                     Action::Continue
@@ -432,13 +488,19 @@ fn execute_command(app: &mut App, command: Command, key: KeyEvent) -> Action {
             }
             _ => Action::Continue,
         },
-        Command::OpenPrevious => match app.previous_position() {
-            Some(position) => {
-                app.selected = position;
-                Action::Open
+        Command::OpenPrevious => {
+            if app.sessions_view() && app.previous_workspace_id.is_some() {
+                app.set_filter(None);
+                app.apply_filter();
             }
-            None => Action::Continue,
-        },
+            match app.previous_position() {
+                Some(position) => {
+                    app.selected = position;
+                    Action::Open
+                }
+                None => Action::Continue,
+            }
+        }
         Command::NextGroup => {
             app.jump_group(true);
             Action::Continue
@@ -569,7 +631,7 @@ fn draw(f: &mut Frame, app: &App) -> (ListHits, usize) {
         },
     );
     draw_header(f, app, indent(rows[0]));
-    let (list_hits, detail_max) = if app.glance_view() {
+    let (list_hits, detail_max) = if app.glance_view() || app.sessions_view() {
         draw_glance(f, app, rows[1])
     } else {
         (draw_list(f, app, rows[1]), 0)
@@ -1048,18 +1110,20 @@ fn entry_metadata(entry: &Entry) -> String {
 }
 
 fn display_path(entry: &Entry) -> String {
-    entry
-        .path
-        .strip_prefix(home())
+    home_relative(&entry.path)
+}
+
+fn home_relative(path: &Path) -> String {
+    path.strip_prefix(home())
         .ok()
-        .map(|path| {
-            if path.as_os_str().is_empty() {
+        .map(|relative| {
+            if relative.as_os_str().is_empty() {
                 "~".into()
             } else {
-                format!("~/{}", path.display())
+                format!("~/{}", relative.display())
             }
         })
-        .unwrap_or_else(|| entry.path.display().to_string())
+        .unwrap_or_else(|| path.display().to_string())
 }
 
 fn metadata_width(width: u16) -> usize {
@@ -1187,8 +1251,10 @@ struct GlanceCells {
     icon: &'static str,
     icon_color: Color,
     name: String,
-    /// The `@session` tag of a Workspace in another Herdr session.
+    /// The `@session` tag of a Workspace in another Herdr session, or a
+    /// session's `N need you`.
     tag: Option<String>,
+    tag_color: Color,
     name_color: Color,
     branch: String,
     mark: Mark,
@@ -1196,6 +1262,9 @@ struct GlanceCells {
 }
 
 fn glance_cells(app: &App, entry: &Entry) -> GlanceCells {
+    if let Some(state) = app.session_state(entry) {
+        return session_cells(app, entry, state);
+    }
     match app.glance_row(entry) {
         Some(row) => GlanceCells {
             icon: glance::status_icon(row.state, app.config.glance.icons, app.spinner_tick),
@@ -1205,6 +1274,7 @@ fn glance_cells(app: &App, entry: &Entry) -> GlanceCells {
                 .other_session
                 .as_ref()
                 .map(|session| format!("@{session}")),
+            tag_color: app.theme.mauve,
             name_color: repository_color(&row.repository, &[], &app.theme),
             branch: row.branch.clone(),
             mark: row.mark,
@@ -1215,12 +1285,67 @@ fn glance_cells(app: &App, entry: &Entry) -> GlanceCells {
             icon_color: app.theme.text,
             name: display_title(entry).to_string(),
             tag: None,
+            tag_color: app.theme.mauve,
             name_color: app.theme.text,
             branch: display_path(entry),
             mark: Mark::None,
             signal: String::new(),
         },
     }
+}
+
+/// A Sessions view row: the session's most urgent icon, its name with how many
+/// Workspaces need you, its Workspace count and the age of its newest activity.
+/// A stopped session shows a dim name and `start`.
+fn session_cells(app: &App, entry: &Entry, state: &SessionState) -> GlanceCells {
+    let summary = app.session_summary(state);
+    let running = state.topology.is_some();
+    let icon_state = summary.state.unwrap_or(AgentState::Unknown);
+    let tag_state = summary
+        .needs_you
+        .map_or(AgentState::Unknown, |(state, _)| state);
+    GlanceCells {
+        icon: glance::status_icon(icon_state, app.config.glance.icons, app.spinner_tick),
+        icon_color: agent_state_color(&app.theme, icon_state),
+        name: entry.title.clone(),
+        tag: summary
+            .needs_you
+            .map(|(_, count)| format!("{count} need you")),
+        tag_color: agent_state_color(&app.theme, tag_state),
+        name_color: if running {
+            app.theme.text
+        } else {
+            app.theme.subtext0
+        },
+        branch: if running {
+            format!("{} ws", summary.workspaces)
+        } else {
+            "start".into()
+        },
+        mark: if state.current {
+            Mark::Here
+        } else {
+            Mark::None
+        },
+        signal: summary
+            .last_active
+            .map(|at| glance::age(app.now, at))
+            .unwrap_or_default(),
+    }
+}
+
+/// The heading of the group a row sits in: its Warmth group in the glance,
+/// RUNNING or STOPPED in the Sessions view.
+fn row_heading(app: &App, entry: &Entry) -> Option<(String, Color)> {
+    if let Some(state) = app.session_state(entry) {
+        return Some(if state.topology.is_some() {
+            ("RUNNING".into(), app.theme.accent)
+        } else {
+            ("STOPPED".into(), app.theme.subtext0)
+        });
+    }
+    let group = app.glance_group(entry)?;
+    Some((group.label().to_uppercase(), group_color(&app.theme, group)))
 }
 
 fn agent_state_color(theme: &Theme, state: AgentState) -> Color {
@@ -1254,14 +1379,15 @@ fn name_cell_width(cells: &GlanceCells) -> usize {
 }
 
 /// The name, then its tag, in `width` cells. A short cell clips the name and
-/// keeps the tag whole while the name keeps at least two cells.
+/// keeps the tag whole while the name keeps at least two cells, or all of a
+/// shorter name.
 fn name_cell(cells: &GlanceCells, width: usize, name: Style, tag: Style) -> Vec<Span<'static>> {
     let Some(tag_text) = &cells.tag else {
         return vec![Span::styled(fit_cell(&cells.name, width), name)];
     };
     let tag_width = Span::raw(tag_text).width();
     let name_room = width.saturating_sub(tag_width + 1);
-    if name_room < 2 {
+    if name_room < Span::raw(&cells.name).width().min(2) {
         return vec![Span::styled(fit_cell(&cells.name, width), name)];
     }
     let clipped = truncate_terminal(&cells.name, name_room);
@@ -1304,7 +1430,11 @@ fn draw_glance(f: &mut Frame, app: &App, area: Rect) -> (ListHits, usize) {
         Block::default().style(Style::default().bg(app.theme.chrome_background())),
         detail,
     );
-    let max_offset = draw_detail(f, app, detail);
+    let max_offset = if app.sessions_view() {
+        draw_session_detail(f, app, detail)
+    } else {
+        draw_detail(f, app, detail)
+    };
     let card = list_card(f, app, list);
     (draw_glance_list(f, app, card), max_offset)
 }
@@ -1323,14 +1453,14 @@ fn list_card(f: &mut Frame, app: &App, area: Rect) -> Rect {
 }
 
 fn draw_glance_list(f: &mut Frame, app: &App, area: Rect) -> ListHits {
-    let visible: Vec<(usize, Group, GlanceCells)> = app
+    let visible: Vec<(usize, (String, Color), GlanceCells)> = app
         .filtered
         .iter()
         .enumerate()
         .filter_map(|(position, index)| {
             let entry = &app.entries[*index];
-            let group = app.glance_group(entry)?;
-            Some((position, group, glance_cells(app, entry)))
+            let heading = row_heading(app, entry)?;
+            Some((position, heading, glance_cells(app, entry)))
         })
         .collect();
 
@@ -1363,21 +1493,21 @@ fn draw_glance_list(f: &mut Frame, app: &App, area: Rect) -> ListHits {
     let mut items = Vec::new();
     let mut hit_rows = Vec::new();
     let mut selected_item = None;
-    let mut current: Option<Group> = None;
-    for (position, group, cells) in &visible {
-        if current != Some(*group) {
+    let mut current: Option<&str> = None;
+    for (position, (heading, heading_color), cells) in &visible {
+        if current != Some(heading.as_str()) {
             if current.is_some() {
                 items.push(ListItem::new(Line::raw("")));
                 hit_rows.push(None);
             }
             items.push(ListItem::new(Line::from(Span::styled(
-                format!(" {}", group.label().to_uppercase()),
+                format!(" {heading}"),
                 Style::default()
-                    .fg(group_color(&app.theme, *group))
+                    .fg(*heading_color)
                     .add_modifier(Modifier::BOLD),
             ))));
             hit_rows.push(None);
-            current = Some(*group);
+            current = Some(heading.as_str());
         }
         if *position == app.selected {
             selected_item = Some(items.len());
@@ -1423,7 +1553,7 @@ fn draw_glance_list(f: &mut Frame, app: &App, area: Rect) -> ListHits {
             Style::default()
                 .fg(cells.name_color)
                 .add_modifier(Modifier::BOLD),
-            Style::default().fg(app.theme.mauve),
+            Style::default().fg(cells.tag_color),
         ));
         spans.extend([
             Span::raw("  "),
@@ -1688,35 +1818,10 @@ fn agent_lines(
     let mut spare = max_lines.saturating_sub(1 + panes.len());
     let mut lines = vec![Line::styled("AGENTS", dim)];
     for pane in panes {
-        let Some(agent) = pane.agent.as_ref() else {
+        let Some(line) = agent_line(app, workspace, pane, "", width) else {
             continue;
         };
-        let since = app
-            .activity
-            .pane(workspace.session.as_deref(), &pane.id)
-            .filter(|recorded| AgentState::parse(&recorded.status) == agent.state)
-            .map(|recorded| recorded.since);
-        let elapsed = since
-            .map(|since| glance::age(app.now, since))
-            .unwrap_or_default();
-        let title = match &pane.title {
-            Some(title) => format!("{} · {title}", agent.name),
-            None => agent.name.clone(),
-        };
-        let title = truncate_terminal(&title, width.saturating_sub(elapsed.len() + 4));
-        let icon = glance::status_icon(agent.state, app.config.glance.icons, app.spinner_tick);
-        lines.push(justified(
-            vec![
-                Span::styled(
-                    icon,
-                    Style::default().fg(agent_state_color(&app.theme, agent.state)),
-                ),
-                Span::raw(" "),
-                Span::styled(title, Style::default().fg(app.theme.text)),
-            ],
-            vec![Span::styled(elapsed, dim)],
-            width,
-        ));
+        lines.push(line);
         let subagents = app
             .subagents
             .get(&workspace_key(workspace.session.as_deref(), &pane.id))
@@ -1739,6 +1844,200 @@ fn agent_lines(
         }
     }
     lines
+}
+
+/// An agent's state icon, `prefix` and its name and title, and the time since
+/// its state began.
+fn agent_line(
+    app: &App,
+    workspace: &WorkspaceNode,
+    pane: &PaneNode,
+    prefix: &str,
+    width: usize,
+) -> Option<Line<'static>> {
+    let agent = pane.agent.as_ref()?;
+    let since = app
+        .activity
+        .pane(workspace.session.as_deref(), &pane.id)
+        .filter(|recorded| AgentState::parse(&recorded.status) == agent.state)
+        .map(|recorded| recorded.since);
+    let elapsed = since
+        .map(|since| glance::age(app.now, since))
+        .unwrap_or_default();
+    let title = match &pane.title {
+        Some(title) => format!("{prefix}{} · {title}", agent.name),
+        None => format!("{prefix}{}", agent.name),
+    };
+    let title = truncate_terminal(&title, width.saturating_sub(elapsed.len() + 4));
+    let icon = glance::status_icon(agent.state, app.config.glance.icons, app.spinner_tick);
+    Some(justified(
+        vec![
+            Span::styled(
+                icon,
+                Style::default().fg(agent_state_color(&app.theme, agent.state)),
+            ),
+            Span::raw(" "),
+            Span::styled(title, Style::default().fg(app.theme.text)),
+        ],
+        vec![Span::styled(
+            elapsed,
+            Style::default().fg(app.theme.subtext0),
+        )],
+        width,
+    ))
+}
+
+/// The Sessions view's detail pane: the session's name, directory and state,
+/// then its Workspaces by Warmth group, numbered for `1`–`9`, then its agents.
+/// Returns the largest useful scroll offset, which `Shift-J` and `Shift-K` move.
+fn draw_session_detail(f: &mut Frame, app: &App, area: Rect) -> usize {
+    let Some(state) = app
+        .selected_entry()
+        .and_then(|entry| app.session_state(entry))
+    else {
+        return 0;
+    };
+    let area = Rect {
+        x: area.x + 2,
+        y: area.y + 1.min(area.height),
+        width: area.width.saturating_sub(3),
+        height: area.height.saturating_sub(2),
+    };
+    let width = area.width as usize;
+    let dim = Style::default().fg(app.theme.subtext0);
+    let mut lines = vec![
+        Line::styled(
+            truncate_terminal(Session::label(state.session.name.as_deref()), width),
+            Style::default()
+                .fg(app.theme.text)
+                .add_modifier(Modifier::BOLD),
+        ),
+        Line::styled(truncate_end(&home_relative(&state.session.dir), width), dim),
+    ];
+    if state.topology.is_none() {
+        lines.push(Line::styled("stopped · enter starts it", dim));
+        f.render_widget(Paragraph::new(lines), area);
+        return 0;
+    }
+    let rows = app.session_workspaces(state);
+    let count = match rows.len() {
+        1 => "1 workspace".to_string(),
+        count => format!("{count} workspaces"),
+    };
+    let focus = if state.current {
+        Some("this session".to_string())
+    } else {
+        app.session_summary(state)
+            .last_focused
+            .map(|label| format!("last focused {label}"))
+    };
+    let status = ["running".to_string(), count]
+        .into_iter()
+        .chain(focus)
+        .collect::<Vec<_>>()
+        .join(" · ");
+    lines.push(Line::styled(truncate_end(&status, width), dim));
+
+    if !rows.is_empty() {
+        lines.push(Line::raw(""));
+        lines.push(Line::styled("WORKSPACES", dim));
+    }
+    let name_width = rows
+        .iter()
+        .map(|(row, _)| Span::raw(&row.name).width())
+        .max()
+        .unwrap_or(0)
+        .min(width / 2);
+    let branch_width = rows
+        .iter()
+        .map(|(row, _)| Span::raw(&row.branch).width())
+        .max()
+        .unwrap_or(0)
+        .min(width.saturating_sub(name_width + 18));
+    let mut group = None;
+    for (index, (row, _)) in rows.iter().enumerate() {
+        if group != Some(row.group) {
+            if group.is_some() {
+                lines.push(Line::raw(""));
+            }
+            lines.push(Line::styled(
+                row.group.label().to_uppercase(),
+                Style::default()
+                    .fg(group_color(&app.theme, row.group))
+                    .add_modifier(Modifier::BOLD),
+            ));
+            group = Some(row.group);
+        }
+        let number = if index < 9 {
+            (index + 1).to_string()
+        } else {
+            " ".into()
+        };
+        let (mark, mark_color) = match row.mark {
+            Mark::Here => ("●", app.theme.accent),
+            Mark::Last => ("◌", app.theme.subtext0),
+            Mark::None => (" ", app.theme.subtext0),
+        };
+        lines.push(justified(
+            vec![
+                Span::styled(
+                    number,
+                    Style::default()
+                        .fg(app.theme.accent)
+                        .add_modifier(Modifier::BOLD),
+                ),
+                Span::raw(" "),
+                Span::styled(mark, Style::default().fg(mark_color)),
+                Span::raw(" "),
+                Span::styled(
+                    fit_cell(
+                        glance::status_icon(row.state, app.config.glance.icons, app.spinner_tick),
+                        1,
+                    ),
+                    Style::default().fg(agent_state_color(&app.theme, row.state)),
+                ),
+                Span::raw("  "),
+                Span::styled(
+                    fit_cell(&row.name, name_width),
+                    Style::default()
+                        .fg(repository_color(&row.repository, &[], &app.theme))
+                        .add_modifier(Modifier::BOLD),
+                ),
+                Span::raw("  "),
+                Span::styled(fit_cell(&row.branch, branch_width), dim),
+            ],
+            vec![Span::styled(glance::signal_text(&row.signal, app.now), dim)],
+            width,
+        ));
+    }
+
+    let agents: Vec<Line<'static>> = rows
+        .iter()
+        .flat_map(|(_, workspace)| {
+            workspace
+                .tabs
+                .iter()
+                .flat_map(|tab| &tab.panes)
+                .filter_map(|pane| {
+                    agent_line(
+                        app,
+                        workspace,
+                        pane,
+                        &format!("{} · ", workspace.label),
+                        width,
+                    )
+                })
+        })
+        .collect();
+    if !agents.is_empty() {
+        lines.push(Line::raw(""));
+        lines.push(Line::styled("AGENTS", dim));
+        lines.extend(agents);
+    }
+    let max_offset = lines.len().saturating_sub(area.height as usize);
+    let offset = app.detail_scroll.offset.min(max_offset);
+    f.render_widget(Paragraph::new(lines).scroll((offset as u16, 0)), area);
+    max_offset
 }
 
 fn subagent_line(app: &App, subagent: &Subagent, width: usize) -> Line<'static> {
@@ -2046,7 +2345,7 @@ fn draw_list(f: &mut Frame, app: &App, area: Rect) -> ListHits {
 
 fn source_color(theme: &Theme, source: &Source) -> Color {
     match source {
-        Source::Workspace => theme.green,
+        Source::Workspace | Source::Session => theme.green,
         Source::Zoxide => theme.blue,
         Source::Root => theme.teal,
         Source::QuickAction => theme.mauve,
@@ -2063,9 +2362,10 @@ mod tests {
     use super::*;
     use crate::{
         activity::ActivityState,
-        app::{pin_key, Workspaces},
+        app::{pin_key, Workspaces, OTHER_SESSION_NOTICE},
         config::Config,
         model::EntryAction,
+        sessions::{Session, SessionState},
         theme::Theme,
         topology::{
             AgentMeta, AgentState, GitHead, GitIdentity, OpenTopology, PaneNode, TabNode,
@@ -2552,6 +2852,7 @@ mod tests {
                 previous: previous.map(str::to_string),
                 subagents: Default::default(),
                 session: None,
+                sessions: Vec::new(),
             },
             now,
         );
@@ -3732,6 +4033,7 @@ mod tests {
                 previous: None,
                 subagents: Default::default(),
                 session: None,
+                sessions: Vec::new(),
             },
             NOW,
         );
@@ -3958,6 +4260,7 @@ mod tests {
             icon_color: Color::Reset,
             name: "helm.herdr".into(),
             tag: Some("@work".into()),
+            tag_color: Color::Reset,
             name_color: Color::Reset,
             branch: String::new(),
             mark: Mark::None,
@@ -4037,5 +4340,456 @@ mod tests {
             Action::Continue
         );
         assert_eq!(selected_title(&app), "api");
+    }
+
+    fn in_session(mut workspace: WorkspaceNode, session: &str) -> WorkspaceNode {
+        workspace.session = Some(session.into());
+        workspace
+    }
+
+    fn session_state(
+        name: Option<&str>,
+        current: bool,
+        workspaces: Option<Vec<WorkspaceNode>>,
+    ) -> SessionState {
+        let root = PathBuf::from("/h/.config/herdr");
+        SessionState {
+            session: Session {
+                name: name.map(str::to_string),
+                dir: name.map_or(root.clone(), |name| root.join("sessions").join(name)),
+            },
+            current,
+            topology: workspaces.map(|workspaces| OpenTopology { workspaces }),
+        }
+    }
+
+    /// Helm runs in `work`, with `b` and `c` running and `default` stopped.
+    fn sessions_app() -> App {
+        let mut app = App::new(Config::default(), Theme::terminal());
+        app.apply_workspaces(sessions_load(NOW - 600), NOW);
+        app.set_filter(Some(Source::Session));
+        app.apply_filter();
+        app
+    }
+
+    fn sessions_load(b_focused_at: i64) -> Workspaces {
+        let mut helm = agent_workspace("w1", "helm", AgentState::Blocked);
+        helm.focused = true;
+        let local = vec![
+            in_session(helm, "work"),
+            in_session(commit_workspace("w2", "dots", NOW - 2 * 3_600), "work"),
+            in_session(commit_workspace("w3", "old", NOW - 3 * 86_400), "work"),
+        ];
+        let api = in_session(agent_workspace("w1", "api", AgentState::Done), "b");
+        let web = in_session(agent_workspace("w2", "web", AgentState::Working), "b");
+        let docs = in_session(commit_workspace("w1", "docs", NOW - 10 * 86_400), "c");
+        let mut activity = ActivityState::default();
+        activity.record_focus(Some("b"), "w1", b_focused_at);
+        activity.record_focus(Some("c"), "w1", NOW - 60);
+        let mut topology = local.clone();
+        topology.push(api.clone());
+        Workspaces {
+            topology: OpenTopology {
+                workspaces: topology,
+            },
+            activity,
+            previous: Some("w2".into()),
+            subagents: Default::default(),
+            session: Some("work".into()),
+            sessions: vec![
+                session_state(None, false, None),
+                session_state(Some("b"), false, Some(vec![api, web])),
+                session_state(Some("c"), false, Some(vec![docs])),
+                session_state(Some("work"), true, Some(Vec::new())),
+            ],
+        }
+    }
+
+    fn visible_titles(app: &App) -> Vec<String> {
+        app.filtered
+            .iter()
+            .map(|index| app.entries[*index].title.clone())
+            .collect()
+    }
+
+    #[test]
+    fn sessions_view_lists_the_current_session_then_running_by_activity_then_stopped() {
+        let app = sessions_app();
+        assert_eq!(visible_titles(&app), ["work", "c", "b", "default"]);
+        assert_eq!(app.selected, 0);
+
+        let summary = |name: &str| {
+            let state = app
+                .sessions
+                .iter()
+                .find(|state| state.session.name.as_deref() == Some(name))
+                .unwrap();
+            app.session_summary(state)
+        };
+        let b = summary("b");
+        assert_eq!(b.workspaces, 2);
+        assert_eq!(b.state, Some(AgentState::Done));
+        assert_eq!(b.needs_you, Some((AgentState::Done, 1)));
+        assert_eq!(b.last_active, Some(NOW - 600));
+        assert_eq!(b.last_focused.as_deref(), Some("api"));
+        let work = summary("work");
+        assert_eq!(work.workspaces, 3);
+        assert_eq!(work.needs_you, Some((AgentState::Blocked, 1)));
+        let c = summary("c");
+        assert_eq!((c.state, c.needs_you), (None, None));
+    }
+
+    #[test]
+    fn sessions_view_renders_groups_tags_counts_and_start_at_160_columns() {
+        let app = sessions_app();
+        let (lines, _) = render_app(&app, 160, 40);
+
+        let strip = &lines[line_index(&lines, "^S sessions")];
+        assert!(column_of(strip, "^W") < column_of(strip, "^S"));
+        assert!(column_of(strip, "^S") < column_of(strip, "^Z"));
+        assert!(line_index(&lines, "RUNNING") < line_index(&lines, "STOPPED"));
+        let work = &lines[line_index(&lines, "work 1 need you")];
+        let b = &lines[line_index(&lines, "b 1 need you")];
+        let c = &lines[line_index(&lines, " c ")];
+        let default = &lines[line_index(&lines, "default")];
+        assert!(work.contains('●') && work.contains("3 ws"));
+        assert!(b.contains("2 ws") && b.contains("10m"));
+        assert!(c.contains("1 ws") && c.contains("1m"));
+        assert!(default.contains("start") && !default.contains(" ws"));
+        assert_eq!(column_of(work, "3 ws"), column_of(b, "2 ws"));
+        assert_eq!(column_of(b, "2 ws"), column_of(default, "start"));
+
+        let footer = lines.last().unwrap();
+        for hint in [
+            "a–g row",
+            "1–9 switch to workspace",
+            "enter switch",
+            "l last",
+            "/ search",
+            "? keys",
+            "q quit",
+        ] {
+            assert!(footer.contains(hint), "{hint} missing from {footer}");
+        }
+        assert!(!footer.contains("close") && !footer.contains("group"));
+    }
+
+    #[test]
+    fn the_need_you_tag_takes_its_state_colour() {
+        let app = sessions_app();
+        let mut terminal = Terminal::new(TestBackend::new(160, 40)).unwrap();
+        terminal
+            .draw(|f| {
+                draw(f, &app);
+            })
+            .unwrap();
+        let buffer = terminal.backend().buffer();
+        let (x, y) = (0..buffer.area.height)
+            .find_map(|y| {
+                let line: String = (0..buffer.area.width)
+                    .map(|x| buffer[(x, y)].symbol().to_string())
+                    .collect();
+                line.find("1 need you")
+                    .filter(|_| line.contains(" b "))
+                    .map(|byte| (line[..byte].chars().count() as u16, y))
+            })
+            .unwrap();
+        assert_eq!(buffer[(x, y)].fg, app.theme.teal);
+    }
+
+    #[test]
+    fn session_detail_groups_and_numbers_workspaces_like_the_digit_keys() {
+        let app = sessions_app();
+        let (lines, _) = render_app(&app, 160, 40);
+        assert!(lines
+            .iter()
+            .any(|line| line.contains("/h/.config/herdr/sessions/work")));
+        assert!(lines
+            .iter()
+            .any(|line| line.contains("running · 3 workspaces · this session")));
+        let needs_you = line_index(&lines, "NEEDS YOU");
+        let warm = line_index(&lines, "WARM");
+        let cold = line_index(&lines, "COLD");
+        assert!(needs_you < warm && warm < cold);
+        let detail_column = column_of(&lines[warm], "WARM");
+        let gap: String = lines[warm - 1].chars().skip(detail_column).collect();
+        assert!(gap.trim().is_empty(), "no blank line before WARM");
+        for (number, label, mark) in [(1, "helm", '●'), (2, "dots", '◌'), (3, "old", ' ')] {
+            let line = &lines[line_index(&lines, &format!("{label}-branch"))];
+            let detail = &line[line.find(&format!("{number} {mark}")).unwrap()..];
+            assert!(detail.contains(label), "{number} {label}: {line}");
+            let Some(EntryAction::FocusWorkspace { id, .. }) = app.session_action(Some(number))
+            else {
+                panic!("no workspace for {number}");
+            };
+            assert_eq!(id, format!("w{number}"));
+        }
+        assert!(lines.iter().any(|line| line.contains("AGENTS")));
+        assert!(lines.iter().any(|line| line.contains("helm · claude")));
+    }
+
+    #[test]
+    fn detail_of_other_and_stopped_sessions() {
+        let mut app = sessions_app();
+        app.selected = 2;
+        let (lines, _) = render_app(&app, 160, 40);
+        assert!(lines
+            .iter()
+            .any(|line| line.contains("running · 2 workspaces · last focused api")));
+        let api = &lines[line_index(&lines, "api-branch")];
+        assert!(!api.contains('●'));
+        assert!(line_index(&lines, "NEEDS YOU") < line_index(&lines, "HOT"));
+
+        app.selected = 3;
+        let (lines, _) = render_app(&app, 160, 40);
+        assert!(lines
+            .iter()
+            .any(|line| line.contains("stopped · enter starts it")));
+        assert!(!lines.iter().any(|line| line.contains("WORKSPACES")));
+    }
+
+    #[test]
+    fn ctrl_s_switches_to_the_sessions_view_and_back() {
+        let mut app = sessions_app();
+        app.set_filter(None);
+        app.apply_filter();
+        let ctrl = |ch| KeyEvent::new(KeyCode::Char(ch), KeyModifiers::CONTROL);
+        handle_key(&mut app, ctrl('s'));
+        assert!(app.sessions_view());
+        assert_eq!(visible_titles(&app)[0], "work");
+        handle_key(&mut app, ctrl('w'));
+        assert!(app.glance_view() && !app.sessions_view());
+        assert!(keybindings(&app).iter().any(|binding| binding.command()
+            == Command::Filter(Source::Session)
+            && binding.key_label(&app) == "^S"
+            && binding.label == "sessions"));
+    }
+
+    #[test]
+    fn opening_another_session_keeps_helm_open_and_the_current_one_returns_to_the_glance() {
+        let mut app = sessions_app();
+        assert_eq!(handle_key(&mut app, key(KeyCode::Enter)), Action::Continue);
+        assert!(app.glance_view());
+        assert_eq!(app.notice, None);
+
+        let mut app = sessions_app();
+        handle_key(&mut app, key(KeyCode::Char('j')));
+        assert_eq!(handle_key(&mut app, key(KeyCode::Enter)), Action::Continue);
+        assert_eq!(app.notice, Some(OTHER_SESSION_NOTICE));
+        assert!(app.sessions_view());
+
+        handle_key(&mut app, key(KeyCode::Char('d')));
+        assert_eq!(visible_titles(&app)[app.selected], "b");
+        assert_eq!(
+            handle_key(&mut app, key(KeyCode::Char('d'))),
+            Action::Continue
+        );
+        assert_eq!(app.notice, Some(OTHER_SESSION_NOTICE));
+        assert_eq!(
+            handle_key(&mut app, key(KeyCode::Char('1'))),
+            Action::Continue
+        );
+        assert_eq!(app.notice, Some(OTHER_SESSION_NOTICE));
+        assert!(matches!(
+            app.session_action(Some(1)),
+            Some(EntryAction::SwitchSession { session: Some(session), workspace: Some(workspace), .. })
+                if session == "b" && workspace == "w1"
+        ));
+
+        handle_key(&mut app, key(KeyCode::Char('f')));
+        assert_eq!(handle_key(&mut app, key(KeyCode::Enter)), Action::Continue);
+        assert_eq!(app.notice, Some(OTHER_SESSION_NOTICE));
+
+        handle_key(&mut app, key(KeyCode::Char('a')));
+        assert_eq!(
+            handle_key(&mut app, key(KeyCode::Char('2'))),
+            Action::OpenTab(2)
+        );
+        assert_eq!(
+            handle_key(&mut app, key(KeyCode::Char('9'))),
+            Action::Continue
+        );
+    }
+
+    #[test]
+    fn close_cold_and_pin_leave_session_rows_alone_and_l_opens_the_previous_workspace() {
+        let mut app = sessions_app();
+        handle_key(&mut app, key(KeyCode::Char('x')));
+        assert!(!app.close_armed);
+        handle_key(&mut app, key(KeyCode::Char('c')));
+        assert!(!app.cold_armed);
+        let pinned = app.pinned_entries.clone();
+        handle_key(
+            &mut app,
+            KeyEvent::new(KeyCode::Char('b'), KeyModifiers::CONTROL),
+        );
+        assert_eq!(app.pinned_entries, pinned);
+
+        assert_eq!(handle_key(&mut app, key(KeyCode::Char('l'))), Action::Open);
+        assert!(app.glance_view());
+        assert_eq!(selected_title(&app), "dots");
+    }
+
+    #[test]
+    fn a_query_narrows_sessions_by_name() {
+        let mut app = sessions_app();
+        app.query = "b".into();
+        app.apply_filter();
+        assert_eq!(visible_titles(&app), ["b"]);
+        app.query = "def".into();
+        app.apply_filter();
+        assert_eq!(visible_titles(&app), ["default"]);
+        let (lines, _) = render_app(&app, 160, 40);
+        assert!(lines.iter().any(|line| line.contains("STOPPED")));
+        assert!(!lines.iter().any(|line| line.contains("RUNNING")));
+    }
+
+    #[test]
+    fn other_sessions_get_git_from_a_read_kept_for_its_ttl() {
+        let mut app = sessions_app();
+        assert!(app.session_git_target(NOW).is_none());
+        app.selected = 2;
+        let state = app.sessions[1].clone();
+        let branch = |app: &App, label: &str| {
+            app.session_workspaces(&state)
+                .into_iter()
+                .find(|(row, _)| row.name == label)
+                .map(|(row, _)| row.branch)
+                .unwrap()
+        };
+        assert_eq!(branch(&app, "api"), "api-branch");
+        assert_eq!(branch(&app, "web"), "");
+
+        let (label, topology) = app.session_git_target(NOW).unwrap();
+        assert_eq!(label, "b");
+        assert_eq!(topology.workspaces.len(), 2);
+        app.session_git.insert(label, (topology, NOW));
+        assert_eq!(branch(&app, "web"), "web-branch");
+        assert!(app.session_git_target(NOW + 29).is_none());
+        assert!(app.session_git_target(NOW + 30).is_some());
+    }
+
+    #[test]
+    fn session_rows_keep_their_place_while_helm_is_open() {
+        let mut app = sessions_app();
+        app.apply_workspaces(sessions_load(NOW - 5), NOW);
+        assert_eq!(visible_titles(&app), ["work", "c", "b", "default"]);
+
+        let mut fresh = App::new(Config::default(), Theme::terminal());
+        fresh.apply_workspaces(sessions_load(NOW - 5), NOW);
+        fresh.set_filter(Some(Source::Session));
+        fresh.apply_filter();
+        assert_eq!(visible_titles(&fresh), ["work", "b", "c", "default"]);
+    }
+
+    #[test]
+    fn digits_on_another_session_show_the_notice_even_without_that_workspace() {
+        let mut app = sessions_app();
+        for (row, digit) in [(2, '9'), (3, '1')] {
+            app.selected = row;
+            assert_eq!(
+                handle_key(&mut app, key(KeyCode::Char(digit))),
+                Action::Continue
+            );
+            assert_eq!(app.notice, Some(OTHER_SESSION_NOTICE), "row {row}");
+        }
+    }
+
+    #[test]
+    fn the_key_sheet_lists_the_sessions_filter_at_the_smallest_popup() {
+        let mut app = sessions_app();
+        handle_key(&mut app, key(KeyCode::Char('?')));
+        let (lines, _) = render_app(&app, 120, 32);
+        let text = lines.join("\n");
+        assert!(lines
+            .iter()
+            .any(|line| line.contains("^S") && line.contains("sessions")));
+        assert!(text.contains("switch to numbered workspace"));
+        assert!(text.contains("this sheet"));
+        assert!(!text.contains("next / previous group"));
+        assert!(!text.contains("next that needs you"));
+    }
+
+    #[test]
+    fn an_unselected_other_session_row_shows_its_need_you_tag() {
+        let local = vec![
+            in_session(commit_workspace("w1", "helm.herdr", NOW - 60), "a"),
+            in_session(commit_workspace("w2", "helm.herdr-wt", NOW - 60), "a"),
+        ];
+        let blocked = in_session(
+            agent_workspace("w1", "helm.herdr", AgentState::Blocked),
+            "b",
+        );
+        let mut topology = local;
+        topology.push(blocked.clone());
+        let mut app = App::new(Config::default(), Theme::terminal());
+        app.apply_workspaces(
+            Workspaces {
+                topology: OpenTopology {
+                    workspaces: topology,
+                },
+                activity: ActivityState::default(),
+                previous: None,
+                subagents: Default::default(),
+                session: Some("a".into()),
+                sessions: vec![
+                    session_state(None, false, None),
+                    session_state(Some("a"), true, Some(Vec::new())),
+                    session_state(Some("b"), false, Some(vec![blocked])),
+                ],
+            },
+            NOW,
+        );
+        app.set_filter(Some(Source::Session));
+        app.apply_filter();
+        assert_eq!(app.selected, 0);
+        let (lines, _) = render_app(&app, 124, 34);
+        let b = &lines[line_index(&lines, " b ")];
+        assert!(b.contains("b 1 need you"), "{b}");
+        assert!(b.contains("1 ws"), "{b}");
+    }
+
+    #[test]
+    fn shift_j_scrolls_a_long_session_detail() {
+        let workspaces: Vec<WorkspaceNode> = (1..=30)
+            .map(|n| {
+                in_session(
+                    commit_workspace(&format!("w{n}"), &format!("ws{n:02}"), NOW - n * 60),
+                    "a",
+                )
+            })
+            .collect();
+        let mut app = App::new(Config::default(), Theme::terminal());
+        app.apply_workspaces(
+            Workspaces {
+                topology: OpenTopology { workspaces },
+                activity: ActivityState::default(),
+                previous: None,
+                subagents: Default::default(),
+                session: Some("a".into()),
+                sessions: vec![session_state(Some("a"), true, Some(Vec::new()))],
+            },
+            NOW,
+        );
+        app.set_filter(Some(Source::Session));
+        app.apply_filter();
+        let mut terminal = Terminal::new(TestBackend::new(160, 32)).unwrap();
+        terminal
+            .draw(|f| app.detail_max_offset = draw(f, &app).1)
+            .unwrap();
+        assert!(app.detail_max_offset > 0);
+        assert!(!buffer_text(&terminal).contains("ws30"));
+
+        for _ in 0..app.detail_max_offset {
+            handle_key(&mut app, shift_key('J'));
+        }
+        terminal
+            .draw(|f| {
+                draw(f, &app);
+            })
+            .unwrap();
+        let text = buffer_text(&terminal);
+        assert!(text.contains("ws30"));
+        assert!(!text.contains("this session"));
     }
 }

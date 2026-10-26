@@ -49,6 +49,7 @@
 | --- | --- | --- |
 | **Herdr session** | One running Herdr server with its own socket, Workspaces and IDs: the default session or a named one. | Server, instance |
 | **Other session** | A running Herdr session other than the one Helm runs in; its Workspaces join the Glance only in Needs you. | Remote session |
+| **Sessions view** | The Picker view under the `^S` Source filter: one row per Herdr session, running ones before stopped ones, with the selected session's Workspaces in the Detail pane. | Session list, session switcher |
 | **Workspace** | A Herdr container for related Tabs and their Panes. | Project, session |
 | **Tab** | A named view within a Workspace containing one or more Panes. | Workspace tab, window |
 | **Pane** | A terminal area within a Tab. | Panel, split |
@@ -69,6 +70,7 @@
 | --- | --- | --- |
 | **Source** | A category that supplies Entries to the Result list. | Provider, collection |
 | **Workspace source** | The Source of currently open Workspaces and their Tabs. | Open source |
+| **Session source** | The Source of Herdr sessions, one Entry each, shown only in the Sessions view. | Session list |
 | **Zoxide source** | The Source of directories returned by zoxide. | Directory history |
 | **Root source** | The Source of directories discovered below configured filesystem roots. | Scan source |
 | **Quick Action source** | The Source of Herdr Plus Quick Actions. | Action menu |
@@ -91,6 +93,7 @@
 - A **Topology** contains **Workspaces**; each **Workspace** contains one or more **Tabs**, and each **Tab** contains one or more **Panes**.
 - A **Glance** lists each open **Workspace** once, in its **Warmth group**.
 - A **Herdr session** contains Workspaces; a Workspace of an **Other session** appears in the **Glance** only while it needs you.
+- The **Sessions view** lists every **Herdr session** once; its Detail pane lists that session's Workspaces by **Warmth group**.
 - A **Marked entry** of a **Workspace** sits in the **Pinned** Warmth group, ahead of every other group.
 
 ## Example dialogue

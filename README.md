@@ -29,6 +29,7 @@ When the Workspace you want is not open yet, type `/` and its name. Search also 
   - [Groups](#groups)
   - [Send a Workspace to Cold](#send-a-workspace-to-cold)
   - [Other Herdr sessions](#other-herdr-sessions)
+  - [Sessions view](#sessions-view)
   - [Detail pane](#detail-pane)
   - [Search](#search)
 - [Install](#install)
@@ -81,6 +82,14 @@ tab_bar_right = [
   { type = "command", command = "helm-herdr status", interval_seconds = 2, timeout_seconds = 2 },
 ]
 ```
+
+### Sessions view
+
+`^S` lists your Herdr sessions, one row each. Running holds the session you are in, marked `●`, then the others by their newest Workspace focus or agent change. Stopped holds the sessions that don't answer, dimmed, with `start` where the count would be. A row shows the session's most urgent agent icon, `N need you` when Workspaces wait on you, its Workspace count, and the age of its newest activity. Search narrows the rows by session name.
+
+The detail pane shows the selected session's directory and state, then its Workspaces in Needs you, Hot, Warm and Cold, numbered `1`–`9`, then its agents. A stopped session shows `stopped · enter starts it`. `J` and `K` scroll a long detail.
+
+Opening another session (`enter`, the row's letter twice, or `1`–`9` for one of its Workspaces) keeps Helm open and says in the footer how to switch sessions. On your own session, `enter` returns to the glance and `1`–`9` opens that Workspace. `l` opens the previous Workspace.
 
 ### Detail pane
 
@@ -150,6 +159,7 @@ You need Herdr 0.7.4 or newer on Linux or macOS, and `jq` for the link command. 
 | `x` `x`, `^X`       | Close the Workspace (`x` asks for a second `x`)          |
 | `J` / `K`           | Scroll the detail pane                                   |
 | `/`                 | Search                                                   |
+| `^S`                | Show your Herdr sessions; `^W` goes back                 |
 | `^Z` / `^R` / `^Q`  | Show only zoxide, roots or Quick Actions; `^W` goes back |
 | `^U`                | Clear the search and filter                              |
 | `alt-enter`         | Open a directory with the directory template             |
