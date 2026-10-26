@@ -177,7 +177,15 @@ pub(crate) fn row(
 
 /// Whether an agent waits on the User.
 pub(crate) fn needs_you(evidence: &Evidence) -> bool {
-    needs_you_signal(evidence).is_some()
+    needs_you_state(evidence).is_some()
+}
+
+/// The most urgent state that puts the Workspace in Needs you.
+pub(crate) fn needs_you_state(evidence: &Evidence) -> Option<AgentState> {
+    match needs_you_signal(evidence)? {
+        Signal::Agent { state, .. } => Some(state),
+        _ => None,
+    }
 }
 
 pub(crate) fn classify(evidence: &Evidence, now: i64, thresholds: Thresholds) -> Verdict {
@@ -240,6 +248,11 @@ pub(crate) fn classify(evidence: &Evidence, now: i64, thresholds: Thresholds) ->
             last_active,
         }
     }
+}
+
+/// The state that outranks the others.
+pub(crate) fn most_urgent(states: impl IntoIterator<Item = AgentState>) -> Option<AgentState> {
+    states.into_iter().min_by_key(|state| precedence(*state))
 }
 
 fn precedence(state: AgentState) -> u8 {
