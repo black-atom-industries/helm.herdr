@@ -74,7 +74,7 @@ A cold Workspace still moves up to Needs you when one of its agents waits on you
 
 ### Other Herdr sessions
 
-Needs you also lists the Workspaces of your other running Herdr sessions where an agent waits on you. Their other Workspaces stay out of the glance. Such a row carries an `@session` tag after its name, and the header counts it in `N need you · M elsewhere`. The detail pane works on it as on any row, and the footer reads `enter switch to <session>`. Opening such a row switches this terminal to that session, at that Workspace (and Tab, with `1`–`9`), when Herdr runs under [`helm-herdr shell`](#start-herdr-through-helm). Otherwise Helm stays open and says in the footer how to switch sessions.
+Below the Helm line, the popup names the Herdr session it runs in, such as `󰌨 black-atom`, followed by the search. Needs you also lists the Workspaces of your other running Herdr sessions where an agent waits on you. Their other Workspaces stay out of the glance. Such a row carries an `@session` tag after its name, and the header counts it in `N need you · M elsewhere`. The detail pane works on it as on any row, and the footer reads `enter switch to <session>`. Opening such a row switches this terminal to that session, at that Workspace (and Tab, with `1`–`9`), when Herdr runs under [`helm-herdr shell`](#start-herdr-through-helm). Otherwise Helm stays open and says in the footer how to switch sessions.
 
 `helm-herdr status` prints one line for Herdr's tab bar: each other session with Workspaces that need you, as `<session> <icon><count>`, with the icon of the most urgent state. It prints nothing when no session waits. With the binary linked onto your `PATH` as in [Install](#install), add it to `~/.config/herdr/config.toml`:
 

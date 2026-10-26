@@ -28,7 +28,7 @@ use crate::{
     app::{load_workspaces, App, InputMode, SelectedWorkspace, Workspaces},
     config::Config,
     detail::{self, Change, Commit, GitDetail, Subagent},
-    glance::{self, Group, Mark},
+    glance::{self, Group, IconStyle, Mark},
     keymap::{keybindings, Command},
     model::{workspace_key, Entry, EntryAction, Source},
     paths::home,
@@ -633,7 +633,7 @@ fn draw(f: &mut Frame, app: &App) -> (ListHits, usize) {
     let rows = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
-            Constraint::Length(3),
+            Constraint::Length(4),
             Constraint::Min(3),
             Constraint::Length(2),
         ])
@@ -740,8 +740,13 @@ fn draw_header(f: &mut Frame, app: &App, area: Rect) {
     };
     let lines = Layout::default()
         .direction(Direction::Vertical)
-        .constraints([Constraint::Length(1), Constraint::Length(1)])
+        .constraints([
+            Constraint::Length(1),
+            Constraint::Length(1),
+            Constraint::Length(1),
+        ])
         .split(inner);
+    f.render_widget(Paragraph::new(Line::from(session_spans(app))), lines[1]);
 
     let counts = if area.width >= HEADER_COUNTS_MIN_WIDTH {
         group_count_spans(app)
@@ -761,17 +766,22 @@ fn draw_header(f: &mut Frame, app: &App, area: Rect) {
 
     f.render_widget(
         Paragraph::new(Line::from(source_strip_spans(app))),
-        lines[1],
+        lines[2],
     );
 }
 
-fn header_spans(app: &App) -> Vec<Span<'static>> {
+fn session_spans(app: &App) -> Vec<Span<'static>> {
+    let icon = match app.config.glance.icons {
+        IconStyle::Nerd => "\u{F0328}",
+        IconStyle::Unicode => "◆",
+    };
+    let style = Style::default().fg(app.theme.accent);
     let mut spans = vec![
+        Span::styled(icon, style),
+        Span::raw(" "),
         Span::styled(
-            "Helm",
-            Style::default()
-                .fg(app.theme.accent)
-                .add_modifier(Modifier::BOLD),
+            app.session.clone().unwrap_or_else(|| "default".into()),
+            style.add_modifier(Modifier::BOLD),
         ),
         Span::raw("  "),
     ];
@@ -789,6 +799,16 @@ fn header_spans(app: &App) -> Vec<Span<'static>> {
             Style::default().fg(app.theme.subtext0),
         ));
     }
+    spans
+}
+
+fn header_spans(app: &App) -> Vec<Span<'static>> {
+    let mut spans = vec![Span::styled(
+        "Helm",
+        Style::default()
+            .fg(app.theme.accent)
+            .add_modifier(Modifier::BOLD),
+    )];
     if let Some(version) = &app.update_available {
         spans.push(Span::styled(
             format!("   ↑ v{version} available · F5 update"),
@@ -2483,7 +2503,7 @@ mod tests {
         ));
         app.update_available = Some("0.3.2".into());
 
-        let backend = TestBackend::new(70, 8);
+        let backend = TestBackend::new(70, 11);
         let mut terminal = Terminal::new(backend).unwrap();
         terminal
             .draw(|f| {
@@ -2515,7 +2535,7 @@ mod tests {
     #[test]
     fn normal_mode_hides_query_bar_until_search_starts() {
         let mut app = App::new(Config::default(), Theme::terminal());
-        let backend = TestBackend::new(60, 10);
+        let backend = TestBackend::new(60, 11);
         let mut terminal = Terminal::new(backend).unwrap();
 
         terminal
@@ -2541,7 +2561,7 @@ mod tests {
     #[test]
     fn draw_uses_the_picker_title() {
         let app = App::new(Config::default(), Theme::terminal());
-        let backend = TestBackend::new(60, 10);
+        let backend = TestBackend::new(60, 11);
         let mut terminal = Terminal::new(backend).unwrap();
         terminal
             .draw(|f| {
@@ -2569,19 +2589,19 @@ mod tests {
         for (x, y) in [(0, 0), (119, 1), (0, 29), (2, 1), (117, 28)] {
             assert_eq!(bg(x, y), theme.popup_background(), "({x}, {y})");
         }
-        assert_eq!(bg(0, 4), theme.popup_background());
-        assert_eq!(bg(1, 4), theme.popup_background());
-        assert_eq!(bg(2, 4), theme.bar_background());
-        assert_eq!(bg(3, 4), theme.bar_background());
+        assert_eq!(bg(0, 5), theme.popup_background());
+        assert_eq!(bg(1, 5), theme.popup_background());
+        assert_eq!(bg(2, 5), theme.bar_background());
+        assert_eq!(bg(3, 5), theme.bar_background());
 
         let gap = (3..119)
-            .find(|&x| bg(x, 4) != theme.bar_background())
+            .find(|&x| bg(x, 5) != theme.bar_background())
             .unwrap();
-        assert_eq!(bg(gap, 4), theme.popup_background());
-        assert_eq!(bg(gap + 1, 4), theme.popup_background());
-        assert_eq!(bg(gap + 2, 4), theme.chrome_background());
-        assert_eq!(bg(118, 4), theme.chrome_background());
-        assert_eq!(bg(119, 4), theme.popup_background());
+        assert_eq!(bg(gap, 5), theme.popup_background());
+        assert_eq!(bg(gap + 1, 5), theme.popup_background());
+        assert_eq!(bg(gap + 2, 5), theme.chrome_background());
+        assert_eq!(bg(118, 5), theme.chrome_background());
+        assert_eq!(bg(119, 5), theme.popup_background());
     }
 
     #[test]
@@ -2939,6 +2959,8 @@ mod tests {
         assert!(lines[0].trim().is_empty());
         assert!(lines[lines.len() - 1].trim().is_empty());
         assert!(lines[1].starts_with("   Helm"));
+        assert!(lines[2].starts_with("   "));
+        assert!(lines[2].contains("default"));
         assert!(lines[lines.len() - 2].starts_with("   a–g"));
         assert!(lines[lines.len() - 2].ends_with("q quit  "));
     }
@@ -2994,7 +3016,7 @@ mod tests {
             activity,
         );
 
-        let (lines, _) = render_app(&app, 100, 20);
+        let (lines, _) = render_app(&app, 100, 21);
         let labels = ["NEEDS YOU", "HOT", "WARM", "COLD"];
         let headings = labels.map(|label| line_index(&lines, label));
         assert!(headings.windows(2).all(|pair| pair[0] < pair[1]));
@@ -3718,15 +3740,15 @@ mod tests {
         );
 
         let (wide, _) = render_app(&app, 160, 40);
-        assert!(wide[0].contains("Helm"));
-        assert!(wide[0].contains("/ type to search"));
+        assert!(wide[0].trim_start().starts_with("Helm"));
         assert!(wide[0].contains("2 need you"));
         assert!(wide[0].contains("1 hot"));
         assert!(wide[0].contains("1 cold"));
         assert!(!wide[0].contains("warm"));
-        assert!(wide[1].contains("^W workspaces"));
-        assert!(wide[1].contains("^R roots"));
-        assert!(wide[1].contains("^Z zoxide"));
+        assert!(wide[1].contains("default  / type to search"));
+        assert!(wide[2].contains("^W workspaces"));
+        assert!(wide[2].contains("^R roots"));
+        assert!(wide[2].contains("^Z zoxide"));
         let footer = wide.last().unwrap();
         assert!(footer.contains("a–g row"));
         assert!(footer.contains("enter open"));
@@ -4183,8 +4205,8 @@ mod tests {
     }
 
     #[test]
-    fn detail_keeps_every_agent_and_both_sections_at_120_by_30() {
-        let (lines, _) = render_app(&crowded_detail_app(), 120, 30);
+    fn detail_keeps_every_agent_and_both_sections_at_120_by_31() {
+        let (lines, _) = render_app(&crowded_detail_app(), 120, 31);
         let second = line_index(&lines, "codex · Second agent");
         assert!(line_index(&lines, "Subagent step 1") < second);
         assert!(second < line_index(&lines, "CHANGES · 3 files"));
