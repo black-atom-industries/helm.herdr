@@ -68,7 +68,7 @@ The first five rows get a letter (`a` `s` `d` `f` `g`). Press it once to select 
 
 ### Send a Workspace to Cold
 
-`c` `c` sends the selected Workspace to Cold and keeps it there, however busy it gets. The first `c` asks, the second confirms, any other key cancels. A single `c` on a cold Workspace lets it warm up again. Use it for a Workspace you are done with for today that would otherwise take a top row.
+`c` `c` sends the selected Workspace to Cold, and it stays there until something happens in it: you focus it, someone commits, or one of its agents changes state. From then on it sorts by its activity again. The first `c` asks, the second confirms, any other key cancels. A single `c` on a cold Workspace lets it warm up by hand. Use it for a Workspace you are done with for today that would otherwise take a top row.
 
 A cold Workspace still moves up to Needs you when one of its agents waits on you. Pinning a cold Workspace takes it out of Cold.
 

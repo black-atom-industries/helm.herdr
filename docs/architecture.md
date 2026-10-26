@@ -37,7 +37,7 @@ Helm keeps its state in the plugin config directory (`HERDR_PLUGIN_CONFIG_DIR`).
 | `focused-workspace`, `jump-back-workspace` | `track-focus` | The last focused Workspace and the Previous workspace |
 | `activity.json` | `track-focus`, `track-agent`, Picker | When each Workspace was last focused and when each Pane's agent status last changed, per Herdr session |
 | `pinned-entries.json` | Picker (`^B`) | Marked Entries, which sit in the Pinned group |
-| `cold-entries.json` | Picker (`c`) | Workspaces sent to the Cold group; pinning one takes it out |
+| `cold-entries.json` | Picker (`c`) | Workspaces sent to the Cold group, as a map from Entry key to the Unix seconds when it was sent; pinning one takes it out. A plain array of keys reads as sent at 0 |
 | `launchers/<session>.json` | `shell` | The Launcher attached to that session: `launcher_pid`, `client_pid`, `session` |
 | `launchers/switch-<launcher_pid>.json` | Picker | A switch request for that Launcher: `session`, optional `workspace_id` and `tab_id` |
 | `launchers/last-session` | `shell` | The session the last Launcher ran a client of until it ended cleanly or switched |
@@ -132,7 +132,7 @@ The glance has one row per open Workspace, in five Warmth groups:
 - **Needs you**: an agent that is waiting, blocked or done.
 - **Hot**: a working agent, or activity within `hot_minutes`.
 - **Warm**: activity within `warm_hours`.
-- **Cold**: everything else, and Workspaces sent there with `c`. A cold Workspace still rises to Needs you when an agent waits on you.
+- **Cold**: everything else, and Workspaces sent there with `c` whose newest activity is not newer than the moment they were sent. Activity after that moment classifies the Workspace by its age again; its entry stays in `cold-entries.json` without effect until `c` `c` sends it to Cold again or pinning removes it. A cold Workspace still rises to Needs you when an agent waits on you.
 
 Activity is the newest of the Workspace's focus time, its last commit, and the newest agent status change whose status still matches the live state. Opening the Picker lists each group's rows by newest activity first. The Signal column shows only the age of that activity, such as `4m` or `9d`, left-aligned like the other columns. The detail pane names the sources, such as `last commit 6m · focused 38m`. While the Picker stays open, a refresh keeps every row and its label in place: a row moves only when it changes group, new rows join the end of their group, and closed Workspaces drop out.
 

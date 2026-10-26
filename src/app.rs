@@ -1,6 +1,6 @@
 use std::{
     cmp::Reverse,
-    collections::{HashMap, HashSet},
+    collections::{BTreeMap, HashMap, HashSet},
     env, fs,
     path::{Path, PathBuf},
 };
@@ -54,7 +54,7 @@ pub(crate) struct App {
     pub(crate) previous_workspace_id: Option<String>,
     pub(crate) pinned_entries: HashSet<String>,
     /// Workspaces the User sent to Cold, by pin key.
-    pub(crate) cold_entries: HashSet<String>,
+    pub(crate) cold_entries: HashMap<String, i64>,
     pub(crate) recent_state: RecentState,
     pub(crate) spinner_tick: u32,
     pub(crate) update_available: Option<String>,
@@ -122,7 +122,7 @@ impl App {
             path_to_workspaces: HashMap::new(),
             previous_workspace_id: None,
             pinned_entries: HashSet::new(),
-            cold_entries: HashSet::new(),
+            cold_entries: HashMap::new(),
             recent_state: RecentState::default(),
             spinner_tick: 0,
             update_available: None,
@@ -186,8 +186,8 @@ impl App {
         self.entries = entries;
         self.pinned_entries = read_entry_keys(&plugin_config_dir().join(PINNED_ENTRIES_STATE_FILE))
             .unwrap_or_default();
-        self.cold_entries =
-            read_entry_keys(&plugin_config_dir().join(COLD_ENTRIES_STATE_FILE)).unwrap_or_default();
+        self.cold_entries = read_cold_entries(&plugin_config_dir().join(COLD_ENTRIES_STATE_FILE))
+            .unwrap_or_default();
         self.session_ranks.clear();
         self.set_workspace_state(workspaces, now_unix_secs());
         self.row_ranks.clear();
@@ -263,8 +263,9 @@ impl App {
                     })
                     .filter(|_| !elsewhere);
                 let pinned = entry.is_some_and(|entry| self.is_pinned(entry));
-                let cold = entry.is_some_and(|entry| self.is_cold(entry));
-                let evidence = glance::evidence(workspace, &self.activity, pinned, cold);
+                let sent_cold_at =
+                    entry.and_then(|entry| self.cold_entries.get(&pin_key(entry)).copied());
+                let evidence = glance::evidence(workspace, &self.activity, pinned, sent_cold_at);
                 let previous = !elsewhere
                     && self.previous_workspace_id.as_deref() == Some(workspace.id.as_str());
                 let mut row = glance::row(workspace, &evidence, previous, self.now, thresholds);
@@ -444,12 +445,15 @@ impl App {
         let mut rows: Vec<(GlanceRow, WorkspaceNode)> = workspaces
             .into_iter()
             .map(|workspace| {
-                let cold = state.current
-                    && self.cold_entries.contains(&topology_workspace_pin_key(
+                let sent_cold_at = self
+                    .cold_entries
+                    .get(&topology_workspace_pin_key(
                         workspace.session.as_deref(),
                         &workspace.id,
-                    ));
-                let evidence = glance::evidence(&workspace, &self.activity, false, cold);
+                    ))
+                    .copied()
+                    .filter(|_| state.current);
+                let evidence = glance::evidence(&workspace, &self.activity, false, sent_cold_at);
                 let previous = state.current
                     && self.previous_workspace_id.as_deref() == Some(workspace.id.as_str());
                 let mut row = glance::row(&workspace, &evidence, previous, self.now, thresholds);
@@ -1082,7 +1086,7 @@ impl App {
             &plugin_config_dir().join(PINNED_ENTRIES_STATE_FILE),
             &pinned,
         )?;
-        save_entry_keys(&plugin_config_dir().join(COLD_ENTRIES_STATE_FILE), &cold)?;
+        save_cold_entries(&plugin_config_dir().join(COLD_ENTRIES_STATE_FILE), &cold)?;
         self.pinned_entries = pinned;
         self.cold_entries = cold;
         self.rebuild_glance();
@@ -1097,7 +1101,7 @@ impl App {
     }
 
     pub(crate) fn is_cold(&self, entry: &Entry) -> bool {
-        self.cold_entries.contains(&pin_key(entry))
+        self.glance_row(entry).is_some_and(|row| row.cold)
     }
 
     /// Sends the selected Workspace to Cold, or lets it warm up again.
@@ -1111,14 +1115,16 @@ impl App {
         let legacy_key = legacy_current_workspace_pin_key(entry);
         let mut cold = self.cold_entries.clone();
         let mut pinned = self.pinned_entries.clone();
-        if !cold.remove(&key) {
+        if self.is_cold(entry) {
+            cold.remove(&key);
+        } else {
             pinned.remove(&key);
             if let Some(legacy) = &legacy_key {
                 pinned.remove(legacy);
             }
-            cold.insert(key);
+            cold.insert(key, now_unix_secs());
         }
-        save_entry_keys(&plugin_config_dir().join(COLD_ENTRIES_STATE_FILE), &cold)?;
+        save_cold_entries(&plugin_config_dir().join(COLD_ENTRIES_STATE_FILE), &cold)?;
         save_entry_keys(
             &plugin_config_dir().join(PINNED_ENTRIES_STATE_FILE),
             &pinned,
@@ -1778,7 +1784,7 @@ fn join_needs_you(topology: &mut OpenTopology, others: OpenTopology, activity: &
     topology
         .workspaces
         .extend(others.workspaces.into_iter().filter(|workspace| {
-            glance::needs_you(&glance::evidence(workspace, activity, false, false))
+            glance::needs_you(&glance::evidence(workspace, activity, false, None))
         }));
 }
 
@@ -1942,6 +1948,26 @@ fn save_entry_keys(path: &Path, entries: &HashSet<String>) -> Result<(), String>
     let value = serde_json::to_string_pretty(&entries)
         .map_err(|e| format!("failed to encode {}: {e}", path.display()))?;
     fs::write(path, value).map_err(|e| format!("failed to save {}: {e}", path.display()))
+}
+
+/// Reads a plain JSON array of keys as entries sent at 0.
+fn read_cold_entries(path: &Path) -> Result<HashMap<String, i64>, String> {
+    let value =
+        fs::read_to_string(path).map_err(|e| format!("failed to read {}: {e}", path.display()))?;
+    serde_json::from_str::<HashMap<String, i64>>(&value)
+        .or_else(|_| {
+            serde_json::from_str::<Vec<String>>(&value)
+                .map(|keys| keys.into_iter().map(|key| (key, 0)).collect())
+        })
+        .map_err(|e| format!("failed to parse {}: {e}", path.display()))
+}
+
+fn save_cold_entries(path: &Path, entries: &HashMap<String, i64>) -> Result<(), String> {
+    let entries = entries.iter().collect::<BTreeMap<_, _>>();
+    let value = serde_json::to_vec_pretty(&entries)
+        .map_err(|e| format!("failed to encode {}: {e}", path.display()))?;
+    sessions::write_atomic(path, &value)
+        .map_err(|e| format!("failed to save {}: {e}", path.display()))
 }
 
 fn launch_workspace_id() -> Option<String> {
@@ -2673,13 +2699,68 @@ exit 0
         assert_eq!(app.glance_group(&helm), Some(Group::Cold));
         assert!(!app.is_pinned(&helm));
         assert_eq!(
-            read_entry_keys(&dir.join(COLD_ENTRIES_STATE_FILE)).unwrap(),
+            read_cold_entries(&dir.join(COLD_ENTRIES_STATE_FILE)).unwrap(),
             app.cold_entries
         );
+        assert!(app.cold_entries[&pin_key(&helm)] >= now_unix_secs() - 5);
 
         app.selected = 1;
         app.toggle_selected_cold().unwrap();
         assert_eq!(app.glance_group(&helm), Some(Group::Hot));
+
+        let _ = fs::remove_dir_all(&dir);
+        match previous {
+            Some(value) => env::set_var("HERDR_PLUGIN_CONFIG_DIR", value),
+            None => env::remove_var("HERDR_PLUGIN_CONFIG_DIR"),
+        }
+    }
+
+    #[test]
+    fn cold_entries_read_the_array_format_as_sent_at_zero_and_warm_with_newer_activity() {
+        let dir = env::temp_dir().join(format!("helm-cold-format-test-{}", std::process::id()));
+        let _lock = crate::herdr::test_env_lock();
+        let previous = env::var_os("HERDR_PLUGIN_CONFIG_DIR");
+        env::set_var("HERDR_PLUGIN_CONFIG_DIR", &dir);
+        let path = dir.join(COLD_ENTRIES_STATE_FILE);
+        fs::create_dir_all(&dir).unwrap();
+        let helm_key = topology_workspace_pin_key(None, "w1");
+        let dots_key = topology_workspace_pin_key(None, "w2");
+        fs::write(&path, serde_json::to_string(&[&helm_key]).unwrap()).unwrap();
+
+        let entries = read_cold_entries(&path).unwrap();
+        assert_eq!(entries, HashMap::from([(helm_key.clone(), 0)]));
+
+        let mut app = App::new(Config::default(), Theme::terminal());
+        app.apply_workspaces(
+            Workspaces {
+                topology: OpenTopology {
+                    workspaces: vec![
+                        bare_workspace("w1", "helm", true, Some(NOW - 60)),
+                        bare_workspace("w2", "dots", false, Some(NOW - 120)),
+                    ],
+                },
+                activity: ActivityState::default(),
+                previous: None,
+                subagents: HashMap::new(),
+                session: None,
+                sessions: Vec::new(),
+            },
+            NOW,
+        );
+        app.cold_entries = HashMap::from([(helm_key.clone(), 0), (dots_key.clone(), NOW - 120)]);
+        app.rebuild_glance();
+        let helm = app.entries[app.filtered[0]].clone();
+        let dots = app.entries[app.filtered[1]].clone();
+        assert_eq!(helm.title, "helm");
+        assert_eq!(app.glance_group(&helm), Some(Group::Hot));
+        assert!(!app.is_cold(&helm));
+        assert_eq!(app.glance_group(&dots), Some(Group::Cold));
+        assert!(app.is_cold(&dots));
+
+        save_cold_entries(&path, &app.cold_entries).unwrap();
+        let written: HashMap<String, i64> =
+            serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
+        assert_eq!(written, app.cold_entries);
 
         let _ = fs::remove_dir_all(&dir);
         match previous {

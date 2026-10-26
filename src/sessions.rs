@@ -224,7 +224,7 @@ pub(crate) fn waiting(states: &[SessionState]) -> Vec<Waiting> {
                 .workspaces
                 .iter()
                 .filter_map(|workspace| {
-                    glance::needs_you_state(&glance::evidence(workspace, &activity, false, false))
+                    glance::needs_you_state(&glance::evidence(workspace, &activity, false, None))
                 })
                 .collect();
             let urgent = glance::most_urgent(states.iter().copied())?;
