@@ -25,6 +25,7 @@ Popup dimensions belong to the user's Herdr `type = "popup"` keybinding. The Sid
 | `helm-herdr` | Run the interactive Picker; `helm-herdr ui` remains an explicit equivalent |
 | `helm-herdr list` | Print collected Entries without opening the Picker |
 | `helm-herdr status` | Print one line for Herdr's tab bar: other running sessions with Workspaces in Needs you |
+| `helm-herdr shell [session]` | Launcher: run `herdr session attach` in the terminal and attach another session when Helm requests a switch |
 
 ## State files and events
 
@@ -37,6 +38,9 @@ Helm keeps its state in the plugin config directory (`HERDR_PLUGIN_CONFIG_DIR`).
 | `activity.json` | `track-focus`, `track-agent`, Picker | When each Workspace was last focused and when each Pane's agent status last changed, per Herdr session |
 | `pinned-entries.json` | Picker (`^B`) | Marked Entries, which sit in the Pinned group |
 | `cold-entries.json` | Picker (`c`) | Workspaces sent to the Cold group; pinning one takes it out |
+| `launchers/<session>.json` | `shell` | The Launcher attached to that session: `launcher_pid`, `client_pid`, `session` |
+| `launchers/switch-<launcher_pid>.json` | Picker | A switch request for that Launcher: `session`, optional `workspace_id` and `tab_id` |
+| `launcher/last-session` | `shell` | The session the last Launcher ran a client of until it ended cleanly or switched |
 
 `activity.json` has this shape:
 
@@ -73,6 +77,16 @@ Opening another session's row, with `enter`, its label twice or `1`–`9` for on
 
 `helm-herdr status` reads the same snapshots without activity, git or transcript reads, counts each session's Workspaces in Needs you with the glance's classification, and prints `<session> <icon><count>` per session in discovery order, joined by two spaces. The icon is that of the most urgent state (blocked before done) in the configured icon style. The output is plain text without a trailing newline, empty when nothing waits, and the exit code is always 0.
 
+### Launcher
+
+`helm-herdr shell [session]` attaches the argument, else the session in `launcher/last-session`, else `default`, with `herdr session attach <session>`, which starts a stopped session. A name that is empty, contains `/` or `..`, or starts with `switch-` is refused with exit code 2. The launcher runs the client as a child with the terminal inherited, writes `launchers/<session>.json` and waits. It ignores SIGINT while it waits: the client reads Ctrl-C as a key in raw mode, and a stray SIGINT must not end the launcher before its client.
+
+When the client exits, the launcher removes its record, unless another launcher has written that session's record since, and takes `launchers/switch-<launcher_pid>.json` if present. It writes the session to `launcher/last-session` when the client exited with status 0, was ended by a signal, or a switch request follows, so a session that failed to attach is not remembered. It runs `stty sane`, shows the cursor and turns off mouse tracking, bracketed paste, focus reports and the kitty keyboard mode. It leaves the alternate screen only when a request follows or a signal ended the client, because leaving it also restores the cursor over a client's parting message.
+
+A request names the next session. The launcher attaches it and, when the request names a Workspace, focuses it (and its Tab) through that session's socket from a background thread, retrying for up to 5 seconds while a started session comes up. Without a request the launcher exits with the client's status. At start it drops a request left under its own pid.
+
+A record is live while its launcher pid runs and its client pid is a running process named `herdr` (`ps -o ppid=,comm=`) whose parent is that launcher; anything else is stale. Switching therefore needs the Herdr binary to be named `herdr`. A switch writes the request first, re-checks that the client is still the launcher's live `herdr` child, then sends the client SIGTERM. Herdr has no client-detach API, and the session server keeps running after its client exits. One record per session, last writer wins.
+
 ## Code layout
 
 ```text
@@ -88,7 +102,8 @@ src/glance.rs    glance grouping, row signals, ages and status icons
 src/detail.rs    detail pane git reads and Claude subagent transcripts
 src/topology.rs  live Workspace/Tab/Pane model and Git identity
 src/herdr.rs     Herdr CLI and socket calls
-src/sessions.rs  Herdr session discovery and other sessions' snapshots
+src/sessions.rs  Herdr session discovery, other sessions' snapshots, Launcher records and switch requests
+src/launcher.rs  `helm-herdr shell`: attach loop, terminal restore and focus after a switch
 src/recent.rs   recent Workspace order and the Previous workspace per Herdr session
 src/paths.rs     Herdr root, plugin config and state file paths
 src/matcher.rs   Query matching engines

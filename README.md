@@ -38,6 +38,7 @@ When the Workspace you want is not open yet, type `/` and its name. Search also 
   - [Configuration](#configuration)
   - [Jump back](#jump-back)
   - [Side pane](#side-pane)
+  - [Start Herdr through Helm](#start-herdr-through-helm)
   - [Directory template](#directory-template)
   - [Your own source](#your-own-source)
   - [Subagent progress](#subagent-progress)
@@ -216,6 +217,16 @@ key = "prefix+shift+t"
 type = "plugin_action"
 command = "helm-herdr.open-side"
 description = "helm side pane"
+```
+
+### Start Herdr through Helm
+
+`helm-herdr shell [session]` runs Herdr in the terminal tab and stays there. It attaches the named session, else the session it attached last, else `default`, and starts a stopped one. When Helm asks it to switch, it ends the Herdr client, restores the terminal and attaches the other session in the same tab, focused on the chosen Workspace. When Herdr exits on its own, so does `helm-herdr shell`, with Herdr's exit status. While Herdr runs, Ctrl-C reaches Herdr and leaves `helm-herdr shell` running. Switching needs the Herdr binary to be named `herdr`, because Helm checks the client by process name before it ends it.
+
+Start it instead of `herdr`, for example as Ghostty's command in `~/.config/ghostty/config`. Ghostty may not see your shell's `PATH`, so give the full path of the link from [Install](#install):
+
+```text
+command = /Users/you/.local/bin/helm-herdr shell
 ```
 
 ### Directory template

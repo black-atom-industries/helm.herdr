@@ -50,6 +50,7 @@
 | **Herdr session** | One running Herdr server with its own socket, Workspaces and IDs: the default session or a named one. | Server, instance |
 | **Other session** | A running Herdr session other than the one Helm runs in; its Workspaces join the Glance only in Needs you. | Remote session |
 | **Sessions view** | The Picker view under the `^S` Source filter: one row per Herdr session, running ones before stopped ones, with the selected session's Workspaces in the Detail pane. | Session list, session switcher |
+| **Launcher** | `helm-herdr shell`: the process in a terminal tab that runs a Herdr client and, when Helm requests a switch, ends it and attaches another Herdr session in the same tab. | Wrapper, shell session |
 | **Workspace** | A Herdr container for related Tabs and their Panes. | Project, session |
 | **Tab** | A named view within a Workspace containing one or more Panes. | Workspace tab, window |
 | **Pane** | A terminal area within a Tab. | Panel, split |
@@ -94,6 +95,7 @@
 - A **Glance** lists each open **Workspace** once, in its **Warmth group**.
 - A **Herdr session** contains Workspaces; a Workspace of an **Other session** appears in the **Glance** only while it needs you.
 - The **Sessions view** lists every **Herdr session** once; its Detail pane lists that session's Workspaces by **Warmth group**.
+- A **Launcher** runs one client of one **Herdr session** at a time; each **Herdr session** has at most one recorded Launcher.
 - A **Marked entry** of a **Workspace** sits in the **Pinned** Warmth group, ahead of every other group.
 
 ## Example dialogue
