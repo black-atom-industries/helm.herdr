@@ -32,7 +32,7 @@ use crate::{
     keymap::{keybindings, Command},
     model::{workspace_key, Entry, EntryAction, Source},
     paths::home,
-    sessions::{Session, SessionState},
+    sessions::{Session, SessionState, SwitchError},
     sources::status_icon_at,
     theme::Theme,
     topology::{self, repository_color, AgentState, OpenTopology, PaneNode, WorkspaceNode},
@@ -304,6 +304,7 @@ struct ListHits {
 }
 
 fn handle_mouse(app: &mut App, mouse: MouseEvent, hits: &ListHits) -> Action {
+    app.notice = None;
     if app.input_mode == InputMode::Help || !hits.area.contains((mouse.column, mouse.row).into()) {
         return Action::Continue;
     }
@@ -382,7 +383,7 @@ fn switch(
     workspace: Option<String>,
     tab: Option<String>,
 ) -> Action {
-    if app.switch_session(session, workspace, tab) {
+    if app.switch_or_notice(session, workspace, tab) {
         Action::Switched
     } else {
         Action::Continue
@@ -506,10 +507,12 @@ fn execute_command(app: &mut App, command: Command, key: KeyEvent) -> Action {
             _ => Action::Continue,
         },
         Command::OpenPrevious => {
-            if let Some((session, workspace)) =
-                app.launcher().and_then(|_| app.previous_elsewhere())
-            {
-                return switch(app, session.as_deref(), Some(workspace), None);
+            if let Some((session, workspace)) = app.previous_elsewhere() {
+                match app.switch_session(session.as_deref(), Some(workspace), None) {
+                    Ok(()) => return Action::Switched,
+                    Err(SwitchError::Failed(_)) => return Action::Continue,
+                    Err(SwitchError::NoLauncher) => {}
+                }
             }
             if app.sessions_view() && app.previous_workspace_id.is_some() {
                 app.set_filter(None);
@@ -929,7 +932,7 @@ fn draw_key_hints(f: &mut Frame, app: &App, area: Rect) {
     } else {
         None
     };
-    if let Some(notice) = app.notice.filter(|_| armed.is_none()) {
+    if let Some(notice) = app.notice.clone().filter(|_| armed.is_none()) {
         f.render_widget(
             Paragraph::new(Span::styled(notice, Style::default().fg(app.theme.peach)))
                 .style(Style::default().bg(app.theme.popup_background())),
@@ -4310,7 +4313,7 @@ mod tests {
             .unwrap();
 
         assert_eq!(handle_key(&mut app, key(KeyCode::Enter)), Action::Continue);
-        assert_eq!(app.notice, Some(OTHER_SESSION_NOTICE));
+        assert_eq!(app.notice.as_deref(), Some(OTHER_SESSION_NOTICE));
         let (lines, _) = render_app(&app, 160, 40);
         assert!(lines
             .last()
@@ -4321,7 +4324,7 @@ mod tests {
             handle_key(&mut app, key(KeyCode::Char('j'))),
             Action::Continue
         );
-        assert_eq!(app.notice, None);
+        assert_eq!(app.notice.as_deref(), None);
         app.selected = app.labelled_positions()[app
             .config
             .glance
@@ -4335,13 +4338,13 @@ mod tests {
             handle_key(&mut app, key(KeyCode::Char(label))),
             Action::Continue
         );
-        assert_eq!(app.notice, Some(OTHER_SESSION_NOTICE));
+        assert_eq!(app.notice.as_deref(), Some(OTHER_SESSION_NOTICE));
 
         assert_eq!(
             handle_key(&mut app, key(KeyCode::Char('1'))),
             Action::Continue
         );
-        assert_eq!(app.notice, Some(OTHER_SESSION_NOTICE));
+        assert_eq!(app.notice.as_deref(), Some(OTHER_SESSION_NOTICE));
     }
 
     #[test]
@@ -4592,12 +4595,12 @@ mod tests {
         let mut app = sessions_app();
         assert_eq!(handle_key(&mut app, key(KeyCode::Enter)), Action::Continue);
         assert!(app.glance_view());
-        assert_eq!(app.notice, None);
+        assert_eq!(app.notice.as_deref(), None);
 
         let mut app = sessions_app();
         handle_key(&mut app, key(KeyCode::Char('j')));
         assert_eq!(handle_key(&mut app, key(KeyCode::Enter)), Action::Continue);
-        assert_eq!(app.notice, Some(OTHER_SESSION_NOTICE));
+        assert_eq!(app.notice.as_deref(), Some(OTHER_SESSION_NOTICE));
         assert!(app.sessions_view());
 
         handle_key(&mut app, key(KeyCode::Char('d')));
@@ -4606,12 +4609,12 @@ mod tests {
             handle_key(&mut app, key(KeyCode::Char('d'))),
             Action::Continue
         );
-        assert_eq!(app.notice, Some(OTHER_SESSION_NOTICE));
+        assert_eq!(app.notice.as_deref(), Some(OTHER_SESSION_NOTICE));
         assert_eq!(
             handle_key(&mut app, key(KeyCode::Char('1'))),
             Action::Continue
         );
-        assert_eq!(app.notice, Some(OTHER_SESSION_NOTICE));
+        assert_eq!(app.notice.as_deref(), Some(OTHER_SESSION_NOTICE));
         assert!(matches!(
             app.session_action(Some(1)),
             Some(EntryAction::SwitchSession { session: Some(session), workspace: Some(workspace), .. })
@@ -4620,7 +4623,7 @@ mod tests {
 
         handle_key(&mut app, key(KeyCode::Char('f')));
         assert_eq!(handle_key(&mut app, key(KeyCode::Enter)), Action::Continue);
-        assert_eq!(app.notice, Some(OTHER_SESSION_NOTICE));
+        assert_eq!(app.notice.as_deref(), Some(OTHER_SESSION_NOTICE));
 
         handle_key(&mut app, key(KeyCode::Char('a')));
         assert_eq!(
@@ -4713,7 +4716,7 @@ mod tests {
                 handle_key(&mut app, key(KeyCode::Char(digit))),
                 Action::Continue
             );
-            assert_eq!(app.notice, None, "row {row}");
+            assert_eq!(app.notice.as_deref(), None, "row {row}");
         }
     }
 
@@ -4832,7 +4835,7 @@ mod tests {
             },
         )
         .unwrap();
-        app.launchers_dir = dir.clone();
+        app.launchers_dir = Some(dir.clone());
         (dir, client)
     }
 
@@ -4850,7 +4853,7 @@ mod tests {
         let mut app = other_session_app();
         let (dir, mut client) = live_launcher(&mut app, "glance");
         assert_eq!(handle_key(&mut app, key(KeyCode::Enter)), Action::Switched);
-        assert_eq!(app.notice, None);
+        assert_eq!(app.notice.as_deref(), None);
         assert_eq!(client.wait().unwrap().signal(), Some(15));
         assert_eq!(
             switch_request(&dir),
@@ -5013,5 +5016,34 @@ mod tests {
             serde_json::json!({"session": "b", "workspace_id": "w1"})
         );
         let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_launcher_that_cannot_take_the_request_gets_its_own_notice() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let mut app = other_session_app();
+        let (dir, mut client) = live_launcher(&mut app, "failed");
+        std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o555)).unwrap();
+        assert_eq!(handle_key(&mut app, key(KeyCode::Enter)), Action::Continue);
+        std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o755)).unwrap();
+        assert_eq!(app.notice.as_deref(), Some("Switching to work failed"));
+        assert!(client.try_wait().unwrap().is_none());
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn a_mouse_click_clears_the_notice() {
+        let mut app = other_session_app();
+        app.notice = Some(OTHER_SESSION_NOTICE.into());
+        let click = MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Left),
+            column: 0,
+            row: 0,
+            modifiers: KeyModifiers::NONE,
+        };
+        handle_mouse(&mut app, click, &ListHits::default());
+        assert_eq!(app.notice, None);
     }
 }

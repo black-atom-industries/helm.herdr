@@ -18,7 +18,7 @@ use crate::{
     model::{workspace_key, Entry, EntryAction, Source, WorkspaceKind, WorkspaceRef},
     paths::{self, canonical_str, herdr_plus_quick_actions_dir, plugin_config_dir},
     recent::RecentState,
-    sessions::{self, Session, SessionState, SwitchRequest},
+    sessions::{self, Session, SessionState, SwitchError, SwitchRequest},
     sources::{collect_open_topology, collect_roots, collect_zoxide},
     theme::Theme,
     topology::{self, AgentState, OpenTopology, WorkspaceNode},
@@ -63,8 +63,9 @@ pub(crate) struct App {
     pub(crate) session: Option<String>,
     /// Every discovered Herdr session, the current one first.
     pub(crate) sessions: Vec<SessionState>,
-    /// Where `helm-herdr shell` launchers keep their records and switch requests.
-    pub(crate) launchers_dir: PathBuf,
+    /// Where `helm-herdr shell` launchers keep their records and switch
+    /// requests. `None` until the caller sets it, which disables switching.
+    pub(crate) launchers_dir: Option<PathBuf>,
     /// The Sessions view order as group and session name. A refresh keeps it,
     /// so rows and their labels stay put while the Picker is open.
     session_ranks: Vec<(usize, Option<String>)>,
@@ -83,7 +84,7 @@ pub(crate) struct App {
     pub(crate) close_armed: bool,
     pub(crate) cold_armed: bool,
     /// A footer message that the next key clears.
-    pub(crate) notice: Option<&'static str>,
+    pub(crate) notice: Option<String>,
     /// Largest useful detail offset, set by the last render.
     pub(crate) detail_max_offset: usize,
     /// Running Claude subagents, keyed by pane id.
@@ -128,11 +129,7 @@ impl App {
             topology: OpenTopology::default(),
             session: None,
             sessions: Vec::new(),
-            #[cfg(not(test))]
-            launchers_dir: sessions::launchers_dir(),
-            // Never the real directory: a live record there names a real Herdr client.
-            #[cfg(test)]
-            launchers_dir: PathBuf::from("/nonexistent/helm-herdr-test-launchers"),
+            launchers_dir: None,
             session_ranks: Vec::new(),
             session_git: HashMap::new(),
             topology_entries: Vec::new(),
@@ -209,10 +206,7 @@ impl App {
     pub(crate) fn apply_workspaces(&mut self, workspaces: Workspaces, now: i64) {
         // A failed Herdr read comes back empty. Keep the last good list instead.
         let has_local = |topology: &OpenTopology, session: &Option<String>| {
-            topology
-                .workspaces
-                .iter()
-                .any(|workspace| &workspace.session == session)
+            local_workspaces(topology, session).next().is_some()
         };
         if !has_local(&workspaces.topology, &workspaces.session)
             && has_local(&self.topology, &self.session)
@@ -431,12 +425,7 @@ impl App {
             warm_secs: self.config.glance.warm_hours * 3_600,
         };
         let workspaces: Vec<WorkspaceNode> = if state.current {
-            self.topology
-                .workspaces
-                .iter()
-                .filter(|workspace| workspace.session == self.session)
-                .cloned()
-                .collect()
+            self.local_workspaces().cloned().collect()
         } else {
             let read = self
                 .session_git
@@ -533,10 +522,8 @@ impl App {
     /// Workspace never counts.
     pub(crate) fn previous_elsewhere(&self) -> Option<(Option<String>, String)> {
         let local = self.last_focused(
-            self.topology
-                .workspaces
-                .iter()
-                .filter(|workspace| workspace.session == self.session && !workspace.focused),
+            self.local_workspaces()
+                .filter(|workspace| !workspace.focused),
         );
         let (at, workspace, session) = self
             .sessions
@@ -586,31 +573,52 @@ impl App {
 
     /// Switches to `session` (`None` is the default session), at `workspace`
     /// and `tab` when given, through the launcher that runs this session's
-    /// client. Without a live launcher the Picker stays open with a footer
-    /// notice. Returns whether the switch went out.
+    /// client. A launcher that fails to switch leaves a footer notice.
     pub(crate) fn switch_session(
         &mut self,
         session: Option<&str>,
         workspace: Option<String>,
         tab: Option<String>,
-    ) -> bool {
+    ) -> Result<(), SwitchError> {
+        let label = Session::label(session).to_string();
         let request = SwitchRequest {
-            session: Session::label(session).to_string(),
+            session: label.clone(),
             workspace_id: workspace,
             tab_id: tab,
         };
-        let switched = self.launcher().is_some_and(|record| {
-            sessions::request_switch_at(&self.launchers_dir, &record, &request).is_ok()
-        });
-        if !switched {
-            self.notice = Some(OTHER_SESSION_NOTICE);
+        let dir = self
+            .launchers_dir
+            .as_deref()
+            .ok_or(SwitchError::NoLauncher)?;
+        let result =
+            sessions::request_switch_at(dir, Session::label(self.session.as_deref()), &request);
+        if let Err(SwitchError::Failed(_)) = result {
+            self.notice = Some(format!("Switching to {label} failed"));
         }
-        switched
+        result
     }
 
-    /// The live launcher of the session Helm runs in.
-    pub(crate) fn launcher(&self) -> Option<sessions::LauncherRecord> {
-        sessions::launcher_at(&self.launchers_dir, Session::label(self.session.as_deref()))
+    /// [`App::switch_session`], with the start-the-launcher notice when no
+    /// launcher runs. Returns whether the switch went out.
+    pub(crate) fn switch_or_notice(
+        &mut self,
+        session: Option<&str>,
+        workspace: Option<String>,
+        tab: Option<String>,
+    ) -> bool {
+        match self.switch_session(session, workspace, tab) {
+            Ok(()) => true,
+            Err(SwitchError::NoLauncher) => {
+                self.notice = Some(OTHER_SESSION_NOTICE.to_string());
+                false
+            }
+            Err(SwitchError::Failed(_)) => false,
+        }
+    }
+
+    /// This session's own Workspaces in the live Topology.
+    pub(crate) fn local_workspaces(&self) -> impl Iterator<Item = &WorkspaceNode> {
+        local_workspaces(&self.topology, &self.session)
     }
 
     /// The session tag of a glance row from another Herdr session.
@@ -1190,7 +1198,7 @@ impl App {
                 workspace,
                 tab,
             } => {
-                let _ = self.switch_session(session.as_deref(), workspace.clone(), tab.clone());
+                let _ = self.switch_or_notice(session.as_deref(), workspace.clone(), tab.clone());
                 (Ok(()), false, false)
             }
             EntryAction::InvokePluginAction { action } => (
@@ -1270,7 +1278,8 @@ impl App {
         };
         run_herdr(["workspace", "close", &id])?;
         if let Some(destination) = destination {
-            self.record_recent_workspace(sessions::current().as_deref(), &destination);
+            let session = self.session.clone();
+            self.record_recent_workspace(session.as_deref(), &destination);
         }
         notify_done(&format!("Closed {title}"), &self.config.notifications);
         self.refresh();
@@ -1696,15 +1705,23 @@ pub(crate) struct Workspaces {
 impl Workspaces {
     fn local_topology(&self) -> OpenTopology {
         OpenTopology {
-            workspaces: self
-                .topology
-                .workspaces
-                .iter()
-                .filter(|workspace| workspace.session == self.session)
+            workspaces: local_workspaces(&self.topology, &self.session)
                 .cloned()
                 .collect(),
         }
     }
+}
+
+/// The Workspaces of `topology` that belong to `session`; other sessions'
+/// Workspaces join a Topology only where they need you.
+fn local_workspaces<'a>(
+    topology: &'a OpenTopology,
+    session: &'a Option<String>,
+) -> impl Iterator<Item = &'a WorkspaceNode> {
+    topology
+        .workspaces
+        .iter()
+        .filter(move |workspace| &workspace.session == session)
 }
 
 /// Reads the Herdr snapshot and activity. A `snapshot` already read from Herdr
@@ -2405,6 +2422,7 @@ exit 0
             command_test_config(),
             open_workspace("work", "w1", "Workspace", false),
         );
+        app.session = Some("work".into());
 
         app.close_selected_workspace().unwrap();
 

@@ -138,19 +138,6 @@ pub(crate) fn running(sessions: Vec<Session>) -> Vec<(Session, Value)> {
     found.into_iter().map(|(_, read)| read).collect()
 }
 
-/// Every running session other than the current one, with its snapshot.
-fn other_running(
-    root: &Path,
-    current: Option<&str>,
-    current_socket: Option<&Path>,
-) -> Vec<(Session, Value)> {
-    let others = discover(root)
-        .into_iter()
-        .filter(|session| !is_current(session, current, current_socket))
-        .collect();
-    running(others)
-}
-
 /// A discovered session and, while it runs, its Workspaces.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct SessionState {
@@ -225,26 +212,25 @@ pub(crate) struct Waiting {
 }
 
 /// The other running sessions that have Workspaces in Needs you, in discovery order.
-pub(crate) fn waiting(
-    root: &Path,
-    current: Option<&str>,
-    current_socket: Option<&Path>,
-) -> Vec<Waiting> {
+pub(crate) fn waiting(states: &[SessionState]) -> Vec<Waiting> {
     let activity = ActivityState::default();
-    other_running(root, current, current_socket)
-        .into_iter()
-        .filter_map(|(session, snapshot)| {
-            let states: Vec<AgentState> = topology::parse_snapshot(&snapshot, session.name.clone())
+    states
+        .iter()
+        .filter(|state| !state.current)
+        .filter_map(|state| {
+            let states: Vec<AgentState> = state
+                .topology
+                .as_ref()?
                 .workspaces
                 .iter()
                 .filter_map(|workspace| {
                     glance::needs_you_state(&glance::evidence(workspace, &activity, false, false))
                 })
                 .collect();
-            let state = glance::most_urgent(states.iter().copied())?;
+            let urgent = glance::most_urgent(states.iter().copied())?;
             Some(Waiting {
-                session: Session::label(session.name.as_deref()).to_string(),
-                state,
+                session: Session::label(state.session.name.as_deref()).to_string(),
+                state: urgent,
                 count: states.len(),
             })
         })
@@ -269,8 +255,7 @@ pub(crate) fn status_line(waiting: &[Waiting], icons: IconStyle) -> String {
 
 /// [`waiting`] for this process's Herdr root and session.
 pub(crate) fn read_waiting() -> Vec<Waiting> {
-    let socket = env::var_os("HERDR_SOCKET_PATH").map(PathBuf::from);
-    waiting(&herdr_root(), current().as_deref(), socket.as_deref())
+    waiting(&read_states())
 }
 
 /// [`states`] for this process's Herdr root and session.
@@ -372,32 +357,35 @@ pub(crate) fn clear_switch_request(dir: &Path, launcher_pid: u32) {
     let _ = fs::remove_file(switch_path(dir, launcher_pid));
 }
 
-/// The record for `session` in `dir`, unless its launcher is gone or its
-/// client is no longer the launcher's `herdr` child.
-pub(crate) fn launcher_at(dir: &Path, session: &str) -> Option<LauncherRecord> {
-    let record: LauncherRecord = read_json(&record_path(dir, session))?;
-    (process_alive(record.launcher_pid) && is_client_of(record.client_pid, record.launcher_pid))
-        .then_some(record)
+/// Why a switch request did not go out.
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) enum SwitchError {
+    /// No record, or its client is no longer the launcher's live `herdr` child.
+    NoLauncher,
+    Failed(String),
 }
 
-/// Asks the launcher behind `record` to attach `target`: writes the request,
-/// then ends the launcher's client with SIGTERM.
+/// Asks the launcher recorded for `session` in `dir` to attach `target`:
+/// writes the request, re-checks that the client is the launcher's live
+/// `herdr` child, then ends that client with SIGTERM.
 pub(crate) fn request_switch_at(
     dir: &Path,
-    record: &LauncherRecord,
+    session: &str,
     target: &SwitchRequest,
-) -> Result<(), String> {
-    check_session_name(&target.session)?;
+) -> Result<(), SwitchError> {
+    check_session_name(&target.session).map_err(SwitchError::Failed)?;
+    let record: LauncherRecord =
+        read_json(&record_path(dir, session)).ok_or(SwitchError::NoLauncher)?;
     let path = switch_path(dir, record.launcher_pid);
     write_json(&path, target)
-        .map_err(|error| format!("failed to write switch request: {error}"))?;
+        .map_err(|error| SwitchError::Failed(format!("failed to write switch request: {error}")))?;
     if !is_client_of(record.client_pid, record.launcher_pid) {
         let _ = fs::remove_file(path);
-        return Err("the launcher's Herdr client is gone".into());
+        return Err(SwitchError::NoLauncher);
     }
     terminate(record.client_pid).map_err(|error| {
         let _ = fs::remove_file(&path);
-        format!("failed to end the Herdr client: {error}")
+        SwitchError::Failed(format!("failed to end the Herdr client: {error}"))
     })
 }
 
@@ -427,7 +415,6 @@ mod signals {
     const SIGTERM: i32 = 15;
     const SIG_DFL: usize = 0;
     const SIG_IGN: usize = 1;
-    const EPERM: i32 = 1;
 
     extern "C" {
         fn kill(pid: i32, signal: i32) -> i32;
@@ -437,15 +424,6 @@ mod signals {
     /// A pid that names one process; 0 and negative values address groups.
     fn single(pid: u32) -> Option<i32> {
         i32::try_from(pid).ok().filter(|pid| *pid > 0)
-    }
-
-    pub(crate) fn process_alive(pid: u32) -> bool {
-        let Some(pid) = single(pid) else {
-            return false;
-        };
-        // SAFETY: signal 0 only checks that the process exists.
-        let found = unsafe { kill(pid, 0) } == 0;
-        found || io::Error::last_os_error().raw_os_error() == Some(EPERM)
     }
 
     pub(crate) fn terminate(pid: u32) -> io::Result<()> {
@@ -469,10 +447,6 @@ mod signals {
 
 #[cfg(not(unix))]
 mod signals {
-    pub(crate) fn process_alive(_pid: u32) -> bool {
-        false
-    }
-
     pub(crate) fn terminate(_pid: u32) -> std::io::Result<()> {
         Err(std::io::ErrorKind::Unsupported.into())
     }
@@ -481,7 +455,7 @@ mod signals {
 }
 
 pub(crate) use signals::ignore_interrupt;
-use signals::{process_alive, terminate};
+use signals::terminate;
 
 /// Child processes for tests that need a live launcher or Herdr client.
 #[cfg(all(test, unix))]
@@ -736,7 +710,7 @@ mod tests {
             servers.push(serve(&dir, snapshot_result("api", status)));
         }
 
-        let waiting = waiting(&root, Some("a"), None);
+        let waiting = waiting(&states(&root, Some("a"), None));
         assert_eq!(
             waiting,
             vec![Waiting {
@@ -778,7 +752,7 @@ mod tests {
         let _server = serve(&dir, snapshot);
 
         assert_eq!(
-            waiting(&root, Some("a"), None),
+            waiting(&states(&root, Some("a"), None)),
             vec![Waiting {
                 session: "b".into(),
                 state: AgentState::Blocked,
@@ -819,8 +793,6 @@ mod tests {
         let mine = record("work", &client);
         write_record(&dir, &mine).unwrap();
 
-        assert_eq!(launcher_at(&dir, "work"), Some(mine.clone()));
-        assert_eq!(launcher_at(&dir, "other"), None);
         let stored: Value = read_json(&dir.join("work.json")).unwrap();
         assert_eq!(
             stored,
@@ -846,10 +818,15 @@ mod tests {
     }
 
     #[test]
-    fn a_record_is_stale_when_its_launcher_died_or_its_client_is_not_herdr() {
+    fn a_record_is_stale_when_its_launcher_died_or_its_client_is_not_its_herdr_child() {
         let _lock = crate::herdr::test_env_lock();
         let dir = temp_root("x");
-        let client = fake_client(&dir);
+        let mut client = fake_client(&dir);
+        let target = SwitchRequest {
+            session: "b".into(),
+            workspace_id: None,
+            tab_id: None,
+        };
 
         let mut gone = sleeper();
         let gone_pid = gone.id();
@@ -863,12 +840,8 @@ mod tests {
             },
         )
         .unwrap();
-        assert_eq!(launcher_at(&dir, "dead"), None);
-
-        let plain = sleeper();
+        let mut plain = sleeper();
         write_record(&dir, &record("plain", &plain)).unwrap();
-        assert_eq!(launcher_at(&dir, "plain"), None);
-
         let stranger = sleeper();
         write_record(
             &dir,
@@ -878,16 +851,25 @@ mod tests {
             },
         )
         .unwrap();
-        assert_eq!(
-            launcher_at(&dir, "adopted"),
-            None,
-            "client is not the launcher's child"
-        );
-
         fs::write(dir.join("broken.json"), "{").unwrap();
-        assert_eq!(launcher_at(&dir, "broken"), None);
-        assert_eq!(launcher_at(&dir, "missing"), None);
-        assert!(!process_alive(0));
+
+        for session in ["dead", "plain", "adopted", "broken", "missing"] {
+            assert_eq!(
+                request_switch_at(&dir, session, &target),
+                Err(SwitchError::NoLauncher),
+                "{session}"
+            );
+        }
+        assert!(
+            client.try_wait().unwrap().is_none(),
+            "the herdr client keeps running"
+        );
+        assert!(
+            plain.try_wait().unwrap().is_none(),
+            "a process that is not herdr keeps running"
+        );
+        assert!(!switch_path(&dir, std::process::id()).exists());
+        assert!(!switch_path(&dir, stranger.id()).exists());
 
         drop((client, plain, stranger));
         let _ = fs::remove_dir_all(&dir);
@@ -907,7 +889,8 @@ mod tests {
             tab_id: None,
         };
 
-        request_switch_at(&dir, &mine, &target).unwrap();
+        write_record(&dir, &mine).unwrap();
+        request_switch_at(&dir, "a", &target).unwrap();
         assert_eq!(client.wait().unwrap().signal(), Some(15));
         let stored: Value = read_json(&switch_path(&dir, mine.launcher_pid)).unwrap();
         assert_eq!(
@@ -920,20 +903,18 @@ mod tests {
         );
         assert_eq!(take_switch_request(&dir, mine.launcher_pid), None);
 
-        let plain = sleeper();
-        assert!(request_switch_at(&dir, &record("a", &plain), &target).is_err());
-        assert!(
-            process_alive(plain.id()),
-            "a process that is not herdr keeps running"
-        );
-        assert!(!switch_path(&dir, mine.launcher_pid).exists());
+        let mut plain = sleeper();
+        write_record(&dir, &record("a", &plain)).unwrap();
 
         for session in ["../x", "a/b", "switch-1", ""] {
             let bad = SwitchRequest {
                 session: session.into(),
                 ..target.clone()
             };
-            assert!(request_switch_at(&dir, &record("a", &plain), &bad).is_err());
+            assert!(matches!(
+                request_switch_at(&dir, "a", &bad),
+                Err(SwitchError::Failed(_))
+            ));
         }
         write_json(
             &switch_path(&dir, mine.launcher_pid),
@@ -941,7 +922,7 @@ mod tests {
         )
         .unwrap();
         assert_eq!(take_switch_request(&dir, mine.launcher_pid), None);
-        assert!(process_alive(plain.id()));
+        assert!(plain.try_wait().unwrap().is_none());
 
         drop(plain);
         let _ = fs::remove_dir_all(&dir);

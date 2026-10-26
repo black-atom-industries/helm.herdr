@@ -40,7 +40,7 @@ Helm keeps its state in the plugin config directory (`HERDR_PLUGIN_CONFIG_DIR`).
 | `cold-entries.json` | Picker (`c`) | Workspaces sent to the Cold group; pinning one takes it out |
 | `launchers/<session>.json` | `shell` | The Launcher attached to that session: `launcher_pid`, `client_pid`, `session` |
 | `launchers/switch-<launcher_pid>.json` | Picker | A switch request for that Launcher: `session`, optional `workspace_id` and `tab_id` |
-| `launcher/last-session` | `shell` | The session the last Launcher ran a client of until it ended cleanly or switched |
+| `launchers/last-session` | `shell` | The session the last Launcher ran a client of until it ended cleanly or switched |
 
 `activity.json` has this shape:
 
@@ -79,13 +79,13 @@ Opening another session's row switches the same way: `enter` or its label twice 
 
 ### Launcher
 
-`helm-herdr shell [session]` attaches the argument, else the session in `launcher/last-session`, else `default`, with `herdr session attach <session>`, which starts a stopped session. A name that is empty, contains `/` or `..`, or starts with `switch-` is refused with exit code 2. The launcher runs the client as a child with the terminal inherited, writes `launchers/<session>.json` and waits. It ignores SIGINT while it waits: the client reads Ctrl-C as a key in raw mode, and a stray SIGINT must not end the launcher before its client.
+`helm-herdr shell [session]` attaches the argument, else the session in `launchers/last-session`, else `default`, with `herdr session attach <session>` (`herdr` from `PATH`, or `HERDR_BIN_PATH`), which starts a stopped session. A name that is empty, contains `/` or `..`, or starts with `switch-` is refused with exit code 2. The launcher runs the client as a child with the terminal inherited, writes `launchers/<session>.json` and waits. It ignores SIGINT while it waits: the client reads Ctrl-C as a key in raw mode, and a stray SIGINT must not end the launcher before its client.
 
-When the client exits, the launcher removes its record, unless another launcher has written that session's record since, and takes `launchers/switch-<launcher_pid>.json` if present. It writes the session to `launcher/last-session` when the client exited with status 0, was ended by a signal, or a switch request follows, so a session that failed to attach is not remembered. It runs `stty sane`, shows the cursor and turns off mouse tracking, bracketed paste, focus reports and the kitty keyboard mode. It leaves the alternate screen only when a request follows or a signal ended the client, because leaving it also restores the cursor over a client's parting message.
+When the client exits, the launcher removes its record, unless another launcher has written that session's record since, and takes `launchers/switch-<launcher_pid>.json` if present. It writes the session to `launchers/last-session` when the client exited with status 0, was ended by a signal, or a switch request follows, so a session that failed to attach is not remembered. It runs `stty sane`, shows the cursor and turns off mouse tracking, bracketed paste, focus reports and the kitty keyboard mode. It leaves the alternate screen only when a request follows or a signal ended the client, because leaving it also restores the cursor over a client's parting message.
 
 A request names the next session. The launcher attaches it and, when the request names a Workspace, focuses it (and its Tab) through that session's socket from a background thread, retrying for up to 5 seconds while a started session comes up. Without a request the launcher exits with the client's status. At start it drops a request left under its own pid.
 
-A record is live while its launcher pid runs and its client pid is a running process named `herdr` (`ps -o ppid=,comm=`) whose parent is that launcher; anything else is stale. Switching therefore needs the Herdr binary to be named `herdr`. A switch writes the request first, re-checks that the client is still the launcher's live `herdr` child, then sends the client SIGTERM. Herdr has no client-detach API, and the session server keeps running after its client exits. One record per session, last writer wins.
+A record is live while its client pid is a running process named `herdr` (`ps -o ppid=,comm=`) whose parent is the recorded launcher; a client whose launcher died has another parent, so it counts as stale too. Switching therefore needs the Herdr binary to be named `herdr`. A switch writes the request first, then checks that the client is the launcher's live `herdr` child, and only then sends the client SIGTERM; a stale record withdraws the request. A request that cannot be written or a client that cannot be signalled shows `Switching to <session> failed` in the footer. Herdr has no client-detach API, and the session server keeps running after its client exits. One record per session, last writer wins.
 
 ## Code layout
 
