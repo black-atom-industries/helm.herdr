@@ -234,6 +234,7 @@ fn run_ui(persist: bool) -> ! {
     let check_updates = config.picker.check_updates;
     let theme = Theme::load(config.theme.inherit_herdr);
     let mut app = App::new(config, theme);
+    app.launchers_dir = Some(sessions::launchers_dir());
     app.refresh();
     let update_check = check_updates.then(update::check_in_background);
 

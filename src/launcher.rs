@@ -9,7 +9,7 @@ use std::{
 
 use crate::{
     herdr::{herdr_bin, socket_request_at},
-    paths::{herdr_root, plugin_config_dir},
+    paths::herdr_root,
     sessions::{self, LauncherRecord, SwitchRequest},
 };
 
@@ -28,7 +28,7 @@ const TERMINAL_RESET: &str =
 const LEAVE_ALTERNATE_SCREEN: &str = "\x1b[?1049l";
 
 fn last_session_path() -> PathBuf {
-    plugin_config_dir().join("launcher/last-session")
+    sessions::launchers_dir().join("last-session")
 }
 
 /// The session to attach: the argument, else the one attached last, else `default`.

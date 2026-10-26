@@ -225,10 +225,10 @@ description = "helm side pane"
 
 `helm-herdr shell [session]` runs Herdr in the terminal tab and stays there. It attaches the named session, else the session it attached last, else `default`, and starts a stopped one. When Helm asks it to switch, it ends the Herdr client, restores the terminal and attaches the other session in the same tab, focused on the chosen Workspace. When Herdr exits on its own, so does `helm-herdr shell`, with Herdr's exit status. While Herdr runs, Ctrl-C reaches Herdr and leaves `helm-herdr shell` running. Switching needs the Herdr binary to be named `herdr`, because Helm checks the client by process name before it ends it.
 
-Start it instead of `herdr`, for example as Ghostty's command in `~/.config/ghostty/config`. Ghostty may not see your shell's `PATH`, so give the full path of the link from [Install](#install):
+Start it instead of `herdr`, for example as Ghostty's command in `~/.config/ghostty/config`. It runs `herdr` from the `PATH` the terminal gives its command, or the binary in `HERDR_BIN_PATH` when that is set. Ghostty may not see your shell's `PATH`, so give full paths:
 
 ```text
-command = /Users/you/.local/bin/helm-herdr shell
+command = /usr/bin/env HERDR_BIN_PATH=/Users/you/.local/bin/herdr /Users/you/.local/bin/helm-herdr shell
 ```
 
 ### Directory template
