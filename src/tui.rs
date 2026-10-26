@@ -114,6 +114,11 @@ pub(crate) fn tui_loop(
         match action {
             Action::Continue => {}
             Action::Quit => break Ok(()),
+            Action::Switched => {
+                if !persist {
+                    break Ok(());
+                }
+            }
             action @ (Action::Open | Action::OpenTemplate | Action::OpenTab(_)) => {
                 // leave the TUI while the action runs: herdr CLI output goes to
                 // the normal screen instead of corrupting the alternate screen
@@ -283,6 +288,8 @@ fn wait_for_key() {
 enum Action {
     Continue,
     Quit,
+    /// A launcher is switching this terminal to another Herdr session.
+    Switched,
     Open,
     OpenTemplate,
     OpenTab(usize),
@@ -328,10 +335,10 @@ fn handle_key(app: &mut App, key: KeyEvent) -> Action {
     stay_for_other_session(app, action)
 }
 
-/// Helm cannot focus a Workspace of another Herdr session, so opening one
-/// keeps the Picker open with a notice instead. In the Sessions view, opening
-/// the current session's row returns to the glance, and its numbered
-/// Workspaces open here.
+/// Opening a Workspace of another Herdr session switches sessions through the
+/// launcher, or keeps the Picker open with a notice when none runs. In the
+/// Sessions view, opening the current session's row returns to the glance,
+/// and its numbered Workspaces open here.
 fn stay_for_other_session(app: &mut App, action: Action) -> Action {
     let number = match action {
         Action::Open | Action::OpenTemplate => None,
@@ -340,11 +347,12 @@ fn stay_for_other_session(app: &mut App, action: Action) -> Action {
     };
     if app.sessions_view() {
         return match app.session_action(number) {
-            Some(EntryAction::FocusWorkspace { .. }) => action,
-            Some(target) => {
-                app.switch_session(target);
-                Action::Continue
-            }
+            Some(EntryAction::SwitchSession {
+                session,
+                workspace,
+                tab,
+            }) => switch(app, session.as_deref(), workspace, tab),
+            Some(_) => action,
             None if number.is_none() => {
                 app.set_filter(None);
                 app.apply_filter();
@@ -364,12 +372,21 @@ fn stay_for_other_session(app: &mut App, action: Action) -> Action {
         Some(EntryAction::FocusTab { id, .. }) => Some(id),
         _ => None,
     };
-    app.switch_session(EntryAction::SwitchSession {
-        session,
-        workspace: Some(id),
-        tab,
-    });
-    Action::Continue
+    switch(app, session.as_deref(), Some(id), tab)
+}
+
+/// Every successful switch closes the popup: its terminal now shows another session.
+fn switch(
+    app: &mut App,
+    session: Option<&str>,
+    workspace: Option<String>,
+    tab: Option<String>,
+) -> Action {
+    if app.switch_session(session, workspace, tab) {
+        Action::Switched
+    } else {
+        Action::Continue
+    }
 }
 
 fn key_action(app: &mut App, key: KeyEvent) -> Action {
@@ -489,6 +506,11 @@ fn execute_command(app: &mut App, command: Command, key: KeyEvent) -> Action {
             _ => Action::Continue,
         },
         Command::OpenPrevious => {
+            if let Some((session, workspace)) =
+                app.launcher().and_then(|_| app.previous_elsewhere())
+            {
+                return switch(app, session.as_deref(), Some(workspace), None);
+            }
             if app.sessions_view() && app.previous_workspace_id.is_some() {
                 app.set_filter(None);
                 app.apply_filter();
@@ -864,15 +886,15 @@ fn source_strip_spans(app: &App) -> Vec<Span<'static>> {
 
 const HINT_GAP: &str = "   ";
 
-fn hint_width(hints: &[(String, &'static str)]) -> usize {
+fn hint_width(hints: &[(String, String)]) -> usize {
     hints
         .iter()
-        .map(|(key, label)| Span::raw(key.as_str()).width() + 1 + Span::raw(*label).width())
+        .map(|(key, label)| Span::raw(key.as_str()).width() + 1 + Span::raw(label.as_str()).width())
         .sum::<usize>()
         + HINT_GAP.len() * hints.len().saturating_sub(1)
 }
 
-fn hint_line(app: &App, hints: &[(String, &'static str)]) -> Line<'static> {
+fn hint_line(app: &App, hints: &[(String, String)]) -> Line<'static> {
     let mut spans = Vec::new();
     for (index, (key, label)) in hints.iter().enumerate() {
         if index > 0 {
@@ -4683,7 +4705,7 @@ mod tests {
     }
 
     #[test]
-    fn digits_on_another_session_show_the_notice_even_without_that_workspace() {
+    fn digits_past_another_sessions_workspaces_do_nothing() {
         let mut app = sessions_app();
         for (row, digit) in [(2, '9'), (3, '1')] {
             app.selected = row;
@@ -4691,7 +4713,7 @@ mod tests {
                 handle_key(&mut app, key(KeyCode::Char(digit))),
                 Action::Continue
             );
-            assert_eq!(app.notice, Some(OTHER_SESSION_NOTICE), "row {row}");
+            assert_eq!(app.notice, None, "row {row}");
         }
     }
 
@@ -4791,5 +4813,205 @@ mod tests {
         let text = buffer_text(&terminal);
         assert!(text.contains("ws30"));
         assert!(!text.contains("this session"));
+    }
+
+    /// A launcher record for `session` naming this test process and a fake
+    /// Herdr client, in a fresh launchers directory.
+    #[cfg(unix)]
+    fn live_launcher(app: &mut App, tag: &str) -> (PathBuf, crate::sessions::test_processes::Kid) {
+        let dir = std::env::temp_dir().join(format!("helm-launcher-{tag}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let client = crate::sessions::test_processes::fake_client(&dir);
+        crate::sessions::write_record(
+            &dir,
+            &crate::sessions::LauncherRecord {
+                launcher_pid: std::process::id(),
+                client_pid: client.id(),
+                session: Session::label(app.session.as_deref()).to_string(),
+            },
+        )
+        .unwrap();
+        app.launchers_dir = dir.clone();
+        (dir, client)
+    }
+
+    #[cfg(unix)]
+    fn switch_request(dir: &std::path::Path) -> serde_json::Value {
+        let path = dir.join(format!("switch-{}.json", std::process::id()));
+        serde_json::from_slice(&std::fs::read(path).unwrap()).unwrap()
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn opening_an_other_session_row_switches_through_the_launcher() {
+        use std::os::unix::process::ExitStatusExt;
+
+        let mut app = other_session_app();
+        let (dir, mut client) = live_launcher(&mut app, "glance");
+        assert_eq!(handle_key(&mut app, key(KeyCode::Enter)), Action::Switched);
+        assert_eq!(app.notice, None);
+        assert_eq!(client.wait().unwrap().signal(), Some(15));
+        assert_eq!(
+            switch_request(&dir),
+            serde_json::json!({"session": "work", "workspace_id": "w1"})
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+
+        let (dir, _client) = live_launcher(&mut app, "tab");
+        assert_eq!(
+            handle_key(&mut app, key(KeyCode::Char('1'))),
+            Action::Switched
+        );
+        assert_eq!(
+            switch_request(&dir),
+            serde_json::json!({"session": "work", "workspace_id": "w1", "tab_id": "w1:t1"})
+        );
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn sessions_view_switches_to_the_last_focused_or_numbered_workspace() {
+        let mut app = sessions_app();
+        let b = visible_titles(&app).iter().position(|t| t == "b").unwrap();
+        let stopped = visible_titles(&app)
+            .iter()
+            .position(|t| t == "default")
+            .unwrap();
+
+        let (dir, _client) = live_launcher(&mut app, "enter");
+        app.selected = b;
+        assert_eq!(handle_key(&mut app, key(KeyCode::Enter)), Action::Switched);
+        assert_eq!(
+            switch_request(&dir),
+            serde_json::json!({"session": "b", "workspace_id": "w1"})
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+
+        let (dir, _client) = live_launcher(&mut app, "digit");
+        app.selected = b;
+        assert_eq!(
+            handle_key(&mut app, key(KeyCode::Char('2'))),
+            Action::Switched
+        );
+        let numbered = app.session_workspaces(
+            app.sessions
+                .iter()
+                .find(|state| state.session.name.as_deref() == Some("b"))
+                .unwrap(),
+        )[1]
+        .1
+        .id
+        .clone();
+        assert_eq!(switch_request(&dir)["workspace_id"], numbered.as_str());
+        let _ = std::fs::remove_dir_all(&dir);
+
+        let (dir, _client) = live_launcher(&mut app, "stopped");
+        app.selected = stopped;
+        assert_eq!(handle_key(&mut app, key(KeyCode::Enter)), Action::Switched);
+        assert_eq!(
+            switch_request(&dir),
+            serde_json::json!({"session": "default"})
+        );
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn l_targets_the_newest_focus_across_sessions_but_never_the_current_workspace() {
+        let mut app = sessions_app();
+        let elsewhere = |session: &str, id: &str| Some((Some(session.to_string()), id.to_string()));
+        let target = |app: &App| app.previous_elsewhere();
+        assert_eq!(target(&app), elsewhere("c", "w1"));
+
+        app.activity.record_focus(Some("work"), "w1", NOW);
+        assert_eq!(target(&app), elsewhere("c", "w1"));
+
+        app.activity.record_focus(Some("work"), "w2", NOW - 30);
+        assert_eq!(target(&app), None);
+
+        app.activity.record_focus(Some("b"), "w2", NOW - 10);
+        assert_eq!(target(&app), elsewhere("b", "w2"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn l_switches_sessions_only_with_a_live_launcher() {
+        let mut app = sessions_app();
+        app.set_filter(None);
+        app.apply_filter();
+        assert_eq!(handle_key(&mut app, key(KeyCode::Char('l'))), Action::Open);
+
+        let (dir, _client) = live_launcher(&mut app, "last");
+        assert_eq!(
+            handle_key(&mut app, key(KeyCode::Char('l'))),
+            Action::Switched
+        );
+        assert_eq!(
+            switch_request(&dir),
+            serde_json::json!({"session": "c", "workspace_id": "w1"})
+        );
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn the_footer_names_the_session_enter_switches_to() {
+        let mut app = other_session_app();
+        let (lines, _) = render_app(&app, 160, 40);
+        assert!(lines.last().unwrap().contains("enter switch to work"));
+
+        app.selected = app
+            .filtered
+            .iter()
+            .position(|index| app.entries[*index].title == "skills")
+            .unwrap();
+        let (lines, _) = render_app(&app, 160, 40);
+        let footer = lines.last().unwrap();
+        assert!(footer.contains("enter open") && !footer.contains("switch to"));
+    }
+
+    /// The label letter of the selected row.
+    fn selected_label(app: &App) -> char {
+        app.labelled_positions()
+            .iter()
+            .position(|&position| position == app.selected)
+            .map(|slot| app.config.glance.labels()[slot])
+            .unwrap()
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_row_label_twice_switches_and_closes_the_popup_in_the_glance_and_sessions_view() {
+        let mut app = other_session_app();
+        let (dir, _client) = live_launcher(&mut app, "label");
+        let label = selected_label(&app);
+        assert_eq!(
+            handle_key(&mut app, key(KeyCode::Char(label))),
+            Action::Continue
+        );
+        assert_eq!(
+            handle_key(&mut app, key(KeyCode::Char(label))),
+            Action::Switched
+        );
+        assert_eq!(
+            switch_request(&dir),
+            serde_json::json!({"session": "work", "workspace_id": "w1"})
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+
+        let mut app = sessions_app();
+        app.selected = visible_titles(&app).iter().position(|t| t == "b").unwrap();
+        let (dir, _client) = live_launcher(&mut app, "sessions-label");
+        let label = selected_label(&app);
+        handle_key(&mut app, key(KeyCode::Char(label)));
+        assert_eq!(
+            handle_key(&mut app, key(KeyCode::Char(label))),
+            Action::Switched
+        );
+        assert_eq!(
+            switch_request(&dir),
+            serde_json::json!({"session": "b", "workspace_id": "w1"})
+        );
+        let _ = std::fs::remove_dir_all(dir);
     }
 }

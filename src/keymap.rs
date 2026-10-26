@@ -52,7 +52,7 @@ struct KeySpec {
 pub(crate) struct Keybind {
     pub(crate) label: String,
     pub(crate) group: &'static str,
-    compact_label: Option<&'static str>,
+    compact_label: Option<String>,
     /// Shown instead of the joined key labels, for bindings that cover a family of keys.
     key_text: Option<String>,
     /// Footer hints on the right edge instead of the left block.
@@ -121,8 +121,8 @@ impl Keybind {
         }
     }
 
-    pub(crate) fn compact_hint(&self, app: &App) -> Option<(String, &'static str)> {
-        let label = self.compact_label?;
+    pub(crate) fn compact_hint(&self, app: &App) -> Option<(String, String)> {
+        let label = self.compact_label.clone()?;
         Some((self.key_label(app), label))
     }
 
@@ -195,12 +195,12 @@ fn binding(
     keys: Vec<KeySpec>,
     label: impl Into<String>,
     group: &'static str,
-    compact_label: Option<&'static str>,
+    compact_label: Option<&str>,
 ) -> Keybind {
     Keybind {
         label: label.into(),
         group,
-        compact_label,
+        compact_label: compact_label.map(str::to_string),
         key_text: None,
         footer_right: false,
         keys,
@@ -248,15 +248,25 @@ pub(crate) fn keybindings(app: &App) -> Vec<Keybind> {
         KeyModifiers::NONE,
         "enter",
     )];
+    let elsewhere = app
+        .selected_entry()
+        .and_then(|entry| app.elsewhere_session(entry));
     bindings.push(if sessions {
         binding(enter, "switch to selected session", "Open", Some("switch"))
+    } else if let Some(session) = elsewhere {
+        binding(
+            enter,
+            "open at last active tab",
+            "Open",
+            Some(&format!("switch to {session}")),
+        )
     } else {
         binding(enter, "open at last active tab", "Open", Some("open"))
     });
 
     bindings.push(binding(
         vec![normal_key(Command::OpenPrevious, KeyCode::Char('l'), "l")],
-        "open previous workspace",
+        "last workspace",
         "Open",
         Some("last"),
     ));
