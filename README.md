@@ -74,6 +74,14 @@ A cold Workspace still moves up to Needs you when one of its agents waits on you
 
 Needs you also lists the Workspaces of your other running Herdr sessions where an agent waits on you. Their other Workspaces stay out of the glance. Such a row carries an `@session` tag after its name, and the header counts it in `N need you · M elsewhere`. The detail pane works on it as on any row. Opening such a row keeps Helm open and says in the footer how to switch sessions.
 
+`helm-herdr status` prints one line for Herdr's tab bar: each other session with Workspaces that need you, as `<session> <icon><count>`, with the icon of the most urgent state. It prints nothing when no session waits. With the binary linked onto your `PATH` as in [Install](#install), add it to `~/.config/herdr/config.toml`:
+
+```toml
+tab_bar_right = [
+  { type = "command", command = "helm-herdr status", interval_seconds = 2, timeout_seconds = 2 },
+]
+```
+
 ### Detail pane
 
 Beside the list, the detail pane shows the selected Workspace: its Tabs as numbered chips (`1`–`9` opens one), its agents and their running subagents, uncommitted changes, and recent commits. `J` and `K` scroll it. It needs a popup at least 110 columns wide.

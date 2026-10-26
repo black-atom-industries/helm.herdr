@@ -9,9 +9,11 @@ use std::{
 use serde_json::Value;
 
 use crate::{
+    activity::ActivityState,
+    glance::{self, IconStyle},
     herdr::socket_request_at,
     paths::herdr_root,
-    topology::{self, OpenTopology},
+    topology::{self, AgentState, OpenTopology},
 };
 
 /// How long a session's socket may take to answer a snapshot before it counts as stopped.
@@ -120,24 +122,90 @@ pub(crate) fn running(sessions: Vec<Session>) -> Vec<(Session, Value)> {
     found.into_iter().map(|(_, read)| read).collect()
 }
 
+/// Every running session other than the current one, with its snapshot.
+fn other_running(
+    root: &Path,
+    current: Option<&str>,
+    current_socket: Option<&Path>,
+) -> Vec<(Session, Value)> {
+    let others = discover(root)
+        .into_iter()
+        .filter(|session| !is_current(session, current, current_socket))
+        .collect();
+    running(others)
+}
+
 /// The Workspaces of every running session other than the current one.
 pub(crate) fn other_topology(
     root: &Path,
     current: Option<&str>,
     current_socket: Option<&Path>,
 ) -> OpenTopology {
-    let others = discover(root)
-        .into_iter()
-        .filter(|session| !is_current(session, current, current_socket))
-        .collect();
     OpenTopology {
-        workspaces: running(others)
+        workspaces: other_running(root, current, current_socket)
             .into_iter()
             .flat_map(|(session, snapshot)| {
                 topology::parse_snapshot(&snapshot, session.name).workspaces
             })
             .collect(),
     }
+}
+
+/// A running session with Workspaces in Needs you.
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) struct Waiting {
+    pub(crate) session: String,
+    pub(crate) state: AgentState,
+    pub(crate) count: usize,
+}
+
+/// The other running sessions that have Workspaces in Needs you, in discovery order.
+pub(crate) fn waiting(
+    root: &Path,
+    current: Option<&str>,
+    current_socket: Option<&Path>,
+) -> Vec<Waiting> {
+    let activity = ActivityState::default();
+    other_running(root, current, current_socket)
+        .into_iter()
+        .filter_map(|(session, snapshot)| {
+            let states: Vec<AgentState> = topology::parse_snapshot(&snapshot, session.name.clone())
+                .workspaces
+                .iter()
+                .filter_map(|workspace| {
+                    glance::needs_you_state(&glance::evidence(workspace, &activity, false, false))
+                })
+                .collect();
+            let state = glance::most_urgent(states.iter().copied())?;
+            Some(Waiting {
+                session: Session::label(session.name.as_deref()).to_string(),
+                state,
+                count: states.len(),
+            })
+        })
+        .collect()
+}
+
+/// `<session> <icon><count>` per waiting session, joined by two spaces.
+pub(crate) fn status_line(waiting: &[Waiting], icons: IconStyle) -> String {
+    waiting
+        .iter()
+        .map(|entry| {
+            format!(
+                "{} {}{}",
+                entry.session,
+                glance::status_icon(entry.state, icons, 0),
+                entry.count
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("  ")
+}
+
+/// [`waiting`] for this process's Herdr root and session.
+pub(crate) fn read_waiting() -> Vec<Waiting> {
+    let socket = env::var_os("HERDR_SOCKET_PATH").map(PathBuf::from);
+    waiting(&herdr_root(), current().as_deref(), socket.as_deref())
 }
 
 /// [`other_topology`] for this process's Herdr root and session.
@@ -279,6 +347,90 @@ mod tests {
             Some(&root.join("herdr.sock"))
         ));
 
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn status_line_joins_sessions_with_icon_and_count() {
+        let waiting = [
+            Waiting {
+                session: "b".into(),
+                state: AgentState::Blocked,
+                count: 2,
+            },
+            Waiting {
+                session: "default".into(),
+                state: AgentState::Done,
+                count: 1,
+            },
+        ];
+        assert_eq!(
+            status_line(&waiting, IconStyle::Unicode),
+            "b ●2  default ✔1"
+        );
+        assert_eq!(status_line(&[], IconStyle::Unicode), "");
+    }
+
+    #[test]
+    fn waiting_counts_needs_you_per_other_session_and_skips_the_current_one() {
+        let _lock = crate::herdr::test_env_lock();
+        let root = temp_root("w");
+        let mut servers = Vec::new();
+        for (name, status) in [("a", "blocked"), ("b", "done"), ("c", "idle")] {
+            let dir = root.join("sessions").join(name);
+            fs::create_dir_all(&dir).unwrap();
+            servers.push(serve(&dir, snapshot_result("api", status)));
+        }
+
+        let waiting = waiting(&root, Some("a"), None);
+        assert_eq!(
+            waiting,
+            vec![Waiting {
+                session: "b".into(),
+                state: AgentState::Done,
+                count: 1,
+            }]
+        );
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn a_session_with_blocked_and_done_workspaces_shows_blocked_and_counts_both() {
+        let _lock = crate::herdr::test_env_lock();
+        let root = temp_root("m");
+        let dir = root.join("sessions/b");
+        fs::create_dir_all(&dir).unwrap();
+        let snapshot = serde_json::json!({
+            "type": "session_snapshot",
+            "snapshot": {
+                "workspaces": [
+                    {"workspace_id": "w1", "label": "api", "focused": true},
+                    {"workspace_id": "w2", "label": "web", "focused": false},
+                ],
+                "tabs": [
+                    {"tab_id": "w1:t1", "workspace_id": "w1", "label": "1", "focused": true},
+                    {"tab_id": "w2:t1", "workspace_id": "w2", "label": "1", "focused": true},
+                ],
+                "panes": [
+                    {"pane_id": "w1:p1", "workspace_id": "w1", "tab_id": "w1:t1", "cwd": "/tmp", "focused": true},
+                    {"pane_id": "w2:p1", "workspace_id": "w2", "tab_id": "w2:t1", "cwd": "/tmp", "focused": true},
+                ],
+                "agents": [
+                    {"pane_id": "w1:p1", "agent": "claude", "agent_status": "done"},
+                    {"pane_id": "w2:p1", "agent": "claude", "agent_status": "blocked"},
+                ],
+            }
+        });
+        let _server = serve(&dir, snapshot);
+
+        assert_eq!(
+            waiting(&root, Some("a"), None),
+            vec![Waiting {
+                session: "b".into(),
+                state: AgentState::Blocked,
+                count: 2,
+            }]
+        );
         let _ = fs::remove_dir_all(&root);
     }
 

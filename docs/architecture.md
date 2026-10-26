@@ -24,6 +24,7 @@ Popup dimensions belong to the user's Herdr `type = "popup"` keybinding. The Sid
 | `helm-herdr open-side` | Launch, focus, or close the Side pane according to its toggle state |
 | `helm-herdr` | Run the interactive Picker; `helm-herdr ui` remains an explicit equivalent |
 | `helm-herdr list` | Print collected Entries without opening the Picker |
+| `helm-herdr status` | Print one line for Herdr's tab bar: other running sessions with Workspaces in Needs you |
 
 ## State files and events
 
@@ -65,6 +66,8 @@ Helm finds the Herdr root at `$XDG_CONFIG_HOME/herdr`, or `~/.config/herdr` when
 The sessions are the default session, whose directory is the root, and every directory in `<root>/sessions/`, symlinks followed. Each session's socket is `herdr.sock` in its directory. A session runs when its socket answers a `session.snapshot` request within 300 ms; the sockets are asked in parallel, so a dead one costs at most one timeout. The current session is `HERDR_SESSION`, unset for the default session, which Herdr also names `default`.
 
 Each load, at open and in the 3-second background refresh, reads the snapshot of every other running session and keeps only the Workspaces where an agent is blocked or done. Only those get git and transcript reads. Their rows join the glance in Needs you, classified with their own session's `activity.json` entries; pinned and cold state never applies to them, and they carry no Current or Previous mark. The row shows an `@<session>` tag in the mauve colour inside the name cell, and the header adds ` · M elsewhere` to the need-you count. Opening such a row keeps the Picker open with `Start Herdr with helm-herdr shell to switch sessions` in the footer until the next key. Close, Cold and pin ignore these rows, because Workspace IDs repeat across sessions.
+
+`helm-herdr status` reads the same snapshots without activity, git or transcript reads, counts each session's Workspaces in Needs you with the glance's classification, and prints `<session> <icon><count>` per session in discovery order, joined by two spaces. The icon is that of the most urgent state (blocked before done) in the configured icon style. The output is plain text without a trailing newline, empty when nothing waits, and the exit code is always 0.
 
 ## Code layout
 

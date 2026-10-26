@@ -37,6 +37,7 @@ enum CliCommand {
     TrackAgent,
     Ui,
     List,
+    Status,
     Invalid,
 }
 
@@ -49,6 +50,7 @@ fn cli_command(command: Option<&str>) -> CliCommand {
         Some("track-focus") => CliCommand::TrackFocus,
         Some("track-agent") => CliCommand::TrackAgent,
         Some("list") => CliCommand::List,
+        Some("status") => CliCommand::Status,
         Some(_) => CliCommand::Invalid,
     }
 }
@@ -62,9 +64,10 @@ fn main() {
         CliCommand::TrackAgent => track_agent(),
         CliCommand::Ui => run_ui(env::args().nth(2).as_deref() == Some("--side")),
         CliCommand::List => debug_list(),
+        CliCommand::Status => print_status(),
         CliCommand::Invalid => {
             eprintln!(
-                "usage: helm-herdr [open|open-side|jump-back|track-focus|track-agent|ui|list]"
+                "usage: helm-herdr [open|open-side|jump-back|track-focus|track-agent|ui|list|status]"
             );
             process::exit(2);
         }
@@ -247,6 +250,14 @@ fn debug_list() {
     }
 }
 
+fn print_status() {
+    let waiting = sessions::read_waiting();
+    print!(
+        "{}",
+        sessions::status_line(&waiting, Config::load().glance.icons)
+    );
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -266,6 +277,11 @@ mod tests {
     #[test]
     fn bare_binary_starts_the_picker_ui() {
         assert_eq!(cli_command(None), CliCommand::Ui);
+    }
+
+    #[test]
+    fn status_is_a_command() {
+        assert_eq!(cli_command(Some("status")), CliCommand::Status);
     }
 
     #[test]
