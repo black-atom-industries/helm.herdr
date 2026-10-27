@@ -2,6 +2,66 @@
 
 All notable changes to this project are documented here.
 
+## [0.7.0](https://github.com/black-atom-industries/helm.herdr/compare/v0.6.0...v0.7.0) (2026-10-27)
+
+
+### ⚠ BREAKING CHANGES
+
+* **picker:** the topology view with tab and pane lines is replaced, `jump_back.pin_previous` is ignored, and tab results leave search.
+* **sources:** the ⌃A agents and ⌃P projects filters are gone, and agent aliases are ignored.
+* **sources:** `[sessions] entries` remotes and the ⌃S/⌃L filters are gone. Local session switching is tracked in #3.
+
+### Features
+
+* **keymap:** drop ^B from the footer and close the key sheet with q ([1b88d36](https://github.com/black-atom-industries/helm.herdr/commit/1b88d36238715b3bc0fca226ea8564ded30c9b2c))
+* **keymap:** open rows by home-row label and jump by group ([c1166d6](https://github.com/black-atom-industries/helm.herdr/commit/c1166d6bca466947eed5b9af31dfc113a048df93))
+* **keymap:** select rows by label, aa opens, xx closes, q quits, l opens the last workspace ([2bd9086](https://github.com/black-atom-industries/helm.herdr/commit/2bd9086958a467d136fd2582ce30b8fbdfddb220))
+* **picker:** add a detail pane with agents, changes and recent commits ([fc3a327](https://github.com/black-atom-industries/helm.herdr/commit/fc3a327ce1339eb5c23abcbac963724ea2aea766))
+* **picker:** default to Nerd Font status icons ([ecb1d5d](https://github.com/black-atom-industries/helm.herdr/commit/ecb1d5d756bec7f7dace91285711604db0f7afeb))
+* **picker:** draw progress bars with ▰▱ like the Claude Code statusline ([91592db](https://github.com/black-atom-industries/helm.herdr/commit/91592db8100da5ad0584264a4339f69c0af0a090))
+* **picker:** group workspaces by temperature and send one to Cold with c c ([27689cc](https://github.com/black-atom-industries/helm.herdr/commit/27689cc5ebe29cee5ca92044265e3732f186a4ab))
+* **picker:** keep a workspace in Cold only until its next activity ([a38b9b1](https://github.com/black-atom-industries/helm.herdr/commit/a38b9b178bfe0e7abcf6baa023371bd7d8396b41))
+* **picker:** label the glance columns and drop the here and last marks ([489f530](https://github.com/black-atom-industries/helm.herdr/commit/489f530315195e2aa542ef2af7a23097b03ba346))
+* **picker:** layer the list and detail panels on Herdr's background with tabs on their own line ([fa0702d](https://github.com/black-atom-industries/helm.herdr/commit/fa0702dc03d987a90c902f40ec9ee964ae351140))
+* **picker:** lead query rows with the destination ([da8bffa](https://github.com/black-atom-industries/helm.herdr/commit/da8bffaf04c8df80c2e12bd15cf62af1023feb43))
+* **picker:** mark the current and previous workspace with a dot after the label ([9462872](https://github.com/black-atom-industries/helm.herdr/commit/94628721f884bf3ea62ff552ce0bde5d3a88264a))
+* **picker:** mark the selected glance row with accent bars at both ends ([287f3e3](https://github.com/black-atom-industries/helm.herdr/commit/287f3e34cebb632f2e6c881e0976ffa8128a0e15))
+* **picker:** open on the glance, one row per workspace grouped by warmth ([0fc0d79](https://github.com/black-atom-industries/helm.herdr/commit/0fc0d79062aa130f1b93779838ccff8cee8f5523))
+* **picker:** order footer hints by navigation and pad the view evenly ([d8fd763](https://github.com/black-atom-industries/helm.herdr/commit/d8fd763c54913d815d3d4a71c79bd29338201050))
+* **picker:** put the cursor on the best search match and drop weak matches ([c4fe2b3](https://github.com/black-atom-industries/helm.herdr/commit/c4fe2b3cbe29af2c25ad6a2106e6dd0219ba2842))
+* **picker:** separate list, frame and bars by background instead of lines ([4a0bda6](https://github.com/black-atom-industries/helm.herdr/commit/4a0bda6ba92b30bc37756becb3536887e1fbcea7))
+* **picker:** show a legend for the row marks and agent icons ([262748d](https://github.com/black-atom-industries/helm.herdr/commit/262748d2002604b9407f498fec2e88fb4c7572ef))
+* **picker:** show a size notice below 120 × 32 instead of a squeezed layout ([236c7dc](https://github.com/black-atom-industries/helm.herdr/commit/236c7dc2395be4adb4cc7a8b8abb626214d222fc))
+* **sessions:** add helm-herdr shell, a launcher that re-attaches Herdr sessions ([1929516](https://github.com/black-atom-industries/helm.herdr/commit/1929516a8914aff318b5a499e522062a8ff335b7))
+* **sessions:** add helm-herdr status for Herdr's tab bar ([3203f53](https://github.com/black-atom-industries/helm.herdr/commit/3203f53344606a401e5a0fa271fcc241260bb85b))
+* **sessions:** count an agent as done when it finishes after you left its session ([2dc3cb8](https://github.com/black-atom-industries/helm.herdr/commit/2dc3cb8051bdfbac8fc9a301301a248abae387d9))
+* **sessions:** list every Herdr session in a ^S sessions view ([a9ef287](https://github.com/black-atom-industries/helm.herdr/commit/a9ef28744003c4c70c58e6ed135ea6da1351a1b6))
+* **sessions:** show agents waiting in other Herdr sessions in Needs you ([3f10889](https://github.com/black-atom-industries/helm.herdr/commit/3f1088984e1e1693df43fe6f05cf599629a874ff))
+* **sessions:** switch to another Herdr session from Helm ([79e32eb](https://github.com/black-atom-industries/helm.herdr/commit/79e32eb39475fa07577f9c6c135d7bd0df22990f))
+* **sources:** drop the agents and projects sources ([9a46e60](https://github.com/black-atom-industries/helm.herdr/commit/9a46e6068f0cb90c96955e890838c9ced746dac8))
+* **sources:** drop the remote server and session sources ([3708356](https://github.com/black-atom-industries/helm.herdr/commit/3708356c0080f4c02ca40a5d7ee520f3179dfb9c))
+* **theme:** add popup background and retune chrome tones ([5d7aaae](https://github.com/black-atom-industries/helm.herdr/commit/5d7aaaeb9bef0d3577fff2ccdd7eca0f8f2c4cce))
+* **topology:** record focus, agent state and last commit times ([8ed271a](https://github.com/black-atom-industries/helm.herdr/commit/8ed271a63a29a22a820629ca27961d72c66da52b))
+
+
+### Bug Fixes
+
+* **keymap:** fit the key sheet in the popup with two columns and tight key highlights ([c7e62cb](https://github.com/black-atom-industries/helm.herdr/commit/c7e62cb0a3d37727e0367ea2a9f70cd383e2339f))
+* **picker:** give the detail pane the same vertical padding as the list ([ddc8307](https://github.com/black-atom-industries/helm.herdr/commit/ddc8307df3c9d07611d88e86ca2e79a7456a9104))
+* **picker:** keep activity per session and rows steady while open ([951369b](https://github.com/black-atom-industries/helm.herdr/commit/951369b433edc243553a76889c2deb20a5a00858))
+* **picker:** keep agent and path keys out of fuzzy matching ([a259bb2](https://github.com/black-atom-industries/helm.herdr/commit/a259bb2101497910e8b95d944c475019d1f1fa9f))
+* **picker:** name the current Herdr session on its own line with an icon ([6f302c0](https://github.com/black-atom-industries/helm.herdr/commit/6f302c0e15cf305160f3479174f09cdbeceaaa50))
+* **picker:** open with the current workspace selected ([598de9d](https://github.com/black-atom-industries/helm.herdr/commit/598de9de2cbdf93b3d08cdc09bb44cc100d9c1cd))
+* **sessions:** report failed switches and keep launcher state in one folder ([7c508af](https://github.com/black-atom-industries/helm.herdr/commit/7c508afb469cc6486312469aaf7368da58b4dabf))
+* **theme:** tint the selected row from the text scale ([1b8c0de](https://github.com/black-atom-industries/helm.herdr/commit/1b8c0def6cb214618ef357d0347417f9c03ef0f6))
+
+
+### Documentation
+
+* describe the glance, the detail pane and the keys ([0a3ae33](https://github.com/black-atom-industries/helm.herdr/commit/0a3ae333fc21dbc61f8773548fa9008ef50ff482))
+* name c among the reserved glance label keys ([f3ab739](https://github.com/black-atom-industries/helm.herdr/commit/f3ab73995f57772049bdad47e475020698b908a7))
+* rewrite the README around the topology and query views ([e605685](https://github.com/black-atom-industries/helm.herdr/commit/e6056851177c40c36a736dc21e264e38c2839b2e))
+
 ## [0.6.0](https://github.com/black-atom-industries/helm.herdr/compare/v0.5.0...v0.6.0) (2026-10-18)
 
 ### Highlights
