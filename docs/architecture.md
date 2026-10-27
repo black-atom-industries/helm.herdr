@@ -183,3 +183,5 @@ With `[theme] inherit_herdr` on (the default), Helm takes its palette from the t
 - Exact Herdr identity for Workspace, Tab, and Pane actions.
 - Optional sources degrade quietly.
 - Small Rust binary with no external Picker dependency.
+- Workspace, Tab and Pane rows address a Workspace by its ID, since two open Workspaces can share a cwd. Only directory rows match an open Workspace by cwd, and opening one reuses it when `reuse_existing` is on.
+- Integrations use the command/JSON contract in [`plugin-integrations.md`](plugin-integrations.md). Herdr Plus stays built in, because it needs Herdr-specific Workspace and Tab bootstrap. Helm works without it installed.
