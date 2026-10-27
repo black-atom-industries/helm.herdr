@@ -236,6 +236,18 @@ impl App {
         self.subagents = workspaces.subagents;
         self.now = now;
         self.sessions = workspaces.sessions;
+        let rest: Vec<WorkspaceNode> = sessions::other_topology(&self.sessions)
+            .workspaces
+            .into_iter()
+            .filter(|workspace| {
+                !self
+                    .topology
+                    .workspaces
+                    .iter()
+                    .any(|known| known.id == workspace.id && known.session == workspace.session)
+            })
+            .collect();
+        self.topology.workspaces.extend(rest);
         self.topology_entries = topology::query_entries(&self.topology);
         self.entries
             .retain(|entry| !matches!(entry.source, Source::Workspace | Source::Session));
@@ -253,7 +265,7 @@ impl App {
             .topology
             .workspaces
             .iter()
-            .filter_map(|workspace| {
+            .map(|workspace| {
                 let elsewhere = workspace.session != self.session;
                 let entry = self
                     .topology_entries
@@ -276,17 +288,14 @@ impl App {
                     && self.previous_workspace_id.as_deref() == Some(workspace.id.as_str());
                 let mut row = glance::row(workspace, &evidence, previous, self.now, thresholds);
                 if elsewhere {
-                    if row.group != Group::NeedsYou {
-                        return None;
-                    }
                     row.mark = Mark::None;
                     row.other_session =
                         Some(Session::label(workspace.session.as_deref()).to_string());
                 }
-                Some((
+                (
                     workspace_key(workspace.session.as_deref(), &workspace.id),
                     row,
-                ))
+                )
             })
             .collect();
         self.rank_rows();
@@ -727,6 +736,10 @@ impl App {
                     Some(Group::Directories | Group::Other) if !searching => continue,
                     Some(_) => {}
                     None => continue,
+                }
+                if !query.all_sessions && self.glance_row(entry).is_some_and(GlanceRow::search_only)
+                {
+                    continue;
                 }
             }
             if !query.filters_match(entry) {
@@ -1517,6 +1530,8 @@ struct Query {
     path: Vec<String>,
     status: Vec<String>,
     all_agents: bool,
+    all_sessions: bool,
+    session: Vec<String>,
 }
 
 impl Query {
@@ -1529,6 +1544,8 @@ impl Query {
             path: vec![],
             status: vec![],
             all_agents: false,
+            all_sessions: false,
+            session: vec![],
         };
         let mut plain = Vec::new();
         for raw in input.split_whitespace() {
@@ -1547,6 +1564,9 @@ impl Query {
                 push_token(&mut query.path, rest);
             } else if let Some(rest) = token.strip_prefix('#') {
                 push_token(&mut query.status, rest);
+            } else if let Some(rest) = token.strip_prefix('*') {
+                query.all_sessions = true;
+                push_token(&mut query.session, rest);
             } else {
                 plain.push(token);
             }
@@ -1563,6 +1583,14 @@ impl Query {
             || !self.status.is_empty();
         if agent_query && !is_agent_entry(entry) {
             return false;
+        }
+        if self.all_sessions {
+            let EntryAction::FocusWorkspace { session, .. } = &entry.action else {
+                return false;
+            };
+            if !all_match(&self.session, Session::label(session.as_deref())) {
+                return false;
+            }
         }
         (!self.agent_only && self.agent.is_empty() || is_agent_entry(entry))
             && all_match(&self.agent, &agent_text(entry))
@@ -3416,6 +3444,49 @@ exit 0
         let helm = app.entries[app.filtered[1]].clone();
         assert!(!app.is_elsewhere(&helm));
         assert_eq!(app.glance_row(&helm).unwrap().mark, Mark::Here);
+    }
+
+    #[test]
+    fn a_star_query_searches_the_workspaces_of_every_session() {
+        let mut app = App::new(Config::default(), Theme::terminal());
+        app.apply_workspaces(
+            Workspaces {
+                topology: OpenTopology {
+                    workspaces: vec![
+                        bare_workspace("w1", "helm", true, Some(NOW - 60)),
+                        agent_workspace(Some("work"), "w2", "notes", AgentState::Idle),
+                        agent_workspace(Some("lab"), "w3", "docs", AgentState::Working),
+                    ],
+                },
+                activity: ActivityState::default(),
+                previous: None,
+                subagents: HashMap::new(),
+                session: None,
+                sessions: Vec::new(),
+            },
+            NOW,
+        );
+        assert_eq!(glance_titles(&app), ["helm"]);
+
+        for (query, expected) in [
+            ("notes", vec![]),
+            ("*", vec!["helm", "notes", "docs"]),
+            ("* notes", vec!["notes"]),
+            ("*work", vec!["notes"]),
+            ("*default", vec!["helm"]),
+        ] {
+            app.query = query.into();
+            app.apply_filter();
+            let mut titles = glance_titles(&app);
+            titles.sort();
+            let mut expected: Vec<String> = expected.into_iter().map(String::from).collect();
+            expected.sort();
+            assert_eq!(titles, expected, "query {query:?}");
+        }
+        app.query = "*work".into();
+        app.apply_filter();
+        let notes = app.entries[app.filtered[0]].clone();
+        assert_eq!(app.elsewhere_session(&notes), Some("work"));
     }
 
     #[test]

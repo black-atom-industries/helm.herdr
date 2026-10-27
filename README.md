@@ -79,7 +79,7 @@ A cold Workspace still moves up to Needs you when one of its agents waits on you
 
 ### Other Herdr sessions
 
-Below the Helm line, the popup names the Herdr session it runs in, such as `󰌨 black-atom`, followed by the search. Needs you also lists the Workspaces of your other running Herdr sessions where an agent waits on you. Their other Workspaces stay out of the glance. An agent that finishes in a session you have left counts as done there, even though Herdr reports it idle, so it shows up here with the done icon. Such a row carries an `@session` tag after its name, and the header counts it in `N need you · M elsewhere`. The detail pane works on it as on any row, and the footer reads `enter switch to <session>`. Opening such a row switches this terminal to that session, at that Workspace (and Tab, with `1`–`9`), when Herdr runs under [`helm-herdr shell`](#start-herdr-through-helm). Otherwise Helm stays open and says in the footer how to switch sessions.
+Below the Helm line, the popup names the Herdr session it runs in, such as `󰌨 black-atom`, followed by the search. Needs you also lists the Workspaces of your other running Herdr sessions where an agent waits on you. Their other Workspaces stay out of the glance until you search with `*`. An agent that finishes in a session you have left counts as done there, even though Herdr reports it idle, so it shows up here with the done icon. Such a row carries an `@session` tag after its name, and the header counts it in `N need you · M elsewhere`. The detail pane works on it as on any row, and the footer reads `enter switch to <session>`. Opening such a row switches this terminal to that session, at that Workspace (and Tab, with `1`–`9`), when Herdr runs under [`helm-herdr shell`](#start-herdr-through-helm). Otherwise Helm stays open and says in the footer how to switch sessions.
 
 `helm-herdr status` prints one line for Herdr's tab bar: each other session with Workspaces that need you, as `<session> <icon><count>`, with the icon of the most urgent state. It prints nothing when no session waits. With the binary linked onto your `PATH` as in [Install](#install), add it to `~/.config/herdr/config.toml`:
 
@@ -116,6 +116,8 @@ A few tokens narrow the match:
 | `@idle`     | Workspace or status text                      |
 | `#idle`     | Status text only                              |
 | `/dotfiles` | A path                                        |
+| `*`         | Workspaces of every running session           |
+| `*work`     | Workspaces of sessions named like `work`      |
 
 ## Install
 
@@ -167,6 +169,7 @@ You need Herdr 0.7.4 or newer on Linux or macOS, and `jq` for the link command. 
 | `x` `x`, `^X`       | Close the Workspace (`x` asks for a second `x`)          |
 | `J` / `K`           | Scroll the detail pane                                   |
 | `/`                 | Search                                                   |
+| `*`                 | Search the Workspaces of every session                   |
 | `^S`                | Show your Herdr sessions; `^W` goes back                 |
 | `^Z` / `^R` / `^Q`  | Show only zoxide, roots or Quick Actions; `^W` goes back |
 | `tab` / `Shift-tab` | Next or previous view in the source strip                |

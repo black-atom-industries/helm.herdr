@@ -48,7 +48,7 @@
 | Term | Definition | Aliases to avoid |
 | --- | --- | --- |
 | **Herdr session** | One running Herdr server with its own socket, Workspaces and IDs: the default session or a named one. | Server, instance |
-| **Other session** | A running Herdr session other than the one Helm runs in; its Workspaces join the Glance only in Needs you. | Remote session |
+| **Other session** | A running Herdr session other than the one Helm runs in; its Workspaces join the Glance in Needs you, and all of them answer a `*` query. | Remote session |
 | **Sessions view** | The Picker view under the `^S` Source filter: one row per Herdr session, running ones before stopped ones, with the selected session's Workspaces in the Detail pane. | Session list, session switcher |
 | **Launcher** | `helm-herdr shell`: the process in a terminal tab that runs a Herdr client and, when Helm requests a switch, ends it and attaches another Herdr session in the same tab. | Wrapper, shell session |
 | **Workspace** | A Herdr container for related Tabs and their Panes. | Project, session |

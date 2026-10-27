@@ -568,6 +568,19 @@ fn execute_command(app: &mut App, command: Command, key: KeyEvent) -> Action {
             app.input_mode = InputMode::Search;
             Action::Continue
         }
+        Command::SearchSessions => {
+            app.set_filter(None);
+            if !app
+                .query
+                .split_whitespace()
+                .any(|token| token.starts_with('*'))
+            {
+                app.query = format!("* {}", app.query.trim_start());
+            }
+            app.input_mode = InputMode::Search;
+            app.apply_filter();
+            Action::Continue
+        }
         Command::DeleteChar => {
             app.query.pop();
             app.apply_filter();
@@ -844,7 +857,7 @@ fn group_count_spans(app: &App) -> Vec<Span<'static>> {
         (
             app.glance
                 .values()
-                .filter(|row| row.group == Group::Hot)
+                .filter(|row| row.group == Group::Hot && !row.search_only())
                 .count(),
             "hot",
             Group::Hot,
@@ -852,7 +865,7 @@ fn group_count_spans(app: &App) -> Vec<Span<'static>> {
         (
             app.glance
                 .values()
-                .filter(|row| row.group == Group::Warm)
+                .filter(|row| row.group == Group::Warm && !row.search_only())
                 .count(),
             "warm",
             Group::Warm,
@@ -860,7 +873,7 @@ fn group_count_spans(app: &App) -> Vec<Span<'static>> {
         (
             app.glance
                 .values()
-                .filter(|row| row.group == Group::Cold)
+                .filter(|row| row.group == Group::Cold && !row.search_only())
                 .count(),
             "cold",
             Group::Cold,
@@ -4618,6 +4631,21 @@ mod tests {
     }
 
     #[test]
+    fn star_starts_a_search_across_every_session() {
+        let mut app = other_session_app();
+        let (before, _) = render_app(&app, 160, 40);
+        handle_key(
+            &mut app,
+            KeyEvent::new(KeyCode::Char('*'), KeyModifiers::SHIFT),
+        );
+        assert_eq!(app.input_mode, InputMode::Search);
+        assert_eq!(app.query, "* ");
+        let (lines, _) = render_app(&app, 160, 40);
+        assert!(lines.iter().any(|line| line.contains("notes @work")));
+        assert_eq!(lines[0], before[0]);
+    }
+
+    #[test]
     fn the_session_tag_takes_the_mauve_colour() {
         let app = other_session_app();
         let mut terminal = Terminal::new(TestBackend::new(160, 40)).unwrap();
@@ -5077,6 +5105,12 @@ mod tests {
     #[test]
     fn other_sessions_get_git_from_a_read_kept_for_its_ttl() {
         let mut app = sessions_app();
+        // Session snapshots carry no git, so neither do their search-only rows.
+        for workspace in &mut app.topology.workspaces {
+            if workspace.label == "web" {
+                workspace.git = None;
+            }
+        }
         assert!(app.session_git_target(NOW).is_none());
         app.selected = 2;
         let state = app.sessions[1].clone();

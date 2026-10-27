@@ -98,7 +98,7 @@ Sockets are probed in parallel. The current session is `HERDR_SESSION`, unset fo
 
 ### Other sessions in the Glance
 
-On each load (at open and on the 3 s refresh), Helm reads every other running session and keeps only Workspaces with a blocked or done agent. Herdr keeps focus per session, so an agent that finishes in a session you left reads idle. An idle agent whose `since` is newer than that session's `seen_at` therefore counts as done.
+On each load (at open and on the 3 s refresh), Helm reads every other running session. The Glance keeps only Workspaces with a blocked or done agent; the others stay search-only and show up under a `*` query. Herdr keeps focus per session, so an agent that finishes in a session you left reads idle. An idle agent whose `since` is newer than that session's `seen_at` therefore counts as done.
 
 | Aspect | Behavior |
 | --- | --- |
@@ -190,6 +190,7 @@ src/integrations/ built-in Herdr Plus adapter and command integrations
 | `@text` | Workspace or status text |
 | `/path` | paths |
 | `#status` | status text |
+| `*`, `*name` | Workspaces of every session, or of sessions named like `name` |
 
 Plain text matches only what a row shows. With the nucleo engine, a row stays while its score reaches 85% of the best visible one. Queries of tokens only keep every match. The cursor follows the best match until you move it.
 
@@ -245,6 +246,7 @@ Activity is the newest of the Workspace's focus time, its last commit and its ne
 | `!` | Next row that needs you, Pinned included |
 | `l` | Previous workspace, or a more recent one in another session |
 | `^S` | Sessions view |
+| `*` | Search with a `*` query |
 | `tab` / `Shift-tab` | Next / previous source in the strip |
 | `x` `x`, `^X` | Close the Workspace |
 | `c` `c`, `c` on a cold row | Send to Cold, warm up |

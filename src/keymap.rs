@@ -22,6 +22,7 @@ pub(crate) enum Command {
     ScrollDetailUp,
     ScrollDetailDown,
     StartSearch,
+    SearchSessions,
     DeleteChar,
     DeleteWord,
     Clear,
@@ -326,6 +327,18 @@ pub(crate) fn keybindings(app: &App) -> Vec<Keybind> {
         "Find",
         Some("search"),
     ));
+
+    if !sessions {
+        bindings.push(binding(
+            vec![
+                normal_key(Command::SearchSessions, KeyCode::Char('*'), "*"),
+                normal_shifted(Command::SearchSessions, KeyCode::Char('*'), "*"),
+            ],
+            "search every session",
+            "Find",
+            None,
+        ));
+    }
 
     bindings.push(binding(
         vec![key(

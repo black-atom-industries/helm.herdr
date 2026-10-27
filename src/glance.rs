@@ -109,6 +109,13 @@ pub(crate) struct GlanceRow {
     pub(crate) other_session: Option<String>,
 }
 
+impl GlanceRow {
+    /// A row of another session outside Needs you, listed only by a `*` search.
+    pub(crate) fn search_only(&self) -> bool {
+        self.other_session.is_some() && self.group != Group::NeedsYou
+    }
+}
+
 /// `elsewhere` marks a Workspace of a session the User is not in. Herdr keeps
 /// that session's focus, so an agent finishing there reads `idle`; one that
 /// went idle after the User was last there counts as done.
