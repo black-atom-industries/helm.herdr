@@ -18,4 +18,9 @@ run can change the version. Curate the section on the release branch with [`repo
 
 Record changed Picker behavior as clips with `nbr-record-clip`; tapes live in `docs/assets/tapes/`.
 
+Check the README against the release. When a highlight changes what the README describes or shows, update that text and
+its media in the release branch commit. A project with a visible surface keeps a hero clip of its main view at the top of
+the README: the same dark/light pair as the highlight, copied to `docs/assets/readme/<topic>-{dark,light}.webp` and
+referenced by relative path so it follows `main`, not the tag.
+
 Nothing lands on `main` between curating and merging. Ask for explicit approval immediately before merging the release PR.

@@ -54,7 +54,8 @@ gh pr checkout <number>
 Write the Highlights with
 [`repo-changelog`](../.agents/skills/repo-changelog/references/curated-release.md).
 
-Record changed Picker behavior as clips with `nbr-record-clip`; tapes live in `docs/assets/tapes/`.
+Record changed Picker behavior as clips with `nbr-record-clip`; tapes live in `docs/assets/tapes/`. When a highlight changes what
+the README shows, update the README's text and its hero clip under `docs/assets/readme/` in the same commit.
 
 Check and push the release branch, staging any release assets with the changelog:
 
