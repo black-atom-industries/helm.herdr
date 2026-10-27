@@ -171,11 +171,11 @@ Helm integrates with Herdr Plus without copying its UI:
 
 ## Configuration boundary
 
-Current Picker keys are `reuse_existing`, `create_missing`, `engine`, `source_order`, `source_priority_boost`, `check_updates`, `directory_template`, `directory_template_key`, and `[picker.filter_keys]`. Other current sections are `[theme]`, `[notifications]`, `[jump_back]`, `[glance]`, `[sources]`, `[[roots]]`, and `[[integrations]]`. `[glance]` holds `hot_minutes`, `warm_hours`, `icons` and `labels`. A `source_order` without `session` places the Sessions view's filter key right after the workspace key.
+[`examples/default-config.toml`](../examples/default-config.toml) lists every section and key with its default. A `source_order` without `session` places the Sessions view's filter key right after the workspace key.
 
 ## Color boundary
 
-Helm uses the terminal's default colors and ANSI palette. Color selection is part of the Picker renderer rather than plugin configuration.
+With `[theme] inherit_herdr` on (the default), Helm takes its palette from the theme in Herdr's `config.toml`, and falls back to Catppuccin when that file cannot be read. With it off, Helm uses its built-in One Light palette. The Picker renderer derives its background tones from the palette.
 
 ## Design goals
 
