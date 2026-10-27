@@ -12,6 +12,11 @@
   <img alt="Linux and macOS" src="https://img.shields.io/badge/platform-Linux%20%7C%20macOS-c084fc" />
 </p>
 
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/assets/readme/glance-dark.webp">
+  <img alt="The glance groups api, web and docs into Hot, Warm and Cold, then a search for &quot;do&quot; narrows the rows and adds zoxide and root directories" src="docs/assets/readme/glance-light.webp">
+</picture>
+
 Helm is a popup for Herdr. It lists every open Workspace once, sorted by temperature: agents waiting on you at the top, then the Workspaces you are working in, then the ones that went cold.
 
 1. Press your Helm key.
