@@ -32,6 +32,7 @@ pub(crate) enum Command {
     ToggleHelp,
     Update,
     Filter(Source),
+    CycleSource(bool),
 }
 
 #[derive(Clone, Copy)]
@@ -449,6 +450,29 @@ pub(crate) fn keybindings(app: &App) -> Vec<Keybind> {
             None,
         ));
     }
+
+    bindings.push(
+        binding(
+            vec![
+                key(
+                    Command::CycleSource(true),
+                    KeyCode::Tab,
+                    KeyModifiers::NONE,
+                    "tab",
+                ),
+                key(
+                    Command::CycleSource(false),
+                    KeyCode::BackTab,
+                    KeyModifiers::SHIFT,
+                    "Shift-tab",
+                ),
+            ],
+            "next / previous source",
+            "Sources",
+            None,
+        )
+        .keys_as("tab Shift-tab"),
+    );
 
     if app.update_available.is_some() {
         bindings.push(binding(

@@ -890,6 +890,25 @@ impl App {
         self.search_pick = None;
     }
 
+    /// Steps through the sources of the filter strip in its order, wrapping at either end.
+    pub(crate) fn cycle_filter(&mut self, forward: bool) {
+        let sources: Vec<_> = self
+            .config
+            .enabled_sources_in_order()
+            .into_iter()
+            .filter(|source| self.config.picker.filter_key(source).is_some())
+            .collect();
+        let current = self.source_filter.clone().unwrap_or(Source::Workspace);
+        let Some(index) = sources.iter().position(|source| *source == current) else {
+            return;
+        };
+        let step = if forward { 1 } else { sources.len() - 1 };
+        let next = sources[(index + step) % sources.len()].clone();
+        if next != current {
+            self.set_filter((next != Source::Workspace).then_some(next));
+        }
+    }
+
     fn glance_row_at(&self, position: usize) -> Option<&GlanceRow> {
         let index = *self.filtered.get(position)?;
         self.glance_row(&self.entries[index])

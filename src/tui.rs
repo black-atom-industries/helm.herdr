@@ -609,6 +609,11 @@ fn execute_command(app: &mut App, command: Command, key: KeyEvent) -> Action {
             app.input_mode = InputMode::Help;
             Action::Continue
         }
+        Command::CycleSource(forward) => {
+            app.cycle_filter(forward);
+            app.apply_filter();
+            Action::Continue
+        }
         Command::Filter(source) => {
             if !key
                 .modifiers
@@ -4964,6 +4969,30 @@ mod tests {
             == Command::Filter(Source::Session)
             && binding.key_label(&app) == "^S"
             && binding.label == "sessions"));
+    }
+
+    #[test]
+    fn tab_and_shift_tab_step_through_the_source_strip_and_wrap() {
+        let mut app = sessions_app();
+        app.set_filter(None);
+        app.apply_filter();
+        let strip: Vec<_> = keybindings(&app)
+            .iter()
+            .filter_map(|binding| match binding.command() {
+                Command::Filter(source) => Some(source),
+                _ => None,
+            })
+            .collect();
+        let shown = |app: &App| app.source_filter.clone().unwrap_or(Source::Workspace);
+        for source in strip.iter().skip(1).chain(strip.first()) {
+            handle_key(&mut app, key(KeyCode::Tab));
+            assert_eq!(&shown(&app), source);
+        }
+        handle_key(
+            &mut app,
+            KeyEvent::new(KeyCode::BackTab, KeyModifiers::SHIFT),
+        );
+        assert_eq!(&shown(&app), strip.last().unwrap());
     }
 
     #[test]

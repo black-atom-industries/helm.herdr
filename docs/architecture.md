@@ -245,6 +245,7 @@ Activity is the newest of the Workspace's focus time, its last commit and its ne
 | `!` | Next row that needs you, Pinned included |
 | `l` | Previous workspace, or a more recent one in another session |
 | `^S` | Sessions view |
+| `tab` / `Shift-tab` | Next / previous source in the strip |
 | `x` `x`, `^X` | Close the Workspace |
 | `c` `c`, `c` on a cold row | Send to Cold, warm up |
 | `Shift-J` `Shift-K` | Scroll the detail pane |

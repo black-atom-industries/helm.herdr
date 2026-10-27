@@ -169,6 +169,7 @@ You need Herdr 0.7.4 or newer on Linux or macOS, and `jq` for the link command. 
 | `/`                 | Search                                                   |
 | `^S`                | Show your Herdr sessions; `^W` goes back                 |
 | `^Z` / `^R` / `^Q`  | Show only zoxide, roots or Quick Actions; `^W` goes back |
+| `tab` / `Shift-tab` | Next or previous view in the source strip                |
 | `^U`                | Clear the search and filter                              |
 | `alt-enter`         | Open a directory with the directory template             |
 | `q`, `esc`          | Close Helm (`esc` leaves search first)                   |
