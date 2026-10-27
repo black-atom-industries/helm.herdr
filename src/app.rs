@@ -797,12 +797,24 @@ impl App {
         if self.initial_selection_pending {
             self.initial_selection_pending = false;
             if self.query.trim().is_empty() && self.source_filter.is_none() {
-                if let Some(position) = self.filtered.iter().position(|index| {
-                    matches!(
-                        self.entries[*index].action,
-                        EntryAction::FocusWorkspace { .. }
-                    )
-                }) {
+                let here = local_workspaces(&self.topology, &self.session)
+                    .find(|workspace| workspace.focused)
+                    .map(|workspace| workspace.id.as_str());
+                let workspace_id =
+                    |position: &usize| match &self.entries[self.filtered[*position]].action {
+                        EntryAction::FocusWorkspace { id, .. } => Some(id.as_str()),
+                        _ => None,
+                    };
+                let positions = 0..self.filtered.len();
+                if let Some(position) = positions
+                    .clone()
+                    .find(|position| here.is_some() && workspace_id(position) == here)
+                    .or_else(|| {
+                        positions
+                            .clone()
+                            .find(|position| workspace_id(position).is_some())
+                    })
+                {
                     self.selected = position;
                 }
             }
@@ -2684,6 +2696,41 @@ exit 0
             .iter()
             .map(|index| app.entries[*index].title.clone())
             .collect()
+    }
+
+    #[test]
+    fn opening_selects_the_focused_workspace() {
+        let dir = env::temp_dir().join(format!("helm-initial-test-{}", std::process::id()));
+        let _lock = crate::herdr::test_env_lock();
+        let previous = env::var_os("HERDR_PLUGIN_CONFIG_DIR");
+        env::set_var("HERDR_PLUGIN_CONFIG_DIR", &dir);
+
+        let mut app = App::new(Config::default(), Theme::terminal());
+        app.apply_workspaces(
+            Workspaces {
+                topology: OpenTopology {
+                    workspaces: vec![
+                        bare_workspace("w1", "helm", false, Some(NOW - 60)),
+                        bare_workspace("w2", "dots", true, Some(NOW - 120)),
+                    ],
+                },
+                activity: ActivityState::default(),
+                previous: None,
+                subagents: HashMap::new(),
+                session: None,
+                sessions: Vec::new(),
+            },
+            NOW,
+        );
+
+        assert_eq!(glance_titles(&app), ["helm", "dots"]);
+        assert_eq!(app.selected_entry().unwrap().title, "dots");
+
+        let _ = fs::remove_dir_all(&dir);
+        match previous {
+            Some(value) => env::set_var("HERDR_PLUGIN_CONFIG_DIR", value),
+            None => env::remove_var("HERDR_PLUGIN_CONFIG_DIR"),
+        }
     }
 
     #[test]
