@@ -151,11 +151,22 @@ fn open_side_picker() -> ! {
 
 fn open_plugin_popup(plugin_id: &str, entrypoint: &str) -> ! {
     let request = popup_request(plugin_id, entrypoint, "helm-herdr-popup");
-    match herdr::socket_request_with_id(
-        request["id"].as_str().unwrap_or_default(),
-        request["method"].as_str().unwrap_or_default(),
-        request["params"].clone(),
-    ) {
+    let open = || {
+        herdr::socket_request_with_id(
+            request["id"].as_str().unwrap_or_default(),
+            request["method"].as_str().unwrap_or_default(),
+            request["params"].clone(),
+        )
+    };
+    // Herdr holds one popup per session and refuses a second with ui_busy.
+    let result = match open() {
+        Err(error) if error.contains("(ui_busy)") => {
+            let _ = herdr::socket_request("popup.close", serde_json::json!({}));
+            open()
+        }
+        result => result,
+    };
+    match result {
         Ok(_) => process::exit(0),
         Err(error) => {
             eprintln!("{error}");
