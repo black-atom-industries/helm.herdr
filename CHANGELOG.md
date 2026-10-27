@@ -4,6 +4,63 @@ All notable changes to this project are documented here.
 
 ## [0.7.0](https://github.com/black-atom-industries/helm.herdr/compare/v0.6.0...v0.7.0) (2026-10-27)
 
+### Highlights
+
+#### The glance
+
+Helm opens on the glance: one row per Workspace, grouped into Pinned, Needs you, Hot, Warm and Cold by its latest activity. Activity is the newest of your last focus there, its last commit and its agents' last state change. A row shows the agent state, branch, git status and age, and while an agent works, the progress of its subagents. The current Workspace is selected when Helm opens.
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/black-atom-industries/helm.herdr/v0.7.0/docs/assets/changelog/0.7.0-glance-dark.webp">
+  <img alt="The glance groups api, web and docs into Hot, Warm and Cold, then a search for &quot;do&quot; narrows the rows and adds zoxide and root directories" src="https://raw.githubusercontent.com/black-atom-industries/helm.herdr/v0.7.0/docs/assets/changelog/0.7.0-glance-light.webp">
+</picture>
+
+The first five rows carry the letters `a` `s` `d` `f` `g`. Press one to select its row, twice to open it, or follow it with a digit to open that Tab. `]` and `[` jump between groups, `!` to the next row that needs you, `l` to the last Workspace. `x` `x` closes a Workspace, and `c` `c` sends it to Cold until something happens in it. `/` searches inside the groups and puts the cursor on the best match.
+
+#### Detail pane
+
+Beside the list, the selected Workspace shows its Tabs as numbered chips, its agents with their running subagents, its uncommitted changes and its recent commits. `J` and `K` scroll it.
+
+#### Every Herdr session in one place
+
+Needs you also lists the Workspaces of your other running Herdr sessions where an agent waits on you, tagged `@session`. `^S` lists all your sessions, running and stopped, with their Workspaces in the detail pane. Start Herdr with `helm-herdr shell` instead of `herdr`, and opening one of those rows switches the terminal to that session, at that Workspace.
+
+`helm-herdr status` puts the sessions that wait on you into Herdr's tab bar:
+
+```toml
+tab_bar_right = [
+  { type = "command", command = "helm-herdr status", interval_seconds = 2, timeout_seconds = 2 },
+]
+```
+
+#### Important fixes
+
+- Fuzzy search skips the hidden agent and path keys, so a short query matches only what the rows show.
+- Rows keep their place while Helm is open, and activity is kept per session.
+- The `?` key sheet fits inside the popup.
+
+#### Upgrading from 0.6
+
+Helm needs a popup of at least 120 × 32 cells and shows a size notice below that. Give the binding its size in cells:
+
+```diff
+-width = "90%"
+-height = "90%"
++width = 124
++height = 34
+```
+
+The glance replaces the topology view, and the agent, project, server and session sources are gone with their `^A`, `^P` and `^L` filters. `^S` opens the sessions view now. Find agents by searching for `agent` or `!name`. Helm ignores the retired keys (`pin_previous`, `agent_sort`, `[[agent_aliases]]`, the old sources and filter keys), so removing them is cleanup:
+
+```diff
+-source_order = ["workspace", "agent", "project", "session", "zoxide", "root", "server", "quick", "plugin"]
++source_order = ["workspace", "zoxide", "root", "quick", "plugin"]
+```
+
+```diff
+ [jump_back]
+-pin_previous = true
+```
 
 ### ⚠ BREAKING CHANGES
 
