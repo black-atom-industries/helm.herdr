@@ -20,9 +20,8 @@ unset HERDR_ENV HERDR_SESSION HERDR_SOCKET_PATH
 
 mkdir -p "$XDG_CONFIG_HOME/herdr/plugins/config/helm-herdr" "$_ZO_DATA_DIR"
 cp "$REPO/docs/assets/tapes/herdr.toml" "$XDG_CONFIG_HOME/herdr/config.toml"
-if [ "$CLIP_SCHEME" = light ]; then
-  printf '\n[theme]\nname = "catppuccin-latte"\n' >> "$XDG_CONFIG_HOME/herdr/config.toml"
-fi
+printf '\n' >> "$XDG_CONFIG_HOME/herdr/config.toml"
+cat "$REPO/docs/assets/tapes/black-atom-default-${CLIP_SCHEME:-dark}.toml" >> "$XDG_CONFIG_HOME/herdr/config.toml"
 cp "$REPO/docs/assets/tapes/helm.toml" "$XDG_CONFIG_HOME/herdr/plugins/config/helm-herdr/config.toml"
 
 demo_commit() {
