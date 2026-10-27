@@ -1690,6 +1690,7 @@ fn draw_glance_list(f: &mut Frame, app: &App, area: Rect) -> ListHits {
     let mut items = Vec::new();
     let mut hit_rows = Vec::new();
     let mut selected_item = None;
+    let mut selected_labelled = false;
     let mut current: Option<&str> = None;
     for (position, (heading, heading_color), cells) in &visible {
         if current != Some(heading.as_str()) {
@@ -1709,11 +1710,14 @@ fn draw_glance_list(f: &mut Frame, app: &App, area: Rect) -> ListHits {
         if *position == app.selected {
             selected_item = Some(items.len());
         }
-        let label = match labelled
+        let label = labelled
             .iter()
             .position(|&slot| slot == *position)
-            .and_then(|slot| labels.get(slot))
-        {
+            .and_then(|slot| labels.get(slot));
+        if *position == app.selected {
+            selected_labelled = label.is_some();
+        }
+        let label = match label {
             Some(ch) => Span::styled(
                 format!(" {ch} "),
                 Style::default()
@@ -1790,6 +1794,11 @@ fn draw_glance_list(f: &mut Frame, app: &App, area: Rect) -> ListHits {
             let buf = f.buffer_mut();
             buf[(area.x, y)].set_symbol("▌").set_style(accent);
             buf[(area.right() - 1, y)].set_symbol("▐").set_style(accent);
+            if selected_labelled {
+                for x in (area.x + 1..area.x + 4).filter(|&x| x < area.right() - 1) {
+                    buf[(x, y)].set_bg(app.theme.surface0);
+                }
+            }
         }
     }
 
@@ -4539,6 +4548,27 @@ mod tests {
         let detail_column = |line: &str| line.chars().skip(64).collect::<String>();
         assert!(detail_column(&lines[chips + 1]).trim().is_empty());
         assert_eq!(name, chips + 2);
+    }
+
+    #[test]
+    fn the_selected_row_keeps_its_label_background() {
+        let app = glance_app(
+            NOW,
+            None,
+            vec![agent_workspace("w1", "api", AgentState::Idle)],
+            ActivityState::default(),
+        );
+        let mut terminal = Terminal::new(TestBackend::new(120, 30)).unwrap();
+        let mut hits = ListHits::default();
+        terminal.draw(|f| hits = draw(f, &app).0).unwrap();
+        let (rows, _) = hits.rows[0].clone();
+        let buffer = terminal.backend().buffer();
+        let label = (hits.area.x..hits.area.right())
+            .find(|&x| {
+                buffer[(x, rows.start)].symbol() == app.config.glance.labels()[0].to_string()
+            })
+            .unwrap();
+        assert_eq!(buffer[(label, rows.start)].bg, app.theme.surface0);
     }
 
     fn other_session_app() -> App {
