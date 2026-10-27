@@ -195,13 +195,10 @@ impl Theme {
         self.derived_background(7)
     }
 
-    pub(crate) fn depth_background(&self) -> Color {
-        self.derived_background(19)
-    }
-
+    /// The strong selection is one step above the list's bar background.
     pub(crate) fn selection_background(&self, strong: bool) -> Color {
         if strong {
-            self.depth_background()
+            self.toward_text(19, self.overlay0)
         } else {
             self.group_background()
         }
@@ -975,7 +972,7 @@ mod tests {
             from_herdr_config_no_appearance(&theme_value("[theme]\nname = \"catppuccin-latte\"")),
             from_herdr_config_no_appearance(&theme_value("[theme]\nname = \"dracula\"")),
         ] {
-            let backgrounds = [theme.group_background(), theme.depth_background()];
+            let backgrounds = [theme.group_background(), theme.derived_background(19)];
             assert!(backgrounds[0] != theme.panel_bg);
             assert!(backgrounds[0] != backgrounds[1]);
         }
@@ -1036,7 +1033,7 @@ mod tests {
             accent = "#123456"
             "##,
         ));
-        let backgrounds = [theme.group_background(), theme.depth_background()];
+        let backgrounds = [theme.group_background(), theme.derived_background(19)];
 
         assert!(backgrounds[0] != backgrounds[1]);
         assert!(backgrounds
