@@ -35,11 +35,21 @@ Highlights are the one place where prose addresses the reader. In order:
 A visible feature or fix carries its images directly under its text, one image per line, with the alt text written as the
 caption.
 
-- A screenshot is a WebP captured clean at a fixed size. A project with light and dark themes gets a light and a dark
-  image.
+- A screenshot is a WebP captured clean at a fixed size.
 - Motion a still cannot show, such as a resize, a transition, or a terminal session, is a clip: an animated WebP recorded
   with the `nbr-record-clip` skill. Put a clip first when it shows the feature better than the stills.
+- Each image is a dark and a light file behind one `<picture>` that follows the reader's color scheme, the light file as
+  the fallback.
 
-Store both under `docs/assets/changelog/<version>-<topic>.webp`. Reference them with an absolute URL pinned to the release
-tag, `https://raw.githubusercontent.com/black-atom-industries/helm.herdr/v<version>/...`, so they render in the GitHub Release notes and keep
-showing that release after later captures replace the files on `main`.
+Store them under `docs/assets/changelog/<version>-<topic>-dark.webp` and `-light.webp`. Reference them with an absolute URL
+pinned to the release tag, `https://raw.githubusercontent.com/black-atom-industries/helm.herdr/v<version>/...`, so they render in the GitHub
+Release notes and keep showing that release after later captures replace the files on `main`. Keep each `srcset` on one
+line: GitHub drops a value that spans lines.
+
+<!-- prettier-ignore -->
+```html
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/black-atom-industries/helm.herdr/v<version>/docs/assets/changelog/<version>-<topic>-dark.webp">
+  <img alt="<caption>" src="https://raw.githubusercontent.com/black-atom-industries/helm.herdr/v<version>/docs/assets/changelog/<version>-<topic>-light.webp">
+</picture>
+```
