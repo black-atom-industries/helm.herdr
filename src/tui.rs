@@ -354,7 +354,7 @@ fn stay_for_other_session(app: &mut App, action: Action) -> Action {
                 session,
                 workspace,
                 tab,
-            }) => switch(app, session.as_deref(), workspace, tab),
+            }) => switch(app, session.as_deref(), workspace, tab, None),
             Some(_) => action,
             None if number.is_none() => {
                 app.set_filter(None);
@@ -371,11 +371,17 @@ fn stay_for_other_session(app: &mut App, action: Action) -> Action {
     else {
         return action;
     };
-    let tab = match number.and_then(|number| app.selected_tab_action(number)) {
-        Some(EntryAction::FocusTab { id, .. }) => Some(id),
-        _ => None,
+    let (tab, pane) = match number {
+        Some(number) => match app.selected_tab_action(number) {
+            Some(EntryAction::FocusTab { id, .. }) => (Some(id), None),
+            _ => (None, None),
+        },
+        None => app
+            .selected_entry()
+            .and_then(|entry| app.needs_you_pane(entry))
+            .map_or((None, None), |(tab, pane)| (Some(tab), Some(pane))),
     };
-    switch(app, session.as_deref(), Some(id), tab)
+    switch(app, session.as_deref(), Some(id), tab, pane)
 }
 
 /// Every successful switch closes the popup: its terminal now shows another session.
@@ -384,8 +390,9 @@ fn switch(
     session: Option<&str>,
     workspace: Option<String>,
     tab: Option<String>,
+    pane: Option<String>,
 ) -> Action {
-    if app.switch_or_notice(session, workspace, tab) {
+    if app.switch_or_notice(session, workspace, tab, pane) {
         Action::Switched
     } else {
         Action::Continue
@@ -510,7 +517,7 @@ fn execute_command(app: &mut App, command: Command, key: KeyEvent) -> Action {
         },
         Command::OpenPrevious => {
             if let Some((session, workspace)) = app.previous_elsewhere() {
-                match app.switch_session(session.as_deref(), Some(workspace), None) {
+                match app.switch_session(session.as_deref(), Some(workspace), None, None) {
                     Ok(()) => return Action::Switched,
                     Err(SwitchError::Failed(_)) => return Action::Continue,
                     Err(SwitchError::NoLauncher) => {}
@@ -5196,7 +5203,7 @@ mod tests {
         assert_eq!(client.wait().unwrap().signal(), Some(15));
         assert_eq!(
             switch_request(&dir),
-            serde_json::json!({"session": "work", "workspace_id": "w1"})
+            serde_json::json!({"session": "work", "workspace_id": "w1", "tab_id": "w1:t1", "pane_id": "p-api"})
         );
         let _ = std::fs::remove_dir_all(&dir);
 
@@ -5337,7 +5344,7 @@ mod tests {
         );
         assert_eq!(
             switch_request(&dir),
-            serde_json::json!({"session": "work", "workspace_id": "w1"})
+            serde_json::json!({"session": "work", "workspace_id": "w1", "tab_id": "w1:t1", "pane_id": "p-api"})
         );
         let _ = std::fs::remove_dir_all(&dir);
 

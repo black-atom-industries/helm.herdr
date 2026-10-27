@@ -59,6 +59,7 @@ pub(crate) fn run(argument: Option<&str>) -> ! {
         session,
         workspace_id: None,
         tab_id: None,
+        pane_id: None,
     };
     loop {
         let status = attach(&dir, launcher_pid, &target);
@@ -99,6 +100,7 @@ fn attach(dir: &Path, launcher_pid: u32, target: &SwitchRequest) -> ExitStatus {
             sessions::socket_of(&herdr_root(), &target.session),
             workspace.clone(),
             target.tab_id.clone(),
+            target.pane_id.clone(),
         );
     }
     // The client reads Ctrl-C as a key; a stray SIGINT must not end the
@@ -130,13 +132,13 @@ fn restore_terminal(leave_alternate_screen: bool) {
     let _ = stdout.flush();
 }
 
-/// Focuses `workspace` (and `tab`) through `socket` once the session answers,
-/// retrying in the background until [`FOCUS_DEADLINE`].
-fn focus_when_ready(socket: PathBuf, workspace: String, tab: Option<String>) {
+/// Focuses `workspace` (and `tab` and `pane`) through `socket` once the
+/// session answers, retrying in the background until [`FOCUS_DEADLINE`].
+fn focus_when_ready(socket: PathBuf, workspace: String, tab: Option<String>, pane: Option<String>) {
     thread::spawn(move || {
         let deadline = Instant::now() + FOCUS_DEADLINE;
         while Instant::now() < deadline {
-            if focus(&socket, &workspace, tab.as_deref()).is_ok() {
+            if focus(&socket, &workspace, tab.as_deref(), pane.as_deref()).is_ok() {
                 return;
             }
             thread::sleep(FOCUS_RETRY);
@@ -144,7 +146,12 @@ fn focus_when_ready(socket: PathBuf, workspace: String, tab: Option<String>) {
     });
 }
 
-fn focus(socket: &Path, workspace: &str, tab: Option<&str>) -> Result<(), String> {
+fn focus(
+    socket: &Path,
+    workspace: &str,
+    tab: Option<&str>,
+    pane: Option<&str>,
+) -> Result<(), String> {
     let request = |method: &str, params| {
         socket_request_at(
             socket,
@@ -160,6 +167,9 @@ fn focus(socket: &Path, workspace: &str, tab: Option<&str>) -> Result<(), String
     )?;
     if let Some(tab) = tab {
         request("tab.focus", serde_json::json!({ "tab_id": tab }))?;
+    }
+    if let Some(pane) = pane {
+        request("pane.focus", serde_json::json!({ "pane_id": pane }))?;
     }
     Ok(())
 }

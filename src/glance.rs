@@ -51,11 +51,13 @@ pub(crate) struct Thresholds {
     pub(crate) warm_secs: i64,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct PaneEvidence {
     pub(crate) state: AgentState,
     /// `None` when the recorded activity status no longer matches the live state.
     pub(crate) since: Option<i64>,
+    pub(crate) tab_id: String,
+    pub(crate) pane_id: String,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -99,6 +101,8 @@ pub(crate) struct GlanceRow {
     pub(crate) signal: Signal,
     /// Whether an agent waits on the User, even when the row sits in another group such as Pinned.
     pub(crate) needs_you: bool,
+    /// The tab and pane of the agent that waits on the User most urgently.
+    pub(crate) needs_you_pane: Option<(String, String)>,
     /// Whether the Workspace sits in Cold by hand.
     pub(crate) cold: bool,
     /// The Herdr session of a Workspace outside the current session.
@@ -121,8 +125,8 @@ pub(crate) fn evidence(
     let agents = workspace
         .tabs
         .iter()
-        .flat_map(|tab| &tab.panes)
-        .filter_map(|pane| {
+        .flat_map(|tab| tab.panes.iter().map(move |pane| (tab, pane)))
+        .filter_map(|(tab, pane)| {
             let agent = pane.agent.as_ref()?;
             let since = activity
                 .pane(workspace.session.as_deref(), &pane.id)
@@ -137,6 +141,8 @@ pub(crate) fn evidence(
                     agent.state
                 },
                 since,
+                tab_id: tab.id.clone(),
+                pane_id: pane.id.clone(),
             })
         })
         .collect();
@@ -187,6 +193,8 @@ pub(crate) fn row(
         mark,
         signal: verdict.signal,
         needs_you: needs_you(evidence),
+        needs_you_pane: waiting_agent(evidence)
+            .map(|agent| (agent.tab_id.clone(), agent.pane_id.clone())),
         cold: cold(evidence),
         other_session: None,
     }
@@ -313,16 +321,19 @@ fn newest_activity(evidence: &Evidence) -> Option<(i64, Signal)> {
         .map(|(at, _, signal)| (at, signal))
 }
 
-fn needs_you_signal(evidence: &Evidence) -> Option<Signal> {
+fn waiting_agent(evidence: &Evidence) -> Option<&PaneEvidence> {
     evidence
         .agents
         .iter()
         .filter(|agent| matches!(agent.state, AgentState::Blocked | AgentState::Done))
         .min_by_key(|agent| (precedence(agent.state), std::cmp::Reverse(agent.since)))
-        .map(|agent| Signal::Agent {
-            state: agent.state,
-            since: agent.since,
-        })
+}
+
+fn needs_you_signal(evidence: &Evidence) -> Option<Signal> {
+    waiting_agent(evidence).map(|agent| Signal::Agent {
+        state: agent.state,
+        since: agent.since,
+    })
 }
 
 fn working_signal(evidence: &Evidence) -> Option<Signal> {
@@ -389,7 +400,12 @@ mod tests {
     const NOW: i64 = 1_000_000;
 
     fn agent(state: AgentState, since: Option<i64>) -> PaneEvidence {
-        PaneEvidence { state, since }
+        PaneEvidence {
+            state,
+            since,
+            tab_id: String::new(),
+            pane_id: String::new(),
+        }
     }
 
     fn evidence_with(agents: Vec<PaneEvidence>) -> Evidence {

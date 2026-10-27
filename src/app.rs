@@ -587,20 +587,22 @@ impl App {
         })
     }
 
-    /// Switches to `session` (`None` is the default session), at `workspace`
-    /// and `tab` when given, through the launcher that runs this session's
+    /// Switches to `session` (`None` is the default session), at `workspace`,
+    /// `tab` and `pane` when given, through the launcher that runs this session's
     /// client. A launcher that fails to switch leaves a footer notice.
     pub(crate) fn switch_session(
         &mut self,
         session: Option<&str>,
         workspace: Option<String>,
         tab: Option<String>,
+        pane: Option<String>,
     ) -> Result<(), SwitchError> {
         let label = Session::label(session).to_string();
         let request = SwitchRequest {
             session: label.clone(),
             workspace_id: workspace,
             tab_id: tab,
+            pane_id: pane,
         };
         let dir = self
             .launchers_dir
@@ -621,8 +623,9 @@ impl App {
         session: Option<&str>,
         workspace: Option<String>,
         tab: Option<String>,
+        pane: Option<String>,
     ) -> bool {
-        match self.switch_session(session, workspace, tab) {
+        match self.switch_session(session, workspace, tab, pane) {
             Ok(()) => true,
             Err(SwitchError::NoLauncher) => {
                 self.notice = Some(OTHER_SESSION_NOTICE.to_string());
@@ -1188,9 +1191,24 @@ impl App {
         }
     }
 
+    /// Opens the selected entry. A Workspace that needs you opens at the pane
+    /// of the agent waiting on the User.
     pub(crate) fn open_selected(&mut self, use_directory_template: bool) -> Result<(), String> {
-        let e = self.selected_entry().cloned().ok_or("nothing selected")?;
+        let mut e = self.selected_entry().cloned().ok_or("nothing selected")?;
+        if let (EntryAction::FocusWorkspace { session, .. }, Some((_, pane))) =
+            (&e.action, self.needs_you_pane(&e))
+        {
+            e.action = EntryAction::FocusPane {
+                session: session.clone(),
+                id: pane,
+            };
+        }
         self.open_entry(e, use_directory_template)
+    }
+
+    /// The tab and pane of the agent waiting on the User in a glance entry's Workspace.
+    pub(crate) fn needs_you_pane(&self, entry: &Entry) -> Option<(String, String)> {
+        self.glance_row(entry)?.needs_you_pane.clone()
     }
 
     /// Opens tab `number` (1-based) of the selected Workspace, or in the
@@ -1228,7 +1246,8 @@ impl App {
                 workspace,
                 tab,
             } => {
-                let _ = self.switch_or_notice(session.as_deref(), workspace.clone(), tab.clone());
+                let _ =
+                    self.switch_or_notice(session.as_deref(), workspace.clone(), tab.clone(), None);
                 (Ok(()), false, false)
             }
             EntryAction::InvokePluginAction { action } => (
@@ -3274,6 +3293,44 @@ exit 0
         assert!(glance_titles(&app).is_empty());
         search(&mut app, "!claude");
         assert!(glance_titles(&app).is_empty());
+    }
+
+    #[test]
+    fn opening_a_row_that_needs_you_focuses_the_waiting_pane() {
+        struct Recorder(std::rc::Rc<std::cell::RefCell<Vec<EntryAction>>>);
+        impl HerdrControl for Recorder {
+            fn focus(&self, action: &EntryAction) -> Result<(), String> {
+                self.0.borrow_mut().push(action.clone());
+                Ok(())
+            }
+        }
+
+        let _env = command_test_env();
+        let mut app = search_app(
+            vec![
+                agent_workspace(None, "w1", "api", AgentState::Blocked),
+                agent_workspace(None, "w2", "web", AgentState::Idle),
+            ],
+            Vec::new(),
+        );
+        app.config.notifications.enabled = false;
+        let focused = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+        app.herdr_control = Some(Box::new(Recorder(focused.clone())));
+        for title in ["api", "web"] {
+            app.selected = app
+                .filtered
+                .iter()
+                .position(|index| app.entries[*index].title == title)
+                .unwrap();
+            app.open_selected(false).unwrap();
+        }
+        let focused = focused.borrow();
+        assert!(
+            matches!(&focused[0], EntryAction::FocusPane { session: None, id } if id == "w1:p1")
+        );
+        assert!(
+            matches!(&focused[1], EntryAction::FocusWorkspace { session: None, id } if id == "w2")
+        );
     }
 
     fn agent_workspace(

@@ -283,6 +283,8 @@ pub(crate) struct SwitchRequest {
     pub(crate) workspace_id: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) tab_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) pane_id: Option<String>,
 }
 
 pub(crate) fn launchers_dir() -> PathBuf {
@@ -851,6 +853,7 @@ mod tests {
             session: "b".into(),
             workspace_id: None,
             tab_id: None,
+            pane_id: None,
         };
 
         let mut gone = sleeper();
@@ -912,6 +915,7 @@ mod tests {
             session: "b".into(),
             workspace_id: Some("w2".into()),
             tab_id: None,
+            pane_id: None,
         };
 
         write_record(&dir, &mine).unwrap();
