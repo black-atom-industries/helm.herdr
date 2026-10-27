@@ -67,7 +67,7 @@ hot_minutes = 15
 warm_hours = 4
 # "nerd" (default, needs a Nerd Font) or "unicode"
 icons = "nerd"
-# Keys that select the first visible rows in Normal mode. j, k, l, q and x are reserved.
+# Keys that select the first visible rows in Normal mode. c, j, k, l, q and x are reserved.
 labels = "asdfg"
 
 [sources]
