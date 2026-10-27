@@ -7,3 +7,6 @@ enabled = false
 [[roots]]
 path = "~/code"
 max_depth = 2
+
+[glance]
+icons = "unicode"

@@ -5,9 +5,9 @@
 
 Output frames/
 Set Shell zsh
-Set FontSize 20
-Set Width 1400
-Set Height 760
+Set FontSize 16
+Set Width 1720
+Set Height 860
 Set Framerate 50
 Set TypingSpeed 60ms
 
