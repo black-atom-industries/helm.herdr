@@ -33,6 +33,7 @@ When the Workspace you want is not open yet, type `/` and its name. Search also 
 - [The glance](#the-glance)
   - [Groups](#groups)
   - [Send a Workspace to Cold](#send-a-workspace-to-cold)
+  - [Dismiss a done agent](#dismiss-a-done-agent)
   - [Other Herdr sessions](#other-herdr-sessions)
   - [Sessions view](#sessions-view)
   - [Detail pane](#detail-pane)
@@ -76,6 +77,10 @@ The first five rows get a letter (`a` `s` `d` `f` `g`). Press it once to select 
 `c` `c` sends the selected Workspace to Cold, and it stays there until something happens in it: you focus it, someone commits, or one of its agents changes state. From then on it sorts by its activity again. The first `c` asks, the second confirms, any other key cancels. A single `c` on a cold Workspace lets it warm up by hand. Use it for a Workspace you are done with for today that would otherwise take a top row.
 
 A cold Workspace still moves up to Needs you when one of its agents waits on you. Pinning a cold Workspace takes it out of Cold.
+
+### Dismiss a done agent
+
+A done agent stays in Needs you until you prompt it again, even after you look at its pane. When you have read its result and there is nothing to answer, `D` dismisses the done agents of the selected Workspace. The row returns to its usual group until an agent there finishes again.
 
 ### Other Herdr sessions
 
@@ -165,6 +170,7 @@ You need Herdr 0.7.4 or newer on Linux or macOS, and `jq` for the link command. 
 | `1`–`9`             | Open that Tab                                            |
 | `l`                 | Open the last Workspace: another session's when it was focused more recently (under `helm-herdr shell`), else the previous one |
 | `c` `c`, `c`        | Send to Cold (`c` asks for a second `c`), or warm up     |
+| `D`                 | Dismiss the done agents of the Workspace                 |
 | `^B`                | Pin to the top, or unpin                                 |
 | `x` `x`, `^X`       | Close the Workspace (`x` asks for a second `x`)          |
 | `J` / `K`           | Scroll the detail pane                                   |

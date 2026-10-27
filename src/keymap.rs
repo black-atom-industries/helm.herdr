@@ -30,6 +30,7 @@ pub(crate) enum Command {
     ArmClose,
     ToggleMark,
     ToggleCold,
+    Dismiss,
     ToggleHelp,
     Update,
     Filter(Source),
@@ -358,6 +359,18 @@ pub(crate) fn keybindings(app: &App) -> Vec<Keybind> {
         "Act",
         None,
     ));
+
+    if !sessions {
+        bindings.push(binding(
+            vec![
+                normal_key(Command::Dismiss, KeyCode::Char('D'), "D"),
+                normal_shifted(Command::Dismiss, KeyCode::Char('D'), "D"),
+            ],
+            "dismiss done agents",
+            "Act",
+            None,
+        ));
+    }
 
     bindings.push(
         binding(

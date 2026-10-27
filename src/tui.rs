@@ -618,6 +618,15 @@ fn execute_command(app: &mut App, command: Command, key: KeyEvent) -> Action {
             }
             Action::Continue
         }
+        Command::Dismiss => {
+            if let Err(error) = app.dismiss_selected() {
+                crate::herdr::notify_error(
+                    &format!("Dismiss failed: {error}"),
+                    &app.config.notifications,
+                );
+            }
+            Action::Continue
+        }
         Command::ToggleHelp => {
             app.input_mode = InputMode::Help;
             Action::Continue
@@ -3732,6 +3741,40 @@ mod tests {
         handle_key(&mut app, key(KeyCode::Char('c')));
         assert!(app.is_cold(&alpha));
         assert!(app.cold_entries[&crate::app::pin_key(&alpha)] > NOW);
+
+        let _ = std::fs::remove_dir_all(&dir);
+        match previous {
+            Some(value) => std::env::set_var("HERDR_PLUGIN_CONFIG_DIR", value),
+            None => std::env::remove_var("HERDR_PLUGIN_CONFIG_DIR"),
+        }
+    }
+
+    #[test]
+    fn a_seen_done_agent_needs_you_until_dismissed_with_shift_d() {
+        let dir = std::env::temp_dir().join(format!("helm-dismiss-test-{}", std::process::id()));
+        let _lock = crate::herdr::test_env_lock();
+        let previous = std::env::var_os("HERDR_PLUGIN_CONFIG_DIR");
+        std::env::set_var("HERDR_PLUGIN_CONFIG_DIR", &dir);
+
+        let mut activity = ActivityState::default();
+        activity.record_agent_status(None, "p-notes", "done", NOW - 120);
+        activity.record_agent_status(None, "p-notes", "idle", NOW - 60);
+        let mut app = glance_app(
+            NOW,
+            None,
+            vec![agent_workspace("w1", "notes", AgentState::Idle)],
+            activity,
+        );
+        let notes = app.selected_entry().unwrap().clone();
+        assert_eq!(app.glance_group(&notes), Some(Group::NeedsYou));
+
+        handle_key(
+            &mut app,
+            KeyEvent::new(KeyCode::Char('D'), KeyModifiers::SHIFT),
+        );
+        assert_ne!(app.glance_group(&notes), Some(Group::NeedsYou));
+        let saved = ActivityState::load_from(&dir.join("activity.json")).unwrap();
+        assert!(saved.pane(None, "p-notes").unwrap().dismissed_at.is_some());
 
         let _ = std::fs::remove_dir_all(&dir);
         match previous {

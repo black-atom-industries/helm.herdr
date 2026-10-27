@@ -94,7 +94,9 @@ fn attach(dir: &Path, launcher_pid: u32, target: &SwitchRequest) -> ExitStatus {
         session: target.session.clone(),
     };
     let _ = sessions::write_record(dir, &record);
-    let _ = record_seen(&activity_state_path(), &target.session, now_unix_secs());
+    let _ = ActivityState::update_at(&activity_state_path(), |activity| {
+        activity.record_return(Some(&target.session), now_unix_secs())
+    });
     if let Some(workspace) = &target.workspace_id {
         focus_when_ready(
             sessions::socket_of(&herdr_root(), &target.session),

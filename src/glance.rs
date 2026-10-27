@@ -118,7 +118,8 @@ impl GlanceRow {
 
 /// `elsewhere` marks a Workspace of a session the User is not in. Herdr keeps
 /// that session's focus, so an agent finishing there reads `idle`; one that
-/// went idle after the User was last there counts as done.
+/// went idle after the User was last there counts as done. A done agent stays
+/// done until it works again or the User dismisses it.
 pub(crate) fn evidence(
     workspace: &WorkspaceNode,
     activity: &ActivityState,
@@ -135,18 +136,32 @@ pub(crate) fn evidence(
         .flat_map(|tab| tab.panes.iter().map(move |pane| (tab, pane)))
         .filter_map(|(tab, pane)| {
             let agent = pane.agent.as_ref()?;
-            let since = activity
-                .pane(workspace.session.as_deref(), &pane.id)
+            let recorded = activity.pane(workspace.session.as_deref(), &pane.id);
+            let since = recorded
                 .filter(|recorded| AgentState::parse(&recorded.status) == agent.state)
                 .map(|recorded| recorded.since);
             let unseen = agent.state == AgentState::Idle
                 && since.zip(seen_at).is_some_and(|(since, seen)| since > seen);
+            let done_at = recorded.and_then(|recorded| recorded.done_at);
+            let finished = match agent.state {
+                AgentState::Done => Some(done_at.or(since)),
+                AgentState::Idle if done_at.is_some() => Some(done_at),
+                AgentState::Idle if unseen => Some(since),
+                _ => None,
+            };
+            let dismissed_at = recorded.and_then(|recorded| recorded.dismissed_at);
+            let (state, since) = match finished {
+                Some(at)
+                    if !dismissed_at
+                        .is_some_and(|dismissed| at.is_none_or(|at| dismissed >= at)) =>
+                {
+                    (AgentState::Done, at)
+                }
+                Some(_) => (AgentState::Idle, since),
+                None => (agent.state, since),
+            };
             Some(PaneEvidence {
-                state: if unseen {
-                    AgentState::Done
-                } else {
-                    agent.state
-                },
+                state,
                 since,
                 tab_id: tab.id.clone(),
                 pane_id: pane.id.clone(),

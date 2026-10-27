@@ -212,6 +212,8 @@ flowchart TD
   age -->|older or none| C
 ```
 
+Herdr turns `done` into `idle` once the pane is seen. Helm records the finish as `done_at` in its activity state and keeps the agent done through that idle, until it works or blocks again or `D` sets a newer `dismissed_at`.
+
 Activity is the newest of the Workspace's focus time, its last commit and its newest agent status change that still matches the live state. Rows sort by newest activity at open. After that, a refresh keeps every row and label in place. A row moves only when it changes group, and new rows join the end of their group.
 
 | Read | When | Kept |
@@ -250,6 +252,7 @@ Activity is the newest of the Workspace's focus time, its last commit and its ne
 | `tab` / `Shift-tab` | Next / previous source in the strip |
 | `x` `x`, `^X` | Close the Workspace |
 | `c` `c`, `c` on a cold row | Send to Cold, warm up |
+| `D` | Dismiss the done agents of the Workspace |
 | `Shift-J` `Shift-K` | Scroll the detail pane |
 | `q` | Close Helm |
 

@@ -40,6 +40,14 @@ pub(crate) struct SessionActivity {
 pub(crate) struct PaneActivity {
     pub(crate) status: String,
     pub(crate) since: i64,
+    /// When the agent last finished. Herdr turns `done` into `idle` once the
+    /// pane is seen; this stays through that idle and clears when it works or
+    /// blocks again.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) done_at: Option<i64>,
+    /// When the User dismissed the pane's done state.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) dismissed_at: Option<i64>,
 }
 
 impl Default for ActivityState {
@@ -134,6 +142,25 @@ impl ActivityState {
             .max()
     }
 
+    /// Records that the User came back to `session`. Herdr kept that
+    /// session's focus, so an agent that went idle while the User was away
+    /// finished unseen and keeps its done state.
+    pub(crate) fn record_return(&mut self, session: Option<&str>, now: i64) {
+        if let Some(seen) = self.seen_at(session) {
+            let owner = workspace_key(named(session), "");
+            for (key, pane) in &mut self.panes {
+                if split_key(key).is_some_and(|(prefix, _)| prefix == owner)
+                    && pane.status == "idle"
+                    && pane.since > seen
+                    && pane.done_at.is_none()
+                {
+                    pane.done_at = Some(pane.since);
+                }
+            }
+        }
+        self.record_seen(session, now);
+    }
+
     pub(crate) fn record_seen(&mut self, session: Option<&str>, now: i64) {
         self.sessions
             .insert(session_key(session), SessionActivity { seen_at: now });
@@ -147,20 +174,39 @@ impl ActivityState {
         now: i64,
     ) {
         let key = workspace_key(session, pane_id);
-        if self
-            .panes
-            .get(&key)
-            .is_some_and(|pane| pane.status == status)
-        {
+        let previous = self.panes.get(&key);
+        if previous.is_some_and(|pane| pane.status == status) {
             return;
         }
+        let done_at = match status {
+            "done" => Some(now),
+            "idle" => previous.and_then(|pane| pane.done_at),
+            _ => None,
+        };
+        let dismissed_at = previous.and_then(|pane| pane.dismissed_at);
         self.panes.insert(
             key,
             PaneActivity {
                 status: status.to_string(),
                 since: now,
+                done_at,
+                dismissed_at,
             },
         );
+    }
+
+    /// Marks the pane's current done state as handled. `status` is its live
+    /// status, recorded when the pane has no record yet.
+    pub(crate) fn dismiss(&mut self, session: Option<&str>, pane_id: &str, status: &str, now: i64) {
+        self.panes
+            .entry(workspace_key(session, pane_id))
+            .or_insert_with(|| PaneActivity {
+                status: status.to_string(),
+                since: now,
+                done_at: None,
+                dismissed_at: None,
+            })
+            .dismissed_at = Some(now);
     }
 
     /// Drops the Workspaces and Panes of the snapshot's session that it no
@@ -304,8 +350,34 @@ mod tests {
             Some(&PaneActivity {
                 status: "idle".into(),
                 since: 30,
+                done_at: None,
+                dismissed_at: None,
             })
         );
+    }
+
+    #[test]
+    fn a_done_agent_stays_done_through_idle_until_it_works_again() {
+        let mut state = ActivityState::default();
+        state.record_agent_status(None, "w1:p1", "done", 10);
+        state.record_agent_status(None, "w1:p1", "idle", 20);
+        assert_eq!(state.pane(None, "w1:p1").unwrap().done_at, Some(10));
+        state.record_agent_status(None, "w1:p1", "working", 30);
+        assert_eq!(state.pane(None, "w1:p1").unwrap().done_at, None);
+    }
+
+    #[test]
+    fn returning_keeps_an_agent_that_went_idle_while_away_done() {
+        let mut state = ActivityState::default();
+        state.record_agent_status(Some("work"), "w1:p1", "idle", 5);
+        state.record_seen(Some("work"), 10);
+        state.record_agent_status(Some("work"), "w1:p2", "idle", 20);
+        state.record_agent_status(Some("play"), "w1:p3", "idle", 20);
+        state.record_return(Some("work"), 30);
+        assert_eq!(state.pane(Some("work"), "w1:p1").unwrap().done_at, None);
+        assert_eq!(state.pane(Some("work"), "w1:p2").unwrap().done_at, Some(20));
+        assert_eq!(state.pane(Some("play"), "w1:p3").unwrap().done_at, None);
+        assert_eq!(state.seen_at(Some("work")), Some(30));
     }
 
     #[test]

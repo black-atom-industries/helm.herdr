@@ -1195,6 +1195,33 @@ impl App {
         Ok(())
     }
 
+    /// Clears the done state of the selected Workspace's agents until one
+    /// finishes again.
+    pub(crate) fn dismiss_selected(&mut self) -> Result<(), String> {
+        let entry = self.selected_entry().ok_or("nothing selected")?;
+        let workspace = self
+            .workspace_node(entry)
+            .ok_or("only a workspace can be dismissed")?;
+        let session = workspace.session.clone();
+        let panes: Vec<(String, &'static str)> = workspace
+            .tabs
+            .iter()
+            .flat_map(|tab| &tab.panes)
+            .filter_map(|pane| Some((pane.id.clone(), pane.agent.as_ref()?.state.label())))
+            .collect();
+        let now = now_unix_secs();
+        let dismiss = |activity: &mut ActivityState| {
+            for (pane_id, status) in &panes {
+                activity.dismiss(session.as_deref(), pane_id, status, now);
+            }
+        };
+        update_activity(dismiss)?;
+        dismiss(&mut self.activity);
+        self.rebuild_glance();
+        self.apply_filter();
+        Ok(())
+    }
+
     pub(crate) fn directory_template_for_selected(&self) -> Option<&str> {
         let template = self
             .config
