@@ -17,11 +17,4 @@ Design canvases (Claude Design artifacts), newest first. The code is authoritati
 
 ## Local test build
 
-When the user says **"build local"** or equivalent:
-
-```bash
-cargo build --release
-herdr plugin link "$PWD"
-```
-
-This means Herdr must use the repository's `target/release/helm-herdr` through a local plugin link. Do not interpret it as only building the target binary or installing it into `~/.cargo/bin`. Verify `herdr plugin list` reports `helm-herdr` as `local:$PWD`.
+When the user says **"build local"** or equivalent, run `scripts/install-local.sh`. It builds the release binary, links it onto `PATH` and registers the checkout with Herdr through a local plugin link. Verify `herdr plugin list` reports `helm-herdr` as `local:$PWD`. The Claude `Stop` hook in `.claude/settings.json` and the Pi extension in `.pi/extensions/` run the same script when a turn ends.
