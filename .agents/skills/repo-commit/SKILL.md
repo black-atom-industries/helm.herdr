@@ -70,8 +70,8 @@ and lists the subject in the release's `CHANGELOG.md` section:
 - `docs`, `refactor`, `perf`, `test`, `build`, `ci`, `chore` for the rest. `build(deps)` is for dependency upgrades. Only `docs`, `refactor`, and `perf` count toward a release.
 - `docs` is for user-facing documentation. Agent skills, `AGENTS.md`, and maintainer-only docs are `chore`, so they
   never open a release on their own.
-- The scope is the area, as in recent history: `picker`, `topology`, `sources`, `jump-back`, `theme`, `config`, `plugin`, `keymap`,
-  `agents`.
+- The scope is the area, as in recent history: `picker`, `sessions`, `topology`, `sources`, `jump-back`, `theme`, `config`, `plugin`,
+  `keymap`, `agents`.
   Omit it when the change spans areas.
 - A breaking change adds `!` after the scope and a `BREAKING CHANGE:` footer.
 
