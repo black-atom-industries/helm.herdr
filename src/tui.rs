@@ -1776,6 +1776,15 @@ fn draw_glance_list(f: &mut Frame, app: &App, area: Rect) -> ListHits {
     let list =
         List::new(items).highlight_style(Style::default().bg(app.theme.selection_background(true)));
     f.render_stateful_widget(list, area, &mut state);
+    if let Some(line) = selected_item.filter(|&line| line >= state.offset()) {
+        let y = area.y + (line - state.offset()) as u16;
+        if y < area.bottom() && area.width > 1 {
+            let accent = Style::default().fg(app.theme.accent);
+            let buf = f.buffer_mut();
+            buf[(area.x, y)].set_symbol("▌").set_style(accent);
+            buf[(area.right() - 1, y)].set_symbol("▐").set_style(accent);
+        }
+    }
 
     let mut rows = Vec::new();
     for (line, hit) in hit_rows.into_iter().enumerate().skip(state.offset()) {
