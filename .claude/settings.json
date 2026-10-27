@@ -1,0 +1,15 @@
+{
+  "hooks": {
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "jq -e '.stop_hook_active' >/dev/null && exit 0; out=$(\"$CLAUDE_PROJECT_DIR\"/scripts/install-local.sh 2>&1) || { printf 'helm-herdr local build failed:\\n%s\\n' \"$out\" | tail -20 >&2; exit 2; }",
+            "timeout": 300
+          }
+        ]
+      }
+    ]
+  }
+}
