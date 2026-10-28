@@ -18,3 +18,14 @@ Design canvases (Claude Design artifacts), newest first. The code is authoritati
 ## Local test build
 
 When the user says **"build local"** or equivalent, run `scripts/install-local.sh`. It builds the release binary, links it onto `PATH` and registers the checkout with Herdr through a local plugin link. Verify `herdr plugin list` reports `helm-herdr` as `local:$PWD`. The Claude `Stop` hook in `.claude/settings.json` and the Pi extension in `.pi/extensions/` run the same script when a turn ends.
+
+## Debug log
+
+Turn it on yourself whenever the user tests live behavior (glance groups, agent status, sessions, the launcher), or when a test result needs checking against real Herdr events. Make sure the local build is installed first, since only that binary writes the log.
+
+```sh
+touch ~/.config/herdr/plugins/config/helm-herdr/debug.log   # start
+rm ~/.config/herdr/plugins/config/helm-herdr/debug.log      # stop
+```
+
+Each `activity.json` write appends one line per changed entry: Unix time, `helm-herdr` command (`track-agent`, `track-focus`, `shell`, `ui`), kind, key, old -> new. Read it by grepping for the Workspace or pane key and the time window the user names. Truncate it with `: > debug.log` before a new test round, and remove it when the round is done so it does not keep growing.

@@ -81,6 +81,7 @@ flowchart LR
 - `seen_at` is set by `track-focus`, by opening the Picker and by the Launcher on attach and exit. Without it, a session falls back to its newest `focused_at`.
 - Opening the Picker prunes the current session's missing Workspaces and Panes. It skips pruning on an empty Topology.
 - Every write takes a lock on `activity.json.lock`, then replaces the file through a rename.
+- When `debug.log` exists beside `activity.json`, every write appends one line per changed entry: time, `helm-herdr` command, key, old and new value.
 
 ## Herdr sessions
 

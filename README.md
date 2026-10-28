@@ -291,6 +291,13 @@ herdr plugin list
 helm-herdr list
 ```
 
+To see why a Workspace lands in a group, log every change Helm records. Create the file to start, delete it to stop:
+
+```bash
+touch ~/.config/herdr/plugins/config/helm-herdr/debug.log
+tail -f ~/.config/herdr/plugins/config/helm-herdr/debug.log
+```
+
 ## Development
 
 ```bash

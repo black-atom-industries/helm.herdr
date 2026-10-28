@@ -98,8 +98,10 @@ impl ActivityState {
             .open(path.with_extension("json.lock"))?;
         lock.lock()?;
         let mut state = Self::load_from(path).unwrap_or_default();
+        let before = state.clone();
         change(&mut state);
         state.save_to(path)?;
+        log_changes(&path.with_file_name("debug.log"), &before, &state);
         Ok(state)
     }
 
@@ -288,6 +290,58 @@ pub(crate) fn parse_agent_status_event(event: &str) -> Result<(String, String), 
     Ok((pane_id.into(), status.into()))
 }
 
+/// Appends one line per changed entry to `log`, only when that file exists.
+fn log_changes(log: &Path, before: &ActivityState, after: &ActivityState) {
+    let Ok(mut file) = fs::OpenOptions::new().append(true).open(log) else {
+        return;
+    };
+    let prefix = format!(
+        "{} {}",
+        now_unix_secs(),
+        std::env::args().nth(1).unwrap_or_else(|| "ui".into())
+    );
+    let mut lines = String::new();
+    changes(
+        &mut lines,
+        &prefix,
+        "workspace",
+        &before.workspaces,
+        &after.workspaces,
+    );
+    changes(&mut lines, &prefix, "pane", &before.panes, &after.panes);
+    changes(
+        &mut lines,
+        &prefix,
+        "session",
+        &before.sessions,
+        &after.sessions,
+    );
+    if !lines.is_empty() {
+        let _ = io::Write::write_all(&mut file, lines.as_bytes());
+    }
+}
+
+fn changes<V: std::fmt::Debug + PartialEq>(
+    lines: &mut String,
+    prefix: &str,
+    kind: &str,
+    before: &BTreeMap<String, V>,
+    after: &BTreeMap<String, V>,
+) {
+    let keys: std::collections::BTreeSet<&String> = before.keys().chain(after.keys()).collect();
+    for key in keys {
+        let (old, new) = (before.get(key), after.get(key));
+        if old != new {
+            let show = |value: Option<&V>| value.map_or("-".into(), |value| format!("{value:?}"));
+            lines.push_str(&format!(
+                "{prefix} {kind} {key} {} -> {}\n",
+                show(old),
+                show(new)
+            ));
+        }
+    }
+}
+
 pub(crate) fn now_unix_secs() -> i64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -333,6 +387,26 @@ mod tests {
         assert_eq!(persisted["workspaces"]["work::w1"]["focused_at"], 100);
         assert_eq!(persisted["panes"]["work::w1:p1"]["status"], "working");
         assert_eq!(persisted["panes"]["work::w1:p1"]["since"], 120);
+        cleanup(&path);
+    }
+
+    #[test]
+    fn changes_go_to_the_debug_log_only_when_it_exists() {
+        let path = temp_path("debug-log");
+        let log = path.with_file_name("debug.log");
+        ActivityState::update_at(&path, |state| state.record_focus(Some("work"), "w1", 100))
+            .unwrap();
+        assert!(!log.exists());
+
+        fs::write(&log, "").unwrap();
+        ActivityState::update_at(&path, |state| {
+            state.record_agent_status(Some("work"), "w1:p1", "done", 120);
+        })
+        .unwrap();
+
+        let logged = fs::read_to_string(&log).unwrap();
+        assert_eq!(logged.lines().count(), 1);
+        assert!(logged.contains(" pane work::w1:p1 - -> PaneActivity { status: \"done\""));
         cleanup(&path);
     }
 
