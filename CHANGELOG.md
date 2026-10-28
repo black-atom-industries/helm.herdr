@@ -2,6 +2,29 @@
 
 All notable changes to this project are documented here.
 
+## [0.8.0](https://github.com/black-atom-industries/helm.herdr/compare/v0.7.0...v0.8.0) (2026-10-28)
+
+
+### Features
+
+* **activity:** log each activity change to an opt-in debug file ([d502e2c](https://github.com/black-atom-industries/helm.herdr/commit/d502e2c3a5d2840370795d9295e1c906ef42ba33))
+* **agents:** keep a done agent in Needs you until it works or is dismissed ([67fcebc](https://github.com/black-atom-industries/helm.herdr/commit/67fcebcf4119b0df8c264b69ab751863f9ac6970))
+* **keymap:** step through the source strip with tab and Shift-tab ([0f5c0ca](https://github.com/black-atom-industries/helm.herdr/commit/0f5c0cafcf982404011956167e1482eb398264c5))
+* **picker:** search the Workspaces of every session with * ([d2ca9b6](https://github.com/black-atom-industries/helm.herdr/commit/d2ca9b6f3c214af11c83c8e790bad4c7e7377807))
+
+
+### Bug Fixes
+
+* **picker:** keep the label background on the selected row ([c2853de](https://github.com/black-atom-industries/helm.herdr/commit/c2853dedf18b34ac30a6d23e2deab4f96a775ee1))
+* **picker:** open a row that needs you at the waiting agent's pane ([f022594](https://github.com/black-atom-industries/helm.herdr/commit/f022594ccbe748da9ac8402cbdcd264fa93a7258))
+* **plugin:** replace an open popup when Helm opens ([ae24019](https://github.com/black-atom-industries/helm.herdr/commit/ae24019550bd3313b475cce7d276073607189ab2))
+
+
+### Documentation
+
+* rebuild the architecture page around diagrams and tables ([651648b](https://github.com/black-atom-industries/helm.herdr/commit/651648ba4f25893e8ad2d43d341d551a84a3670a))
+* show the glance at the top of the README ([d6b3e60](https://github.com/black-atom-industries/helm.herdr/commit/d6b3e601ef6ab5ca745a4727be21745854ed9679))
+
 ## [0.7.0](https://github.com/black-atom-industries/helm.herdr/compare/v0.6.0...v0.7.0) (2026-10-27)
 
 ### Highlights
